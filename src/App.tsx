@@ -10,7 +10,14 @@ import {
   CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine 
 } from 'recharts';
 import { initializeApp } from 'firebase/app';
-import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, signOut } from 'firebase/auth';
+import {
+  getAuth,
+  signInWithEmailAndPassword,
+  onAuthStateChanged,
+  signOut,
+  setPersistence,
+  browserLocalPersistence
+} from 'firebase/auth';
 import type { User } from 'firebase/auth';
 import { 
   getFirestore, collection, doc, setDoc, getDocs, updateDoc, deleteDoc, 
@@ -37,6 +44,7 @@ const firebaseConfig =
       };
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
+setPersistence(auth, browserLocalPersistence);
 const db = getFirestore(app);
 
 // オフラインキャッシュ有効化
