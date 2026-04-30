@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { 
-  Clock, Play, Pause, Plus, Trash2, CheckCircle, Circle, 
-  ChevronDown, Award, X, Zap, Layers, History, LayoutDashboard, 
+  Clock, Play, Pause, Plus, Trash2, CheckCircle, Circle, Edit2,
+  ChevronDown,  Award, X, Zap, Layers, History, LayoutDashboard, 
   TrendingUp, Calendar as CalendarIcon, PieChart as PieChartIcon, BarChart2,
   AlertTriangle, RefreshCw, CloudOff, Cloud, FileText, FlaskConical, LogIn, LogOut
 } from 'lucide-react';
@@ -10,41 +10,22 @@ import {
   CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine 
 } from 'recharts';
 import { initializeApp } from 'firebase/app';
-import {
-  getAuth,
-  signInWithEmailAndPassword,
-  onAuthStateChanged,
-  signOut,
-  setPersistence,
-  browserLocalPersistence
-} from 'firebase/auth';
+import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, signOut } from 'firebase/auth';
 import type { User } from 'firebase/auth';
 import { 
   getFirestore, collection, doc, setDoc, getDocs, updateDoc, deleteDoc, 
-  enableIndexedDbPersistence, writeBatch, query,
-  serverTimestamp   // ←これ追加
+  serverTimestamp, enableIndexedDbPersistence, writeBatch, query
 } from 'firebase/firestore';
 
 // ==========================================
-// Firebase Initialization & Canvas Env Rules
+// Firebase Initialization
 // ==========================================
 declare const __firebase_config: string;
 declare const __app_id: string;
 
-const firebaseConfig =
-  typeof __firebase_config !== 'undefined'
-    ? JSON.parse(__firebase_config)
-    : {
-        apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
-        authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
-        projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-        storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
-        messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-        appId: import.meta.env.VITE_FIREBASE_APP_ID,
-      };
+const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
-setPersistence(auth, browserLocalPersistence);
 const db = getFirestore(app);
 
 // オフラインキャッシュ有効化
@@ -60,19 +41,19 @@ try {
 
 const FAMILY_ID = 'oomine-study-2026';
 
-// 本番用とCanvas用パスの分離
+// 本番用とCanvas用パスの分離（絶対遵守事項の維持）
 const getTasksCol = () => {
   if (typeof __app_id !== 'undefined' && __app_id) {
     return collection(db, 'artifacts', __app_id, 'public', 'data', `families_${FAMILY_ID}_tasks`);
   }
-  return collection(db, 'families', FAMILY_ID, 'tasks');
+  return collection(db, 'families', FAMILY_ID, 'apps', 'junior-high', 'tasks');
 };
 
 const getTestsCol = () => {
   if (typeof __app_id !== 'undefined' && __app_id) {
     return collection(db, 'artifacts', __app_id, 'public', 'data', `families_${FAMILY_ID}_tests`);
   }
-  return collection(db, 'families', FAMILY_ID, 'tests');
+  return collection(db, 'families', FAMILY_ID, 'apps', 'junior-high', 'tests');
 };
 
 
@@ -265,6 +246,7 @@ const StrictTimer = React.memo(({
   onSaveRecord: (task: Task) => void;
 }) => {
   const [localSeconds, setLocalSeconds] = useState(task.currentDuration);
+  const [showAutoPauseAlert, setShowAutoPauseAlert] = useState(false); // window.alertの代わり
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const lastActive = useRef(Date.now());
   const isRunning = task.isRunning;
@@ -299,7 +281,6 @@ const StrictTimer = React.memo(({
         const elapsed = Math.floor((now - startTime) / 1000);
         setLocalSeconds(initialSec + elapsed);
         
-        // 異常検知のためにローカルの lastUpdatedAt を随時更新（クラウドには送らない）
         if (elapsed % 10 === 0) {
            updateLocalTask(task.id, { lastUpdatedAt: now });
         }
@@ -330,7 +311,6 @@ const StrictTimer = React.memo(({
     lastActive.current = Date.now();
     const startTime = Date.now();
     
-    // ローカル更新
     updateLocalTask(task.id, { 
       isRunning: true, 
       sessionStartTime: startTime,
@@ -338,7 +318,6 @@ const StrictTimer = React.memo(({
       status: task.status === 'not_started' ? 'in_progress' : task.status
     });
 
-    // Firestore保存（開始時）
     syncTaskToCloud(task.id, {
       isRunning: true,
       sessionStartTime: startTime,
@@ -356,7 +335,6 @@ const StrictTimer = React.memo(({
       lastUpdatedAt: now
     });
     
-    // Firestore保存（一時停止時）
     syncTaskToCloud(task.id, {
       isRunning: false,
       currentDuration: currentSecs,
@@ -364,14 +342,13 @@ const StrictTimer = React.memo(({
       lastUpdatedAt: now
     });
 
-    if (isAutoPause) alert("5分以上操作がなかったため、タイマーを自動的に一時停止しました。");
+    if (isAutoPause) setShowAutoPauseAlert(true);
   };
 
   const handleStopAndSave = () => {
     const finalDuration = isRunning ? localSeconds : task.currentDuration;
     const now = Date.now();
     
-    // 停止操作としてのローカル＆クラウド更新（保存自体はonSaveRecordで行う）
     updateLocalTask(task.id, { isRunning: false, currentDuration: finalDuration, sessionStartTime: null, lastUpdatedAt: now });
     syncTaskToCloud(task.id, { isRunning: false, currentDuration: finalDuration, sessionStartTime: null, lastUpdatedAt: now });
     
@@ -381,7 +358,7 @@ const StrictTimer = React.memo(({
   };
 
   return (
-    <div className="flex flex-col gap-3 w-full">
+    <div className="flex flex-col gap-3 w-full relative">
        <div className="flex items-center justify-between bg-slate-50 rounded-2xl p-3 border border-slate-200 shadow-inner w-full">
           <div className="flex-1 text-center">
              <span className={`font-mono text-3xl font-black tracking-widest ${isRunning ? 'text-blue-600' : 'text-slate-700'}`}>
@@ -401,6 +378,17 @@ const StrictTimer = React.memo(({
              )}
           </div>
        </div>
+
+       {showAutoPauseAlert && (
+          <div className="absolute inset-0 z-10 flex items-center justify-center bg-white/95 backdrop-blur-sm rounded-2xl p-4 shadow-lg border border-amber-200 animate-in fade-in zoom-in-95">
+            <div className="text-center">
+               <div className="w-10 h-10 bg-amber-100 text-amber-500 rounded-full flex items-center justify-center mx-auto mb-2"><AlertTriangle size={20} /></div>
+               <p className="text-xs font-bold text-slate-700 mb-3">5分以上操作がなかったため<br/>自動的に一時停止しました</p>
+               <button onClick={() => setShowAutoPauseAlert(false)} className="bg-amber-500 text-white px-5 py-2 rounded-xl text-sm font-bold shadow-md active:scale-95 w-full">確認</button>
+            </div>
+          </div>
+       )}
+
        <button 
          onClick={handleStopAndSave} 
          disabled={localSeconds === 0} 
@@ -417,7 +405,7 @@ StrictTimer.displayName = 'StrictTimer';
 // ==========================================
 // Generic Modals
 // ==========================================
-const DeleteConfirmModal = ({ isOpen, onClose, onConfirm, title, message }: any) => {
+const ConfirmModal = ({ isOpen, onClose, onConfirm, title, message }: any) => {
   if (!isOpen) return null;
   return (
     <div className="fixed inset-0 bg-slate-900/50 z-50 flex items-center justify-center p-6 backdrop-blur-sm animate-in fade-in">
@@ -431,7 +419,7 @@ const DeleteConfirmModal = ({ isOpen, onClose, onConfirm, title, message }: any)
         </div>
         <div className="flex gap-3">
           <button onClick={onClose} className="flex-1 py-3 rounded-xl font-bold text-slate-500 bg-slate-100 hover:bg-slate-200 transition-colors">キャンセル</button>
-          <button onClick={() => { onConfirm(); onClose(); }} className="flex-1 py-3 rounded-xl font-bold text-white bg-red-500 hover:bg-red-600 shadow-lg shadow-red-200 transition-colors">削除する</button>
+          <button onClick={() => { onConfirm(); onClose(); }} className="flex-1 py-3 rounded-xl font-bold text-white bg-red-500 hover:bg-red-600 shadow-lg shadow-red-200 transition-colors">実行する</button>
         </div>
       </div>
     </div>
@@ -501,26 +489,63 @@ const AddCustomTaskModal = ({ isOpen, onClose, onAdd }: any) => {
   );
 };
 
-const AddTestResultOverlay = ({ isOpen, onClose, onAdd }: any) => {
-  const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
+const TestResultModal = ({ isOpen, onClose, onSave, initialData }: { isOpen: boolean, onClose: () => void, onSave: (data: TestResult) => void, initialData?: TestResult | null }) => {
+  const [date, setDate] = useState('');
   const [name, setName] = useState('');
   const [type, setType] = useState('curriculum');
   const [devs, setDevs] = useState({ math: '', japanese: '', science: '', social: '' });
   const [totalDev, setTotalDev] = useState('');
   const [totalRank, setTotalRank] = useState('');
+  const [errorMsg, setErrorMsg] = useState('');
+
+  useEffect(() => {
+    if (initialData) {
+      setDate(initialData.date.replace(/\//g, '-')); // YYYY/MM/DD to YYYY-MM-DD
+      setName(initialData.name);
+      setType(initialData.type);
+      setDevs({
+        math: initialData.subjects.math.dev.toString(),
+        japanese: initialData.subjects.japanese.dev.toString(),
+        science: initialData.subjects.science.dev.toString(),
+        social: initialData.subjects.social.dev.toString(),
+      });
+      setTotalDev(initialData.total4.dev.toString());
+      setTotalRank(initialData.total4.rank || '');
+      setErrorMsg('');
+    } else {
+      setDate(new Date().toISOString().split('T')[0]);
+      setName('');
+      setType('curriculum');
+      setDevs({ math: '', japanese: '', science: '', social: '' });
+      setTotalDev('');
+      setTotalRank('');
+      setErrorMsg('');
+    }
+  }, [initialData, isOpen]);
 
   if (!isOpen) return null;
 
   const handleSubmit = () => {
-    const newTest: TestResult = {
-      id: Date.now().toString(), date: date.replace(/-/g, '/'), name, type,
+    if (!name || !date) { 
+       setErrorMsg("日付とテスト名は必須です。"); 
+       return; 
+    }
+    setErrorMsg('');
+    
+    const resultData: TestResult = {
+      id: initialData ? initialData.id : Date.now().toString(), 
+      date: date.replace(/-/g, '/'), 
+      name, 
+      type,
       subjects: {
-        math: { score: 0, avg: 0, dev: Number(devs.math) }, japanese: { score: 0, avg: 0, dev: Number(devs.japanese) },
-        science: { score: 0, avg: 0, dev: Number(devs.science) }, social: { score: 0, avg: 0, dev: Number(devs.social) },
+        math: { score: initialData?.subjects.math.score || 0, avg: initialData?.subjects.math.avg || 0, dev: Number(devs.math) }, 
+        japanese: { score: initialData?.subjects.japanese.score || 0, avg: initialData?.subjects.japanese.avg || 0, dev: Number(devs.japanese) },
+        science: { score: initialData?.subjects.science.score || 0, avg: initialData?.subjects.science.avg || 0, dev: Number(devs.science) }, 
+        social: { score: initialData?.subjects.social.score || 0, avg: initialData?.subjects.social.avg || 0, dev: Number(devs.social) },
       },
-      total4: { score: 0, avg: 0, dev: Number(totalDev), rank: totalRank }
+      total4: { score: initialData?.total4.score || 0, avg: initialData?.total4.avg || 0, dev: Number(totalDev), rank: totalRank }
     };
-    onAdd(newTest);
+    onSave(resultData);
     onClose();
   };
 
@@ -528,25 +553,25 @@ const AddTestResultOverlay = ({ isOpen, onClose, onAdd }: any) => {
     <div className="fixed inset-0 bg-slate-900/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
       <div className="bg-white w-full max-w-sm rounded-3xl p-5 shadow-2xl">
         <div className="flex justify-between items-center mb-4">
-          <h3 className="text-lg font-black text-slate-800">テスト結果を追加</h3>
-          <button onClick={onClose}><X size={20} className="text-slate-400" /></button>
+          <h3 className="text-lg font-black text-slate-800">{initialData ? 'テスト結果を編集' : 'テスト結果を追加'}</h3>
+          <button onClick={onClose} className="p-1 rounded-full bg-slate-100 text-slate-400 active:scale-95"><X size={18} /></button>
         </div>
         <div className="space-y-3">
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-[10px] font-bold text-slate-400 mb-1">実施日</label>
-              <input type="date" value={date} onChange={e => setDate(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-sm font-bold" />
+              <input type="date" value={date} onChange={e => setDate(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-sm font-bold focus:outline-none focus:border-blue-400" />
             </div>
             <div>
               <label className="block text-[10px] font-bold text-slate-400 mb-1">種類</label>
-              <select value={type} onChange={e => setType(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-sm font-bold">
+              <select value={type} onChange={e => setType(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-sm font-bold focus:outline-none focus:border-blue-400">
                 {Object.entries(TEST_TYPE_CONFIG).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
               </select>
             </div>
           </div>
           <div>
             <label className="block text-[10px] font-bold text-slate-400 mb-1">テスト名</label>
-            <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="例: 第14回 カリテ" className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-sm font-bold" />
+            <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="例: 第14回 カリテ" className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-sm font-bold focus:outline-none focus:border-blue-400" />
           </div>
           
           <div className="border-t border-slate-100 pt-3">
@@ -555,7 +580,7 @@ const AddTestResultOverlay = ({ isOpen, onClose, onAdd }: any) => {
               {(['math', 'japanese', 'science', 'social'] as Subject[]).map(subj => (
                 <div key={subj}>
                   <label className={`block text-[10px] text-center font-bold ${SUBJECT_CONFIG[subj].color} mb-1`}>{SUBJECT_CONFIG[subj].short}</label>
-                  <input type="number" value={devs[subj]} onChange={e => setDevs({...devs, [subj]: e.target.value})} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-1 py-1.5 text-xs text-center font-bold" />
+                  <input type="number" step="0.1" value={devs[subj]} onChange={e => setDevs({...devs, [subj]: e.target.value})} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-1 py-1.5 text-xs text-center font-bold focus:outline-none focus:border-blue-400" />
                 </div>
               ))}
             </div>
@@ -563,11 +588,16 @@ const AddTestResultOverlay = ({ isOpen, onClose, onAdd }: any) => {
           <div className="border-t border-slate-100 pt-3">
              <h4 className="font-bold text-slate-600 mb-2 text-xs">4科合計</h4>
              <div className="grid grid-cols-2 gap-3">
-               <div><label className="block text-[10px] font-bold text-slate-400 mb-1">偏差値</label><input type="number" value={totalDev} onChange={e => setTotalDev(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-sm font-bold" /></div>
-               <div><label className="block text-[10px] font-bold text-slate-400 mb-1">順位</label><input type="text" value={totalRank} onChange={e => setTotalRank(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-sm font-bold" /></div>
+               <div><label className="block text-[10px] font-bold text-slate-400 mb-1">偏差値</label><input type="number" step="0.1" value={totalDev} onChange={e => setTotalDev(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-sm font-bold focus:outline-none focus:border-blue-400" /></div>
+               <div><label className="block text-[10px] font-bold text-slate-400 mb-1">順位</label><input type="text" value={totalRank} onChange={e => setTotalRank(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-sm font-bold focus:outline-none focus:border-blue-400" /></div>
              </div>
           </div>
-          <button onClick={handleSubmit} className="w-full bg-blue-600 text-white font-bold py-3 rounded-xl shadow-lg mt-2 active:scale-95">追加する</button>
+          
+          {errorMsg && <div className="text-xs text-red-500 font-bold text-center mt-2">{errorMsg}</div>}
+          
+          <button onClick={handleSubmit} className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3.5 rounded-xl shadow-lg mt-2 active:scale-95 transition-colors">
+             {initialData ? '更新する' : '追加する'}
+          </button>
         </div>
       </div>
     </div>
@@ -633,8 +663,8 @@ const TaskDetailModal = ({ task, onClose, updateLocalTask, syncTaskToCloud, onSa
               ].map(s => (
                 <button key={s.id} 
                   onClick={() => {
-                    // 要件: ステータス変更ボタンはローカルStateのみ更新
-                    updateLocalTask(task.id, { status: s.id, lastUpdatedAt: Date.now() });
+                    // ローカルStateのみ更新
+                    updateLocalTask(task.id, { status: s.id as any, lastUpdatedAt: Date.now() });
                   }}
                   className={`flex-1 py-2.5 rounded-xl font-bold text-xs flex flex-col items-center justify-center gap-1 border transition-all ${
                     task.status === s.id ? s.active : 'bg-white text-slate-400 border-slate-200 hover:bg-slate-50'
@@ -649,14 +679,13 @@ const TaskDetailModal = ({ task, onClose, updateLocalTask, syncTaskToCloud, onSa
           <div className="space-y-2 bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
             <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1"><Clock size={12} /> 計測タイマー (不正防止対応)</label>
             <StrictTimer task={task} updateLocalTask={updateLocalTask} syncTaskToCloud={syncTaskToCloud} onSaveRecord={onSaveRecord} />
-            <div className="text-[9px] text-slate-400 text-center mt-2 leading-relaxed">※手動編集はできません。開始後5分間操作がない場合、自動で一時停止します。</div>
           </div>
 
           <div className="space-y-2">
             <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider px-1">メモ</label>
             <textarea
               value={task.currentMemo} onChange={(e) => updateLocalTask(task.id, { currentMemo: e.target.value })}
-              // 要件: onBlur等の都度保存はしない。ローカルStateのみ更新
+              // ローカルStateのみ更新
               placeholder="ここにつまづいた、次はこうする..."
               className="w-full bg-white border border-slate-200 rounded-xl p-3 text-sm font-medium text-slate-700 focus:outline-none focus:border-blue-500 resize-none h-20 shadow-sm"
             />
@@ -788,7 +817,7 @@ const SubjectSection = ({ unit, subject, tasks, cycleStatus, setDetailTaskId, on
 };
 
 const DailyView = ({ 
-  tasks, updateLocalTask, syncTaskToCloud, cycleStatus, deleteUnitTasks,
+  tasks, cycleStatus, deleteUnitTasks,
   setAddModalOpen, selectedUnit, setSelectedUnit, unitsWithTasks, onAddCustomTask, setDetailTaskId, setDeleteConfirmation
 }: any) => {
 
@@ -862,7 +891,7 @@ const DailyView = ({
               {(Object.keys(SUBJECT_CONFIG) as Subject[]).map(subj => (
                 <SubjectSection 
                   key={subj} unit={selectedUnit} subject={subj} tasks={tasks}
-                  updateLocalTask={updateLocalTask} syncTaskToCloud={syncTaskToCloud} cycleStatus={cycleStatus} setDetailTaskId={setDetailTaskId}
+                  cycleStatus={cycleStatus} setDetailTaskId={setDetailTaskId}
                   onAddCustomTask={onAddCustomTask}
                 />
               ))}
@@ -962,9 +991,10 @@ const DailyView = ({
   );
 };
 
-const TestsView = ({ tests, onAddTest }: any) => {
+const TestsView = ({ tests, onSaveTest, onDeleteTest }: any) => {
   const [selectedSubjects, setSelectedSubjects] = useState<string[]>(['4ko']);
-  const [isAddModalOpen, setAddModalOpen] = useState(false);
+  const [isModalOpen, setModalOpen] = useState(false);
+  const [editingTest, setEditingTest] = useState<TestResult | null>(null);
   const [filterType, setFilterType] = useState('all');
 
   const toggleSubject = (subj: string) => { setSelectedSubjects(prev => prev.includes(subj) ? prev.filter(s => s !== subj) : [...prev, subj]); };
@@ -989,7 +1019,7 @@ const TestsView = ({ tests, onAddTest }: any) => {
                <button onClick={() => setFilterType('all')} className={`px-2.5 py-1.5 rounded-lg text-[10px] font-bold border ${filterType === 'all' ? 'bg-slate-800 text-white border-slate-800' : 'bg-white border-slate-200 text-slate-500'}`}>全て</button>
                {Object.entries(TEST_TYPE_CONFIG).map(([k, v]) => <button key={k} onClick={() => setFilterType(k)} className={`px-2.5 py-1.5 rounded-lg text-[10px] font-bold border ${filterType === k ? v.activeClass : 'bg-white border-slate-200 text-slate-500'}`}>{v.label}</button>)}
              </div>
-             <button onClick={() => setAddModalOpen(true)} className="bg-blue-50 text-blue-600 p-1.5 rounded-lg active:scale-95"><Plus size={18} /></button>
+             <button onClick={() => { setEditingTest(null); setModalOpen(true); }} className="bg-blue-50 text-blue-600 p-1.5 rounded-lg active:scale-95"><Plus size={18} /></button>
           </div>
           <div className="flex gap-1.5 overflow-x-auto pb-0.5 no-scrollbar">
              <button onClick={() => toggleSubject('4ko')} className={`flex-1 py-1.5 px-2 rounded-lg text-[10px] font-bold whitespace-nowrap transition-colors ${selectedSubjects.includes('4ko') ? 'bg-slate-800 text-white' : 'bg-slate-100 text-slate-500'}`}>4科</button>
@@ -1018,20 +1048,29 @@ const TestsView = ({ tests, onAddTest }: any) => {
           <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
             <h3 className="font-bold text-slate-700 text-xs px-3 pt-3 pb-2 flex items-center gap-1.5"><TrendingUp className="text-blue-500" size={14}/> 偏差値履歴</h3>
             <table className="w-full text-center text-[10px]">
-               <thead className="text-slate-400 bg-slate-50 border-y border-slate-100"><tr><th className="py-2 pl-3 text-left font-bold">テスト名</th><th className="py-2 font-bold">4科</th>{(['math', 'japanese', 'science', 'social'] as Subject[]).map(s => <th key={s} className={`py-2 font-bold ${SUBJECT_CONFIG[s].color}`}>{SUBJECT_CONFIG[s].short}</th>)}</tr></thead>
+               <thead className="text-slate-400 bg-slate-50 border-y border-slate-100"><tr><th className="py-2 pl-3 text-left font-bold">テスト名</th><th className="py-2 font-bold">4科</th>{(['math', 'japanese', 'science', 'social'] as Subject[]).map(s => <th key={s} className={`py-2 font-bold ${SUBJECT_CONFIG[s].color}`}>{SUBJECT_CONFIG[s].short}</th>)}<th className="py-2 w-12"></th></tr></thead>
                <tbody>
                   {tableData.map(t => (
-                     <tr key={t.id} className="border-b border-slate-50 hover:bg-slate-50 transition-colors">
+                     <tr key={t.id} className="border-b border-slate-50 hover:bg-slate-50 transition-colors group">
                         <td className="py-2 pl-3 text-left"><div className="text-[8px] text-slate-400 font-bold">{t.date}</div><div className="font-bold text-slate-700 truncate max-w-[80px]">{t.name}</div></td>
                         <td className="py-2 font-black text-slate-700 bg-slate-50/50">{t.total4.dev}</td>
                         {(['math', 'japanese', 'science', 'social'] as Subject[]).map(s => <td key={s} className={`py-2 font-bold ${t.subjects[s].dev >= 60 ? 'text-rose-500' : 'text-slate-500'}`}>{t.subjects[s].dev}</td>)}
+                        <td className="py-2 pr-2">
+                           <div className="flex flex-col gap-1 items-end opacity-0 group-hover:opacity-100 transition-opacity">
+                             <button onClick={() => { setEditingTest(t); setModalOpen(true); }} className="p-1 text-slate-400 hover:text-blue-500 bg-white rounded shadow-sm border border-slate-200"><Edit2 size={10} /></button>
+                             <button onClick={() => {
+                               // モーダルを使用するためonDeleteTest内で処理する
+                               onDeleteTest(t.id);
+                             }} className="p-1 text-slate-400 hover:text-red-500 bg-white rounded shadow-sm border border-slate-200"><Trash2 size={10} /></button>
+                           </div>
+                        </td>
                      </tr>
                   ))}
                </tbody>
             </table>
           </div>
        </div>
-       <AddTestResultOverlay isOpen={isAddModalOpen} onClose={() => setAddModalOpen(false)} onAdd={onAddTest} />
+       <TestResultModal isOpen={isModalOpen} onClose={() => setModalOpen(false)} onSave={onSaveTest} initialData={editingTest} />
     </div>
   );
 };
@@ -1198,15 +1237,19 @@ const AchievementsView = ({ tasks }: { tasks: Task[] }) => {
 // ==========================================
 // User Authentication (Login View)
 // ==========================================
-const LoginForm = ({ onLogin, onSampleMode }: { onLogin: (e:string, p:string) => void, onSampleMode: () => void }) => {
+const LoginForm = ({ onLogin, onSampleMode }: { onLogin: (e:string, p:string) => Promise<void>, onSampleMode: () => void }) => {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if(!email || !password) { setError('メールアドレスとパスワードを入力してください'); return; }
-    onLogin(email, password);
+    try {
+      await onLogin(email, password);
+    } catch (err: any) {
+      setError(err.message);
+    }
   };
 
   return (
@@ -1267,7 +1310,9 @@ export default function App() {
   const [isAddModalOpen, setAddModalOpen] = useState(false);
   const [selectedUnit, setSelectedUnit] = useState<string | null>(null);
   const [detailTaskId, setDetailTaskId] = useState<string | null>(null);
-  const [deleteConfirmation, setDeleteConfirmation] = useState<{title: string, message: string, onConfirm: () => void} | null>(null);
+  
+  // 汎用確認モーダル用ステート
+  const [confirmModalData, setConfirmModalData] = useState<{title: string, message: string, onConfirm: () => void} | null>(null);
 
   // Authentication & Initialization
   useEffect(() => {
@@ -1284,18 +1329,22 @@ export default function App() {
     try {
       await signInWithEmailAndPassword(auth, email, pass);
     } catch (e: any) {
-      alert("ログイン失敗: " + e.message);
       setIsAuthChecking(false);
+      throw new Error("ログインに失敗しました。メールアドレスとパスワードを確認してください。");
     }
   };
 
-  const handleLogout = async () => {
-    if (window.confirm("ログアウトしますか？")) {
-      await signOut(auth);
-      setTasks([]);
-      setTests([]);
-      setIsSampleMode(false);
-    }
+  const handleLogout = () => {
+    setConfirmModalData({
+      title: 'ログアウト',
+      message: '本当にログアウトしますか？',
+      onConfirm: async () => {
+        await signOut(auth);
+        setTasks([]);
+        setTests([]);
+        setIsSampleMode(false);
+      }
+    });
   };
 
   const fetchData = useCallback(async (isSilent = false) => {
@@ -1317,9 +1366,7 @@ export default function App() {
         return { id: doc.id, ...data } as TestResult;
       });
 
-      if (fetchedTasks.length === 0 && fetchedTests.length === 0) {
-        // Init logic for new family
-      } else {
+      if (fetchedTasks.length > 0 || fetchedTests.length > 0) {
         setTasks(fetchedTasks);
         setTests(fetchedTests);
       }
@@ -1393,6 +1440,45 @@ export default function App() {
     } catch (e) {
       setSyncState('offline');
     }
+  };
+
+  const saveTestToCloud = async (testResult: TestResult) => {
+    setTests(prev => {
+      const existing = prev.find(t => t.id === testResult.id);
+      if (existing) {
+        return prev.map(t => t.id === testResult.id ? testResult : t);
+      }
+      return [testResult, ...prev];
+    });
+
+    if (!user || isSampleMode) return;
+    try {
+      const testRef = doc(getTestsCol(), testResult.id);
+      await setDoc(testRef, testResult);
+      setSyncState('synced');
+      setLastSync(new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }));
+    } catch (e) {
+      setSyncState('offline');
+    }
+  };
+
+  const deleteTestFromCloud = (id: string) => {
+    setConfirmModalData({
+      title: 'テスト記録の削除',
+      message: '本当にこのテスト記録を削除しますか？\nこの操作は取り消せません。',
+      onConfirm: async () => {
+        setTests(prev => prev.filter(t => t.id !== id));
+        if (!user || isSampleMode) return;
+        try {
+          const testRef = doc(getTestsCol(), id);
+          await deleteDoc(testRef);
+          setSyncState('synced');
+          setLastSync(new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }));
+        } catch (e) {
+          setSyncState('offline');
+        }
+      }
+    });
   };
 
   // ==========================================
@@ -1568,13 +1654,10 @@ export default function App() {
             setAddModalOpen={setAddModalOpen} 
             selectedUnit={selectedUnit} setSelectedUnit={setSelectedUnit} 
             unitsWithTasks={unitsWithTasks} onAddCustomTask={onAddCustomTask}
-            setDetailTaskId={setDetailTaskId} setDeleteConfirmation={setDeleteConfirmation}
+            setDetailTaskId={setDetailTaskId} setDeleteConfirmation={setConfirmModalData}
           />
         ) : activeTab === 'tests' ? (
-          <TestsView tests={tests} onAddTest={async (t: TestResult) => {
-             setTests(prev => [t, ...prev]);
-             if(user && !isSampleMode) await setDoc(doc(getTestsCol(), t.id), t);
-          }} />
+          <TestsView tests={tests} onSaveTest={saveTestToCloud} onDeleteTest={deleteTestFromCloud} />
         ) : (
           <AchievementsView tasks={tasks} />
         )}
@@ -1604,7 +1687,7 @@ export default function App() {
             syncTaskToCloud={syncTaskToCloud}
             onSaveRecord={saveHistoryRecord}
             onDelete={() => {
-               setDeleteConfirmation({
+               setConfirmModalData({
                  title: 'タスクの削除', message: '本当にこのタスクを削除しますか？',
                  onConfirm: () => {
                     setTasks(prev => prev.filter(t => t.id !== detailTaskId));
@@ -1616,12 +1699,12 @@ export default function App() {
          />
       )}
 
-      <DeleteConfirmModal 
-        isOpen={!!deleteConfirmation} 
-        onClose={() => setDeleteConfirmation(null)} 
-        onConfirm={deleteConfirmation?.onConfirm || (() => {})} 
-        title={deleteConfirmation?.title} 
-        message={deleteConfirmation?.message} 
+      <ConfirmModal 
+        isOpen={!!confirmModalData} 
+        onClose={() => setConfirmModalData(null)} 
+        onConfirm={confirmModalData?.onConfirm || (() => {})} 
+        title={confirmModalData?.title} 
+        message={confirmModalData?.message} 
       />
     </div>
   );
