@@ -63,7 +63,7 @@ if (hasFirebaseConfig) {
 // ==========================================
 
 const FAMILY_ID = 'oomine-study-2026';
-const APP_KEY = 'v5';
+const APP_KEY = 'junior-high';
 
 // Safe DB Wrapper
 const getSafeDb = () => {
