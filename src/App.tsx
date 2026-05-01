@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { 
-  Play, Pause, Trash2, X, Zap, History, 
+  Play, Pause,  Trash2, X, Zap, History, 
   TrendingUp, Calendar as CalendarIcon, PieChart as PieChartIcon, BarChart2,
   RefreshCw, FlaskConical, LogOut,
   ChevronRight, BookOpen, GraduationCap, Laptop, Trophy, 
@@ -70,7 +70,13 @@ interface TestResult {
 // Firebase Initialization (Vite/Vercel Dedicated)
 // ==========================================
 
-const env = import.meta.env;
+let env: any = {};
+try {
+  // @ts-ignore
+  env = import.meta.env || {};
+} catch (e) {
+  console.warn("Preview environment detected: Using dummy Firebase config.");
+}
 
 const firebaseConfig = {
   apiKey: env.VITE_FIREBASE_API_KEY || "dummy-api-key",
@@ -92,8 +98,8 @@ try {
 } catch (e) {}
 
 const FAMILY_ID = 'oomine-study-2026';
-const getTasksCol = () => collection(db, 'families', FAMILY_ID, 'apps', 'junior-high', 'tasks');
-const getTestsCol = () => collection(db, 'families', FAMILY_ID, 'apps', 'junior-high', 'tests');
+const getTasksCol = () => collection(db, 'families', FAMILY_ID, 'tasks');
+const getTestsCol = () => collection(db, 'families', FAMILY_ID, 'tests');
 
 // ==========================================
 // Constants & Master Data
