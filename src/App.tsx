@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { 
   Clock, Play, Pause, Plus, Trash2, CheckCircle, Circle, Edit2,
-  ChevronDown,  Award, X, Zap, Layers, History, LayoutDashboard, 
+  ChevronDown, Award, X, Zap, Layers, History, LayoutDashboard, 
   TrendingUp, Calendar as CalendarIcon, PieChart as PieChartIcon, BarChart2,
   AlertTriangle, RefreshCw, CloudOff, Cloud, FileText, FlaskConical, LogIn, LogOut
 } from 'lucide-react';
@@ -14,55 +14,76 @@ import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, signOut } from
 import type { User } from 'firebase/auth';
 import { 
   getFirestore, collection, doc, setDoc, getDocs, updateDoc, deleteDoc, 
-  serverTimestamp, enableIndexedDbPersistence, writeBatch, query
+  serverTimestamp, writeBatch, query
 } from 'firebase/firestore';
 
 // ==========================================
-// Firebase Initialization
+// Firebase Initialization (Vite + Vercel)
 // ==========================================
-declare const __firebase_config: string;
-declare const __app_id: string;
+
+const getEnv = (key: string): string | undefined => {
+  try {
+    return (import.meta as any).env?.[key];
+  } catch {
+    return undefined;
+  }
+};
 
 const firebaseConfig = {
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-  appId: import.meta.env.VITE_FIREBASE_APP_ID,
+  apiKey: getEnv('VITE_FIREBASE_API_KEY'),
+  authDomain: getEnv('VITE_FIREBASE_AUTH_DOMAIN'),
+  projectId: getEnv('VITE_FIREBASE_PROJECT_ID'),
+  storageBucket: getEnv('VITE_FIREBASE_STORAGE_BUCKET'),
+  messagingSenderId: getEnv('VITE_FIREBASE_MESSAGING_SENDER_ID'),
+  appId: getEnv('VITE_FIREBASE_APP_ID'),
 };
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db = getFirestore(app);
 
-// オフラインキャッシュ有効化
-try {
-  enableIndexedDbPersistence(db).catch(err => {
-    console.warn("Offline persistence failed to enable:", err);
-  });
-} catch (e) {}
+const hasFirebaseConfig =
+  !!firebaseConfig.apiKey &&
+  !!firebaseConfig.authDomain &&
+  !!firebaseConfig.projectId &&
+  !!firebaseConfig.appId;
+
+let app = null;
+let auth: ReturnType<typeof getAuth> | null = null;
+let db: ReturnType<typeof getFirestore> | null = null;
+
+if (hasFirebaseConfig) {
+  try {
+    app = initializeApp(firebaseConfig);
+    auth = getAuth(app);
+    db = getFirestore(app);
+  } catch (e) {
+    console.error("Firebase init error", e);
+  }
+}
 
 // ==========================================
 // 1. Type Definitions & Constants
 // ==========================================
 
 const FAMILY_ID = 'oomine-study-2026';
+const APP_KEY = 'v5';
 
-// 本番用とCanvas用パスの分離（絶対遵守事項の維持）
-const getTasksCol = () => {
-  if (typeof __app_id !== 'undefined' && __app_id) {
-    return collection(db, 'artifacts', __app_id, 'public', 'data', `families_${FAMILY_ID}_tasks`);
+// Safe DB Wrapper
+const getSafeDb = () => {
+  if (!db) {
+    console.warn("Firestore not initialized");
+    return null;
   }
-  return collection(db, 'families', FAMILY_ID, 'apps', 'junior-high', 'tasks');
+  return db;
 };
 
-const getTestsCol = () => {
-  if (typeof __app_id !== 'undefined' && __app_id) {
-    return collection(db, 'artifacts', __app_id, 'public', 'data', `families_${FAMILY_ID}_tests`);
-  }
-  return collection(db, 'families', FAMILY_ID, 'apps', 'junior-high', 'tests');
-};
+// Firestore Path Helpers (Called only after db null check)
+const getTasksCol = (database: any) => collection(database, 'families', FAMILY_ID, 'apps', APP_KEY, 'tasks');
+const getTestsCol = (database: any) => collection(database, 'families', FAMILY_ID, 'apps', APP_KEY, 'tests');
 
+const getTaskDoc = (database: any, id: string) => doc(database, 'families', FAMILY_ID, 'apps', APP_KEY, 'tasks', id);
+const getTestDoc = (database: any, id: string) => doc(database, 'families', FAMILY_ID, 'apps', APP_KEY, 'tests', id);
+
+// Cache Keys
+const CACHE_KEY_TASKS = `study-app-v5-${FAMILY_ID}-tasks`;
+const CACHE_KEY_TESTS = `study-app-v5-${FAMILY_ID}-tests`;
 
 type Subject = 'math' | 'japanese' | 'science' | 'social';
 
@@ -253,7 +274,7 @@ const StrictTimer = React.memo(({
   onSaveRecord: (task: Task) => void;
 }) => {
   const [localSeconds, setLocalSeconds] = useState(task.currentDuration);
-  const [showAutoPauseAlert, setShowAutoPauseAlert] = useState(false); // window.alertの代わり
+  const [showAutoPauseAlert, setShowAutoPauseAlert] = useState(false);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const lastActive = useRef(Date.now());
   const isRunning = task.isRunning;
@@ -262,7 +283,6 @@ const StrictTimer = React.memo(({
     if (!isRunning) setLocalSeconds(task.currentDuration);
   }, [task.currentDuration, isRunning]);
 
-  // 放置防止 (操作検知)
   useEffect(() => {
     const handleActivity = () => { lastActive.current = Date.now(); };
     window.addEventListener('mousemove', handleActivity);
@@ -277,7 +297,6 @@ const StrictTimer = React.memo(({
     };
   }, []);
 
-  // Timer Loop & Idle Check
   useEffect(() => {
     if (isRunning) {
       const startTime = task.sessionStartTime || Date.now();
@@ -292,7 +311,6 @@ const StrictTimer = React.memo(({
            updateLocalTask(task.id, { lastUpdatedAt: now });
         }
 
-        // 5分無操作で自動一時停止
         if (now - lastActive.current > 5 * 60 * 1000) {
           handlePause(true, initialSec + elapsed);
         }
@@ -301,7 +319,6 @@ const StrictTimer = React.memo(({
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
   }, [isRunning, task.sessionStartTime, task.currentDuration]);
 
-  // バックグラウンド時は停止
   useEffect(() => {
     const handleVis = () => {
       if (document.hidden && task.isRunning) {
@@ -312,7 +329,6 @@ const StrictTimer = React.memo(({
     return () => document.removeEventListener('visibilitychange', handleVis);
   }, [task.isRunning, localSeconds]);
 
-  // --- Actions ---
   const handlePlay = (e?: React.MouseEvent) => {
     e?.stopPropagation();
     lastActive.current = Date.now();
@@ -460,7 +476,7 @@ const CreateUnitOverlay = ({ isOpen, onClose, onCreate }: { isOpen: boolean; onC
   );
 };
 
-const AddCustomTaskModal = ({ isOpen, onClose, onAdd }: any) => {
+const AddCustomTaskModal = ({ isOpen, onClose, onAdd}: any) => {
   const [title, setTitle] = useState('');
   const [category, setCategory] = useState('予習シリーズ');
   if (!isOpen) return null;
@@ -507,7 +523,7 @@ const TestResultModal = ({ isOpen, onClose, onSave, initialData }: { isOpen: boo
 
   useEffect(() => {
     if (initialData) {
-      setDate(initialData.date.replace(/\//g, '-')); // YYYY/MM/DD to YYYY-MM-DD
+      setDate(initialData.date.replace(/\//g, '-')); 
       setName(initialData.name);
       setType(initialData.type);
       setDevs({
@@ -587,7 +603,7 @@ const TestResultModal = ({ isOpen, onClose, onSave, initialData }: { isOpen: boo
               {(['math', 'japanese', 'science', 'social'] as Subject[]).map(subj => (
                 <div key={subj}>
                   <label className={`block text-[10px] text-center font-bold ${SUBJECT_CONFIG[subj].color} mb-1`}>{SUBJECT_CONFIG[subj].short}</label>
-                  <input type="number" step="0.1" value={devs[subj]} onChange={e => setDevs({...devs, [subj]: e.target.value})} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-1 py-1.5 text-xs text-center font-bold focus:outline-none focus:border-blue-400" />
+                  <input type="number" step="0.1" value={devs[subj]} onChange={e => setDevs({ ...devs, [subj]: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-1 py-1.5 text-xs text-center font-bold focus:outline-none focus:border-blue-400" />
                 </div>
               ))}
             </div>
@@ -670,7 +686,6 @@ const TaskDetailModal = ({ task, onClose, updateLocalTask, syncTaskToCloud, onSa
               ].map(s => (
                 <button key={s.id} 
                   onClick={() => {
-                    // ローカルStateのみ更新
                     updateLocalTask(task.id, { status: s.id as any, lastUpdatedAt: Date.now() });
                   }}
                   className={`flex-1 py-2.5 rounded-xl font-bold text-xs flex flex-col items-center justify-center gap-1 border transition-all ${
@@ -692,7 +707,6 @@ const TaskDetailModal = ({ task, onClose, updateLocalTask, syncTaskToCloud, onSa
             <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider px-1">メモ</label>
             <textarea
               value={task.currentMemo} onChange={(e) => updateLocalTask(task.id, { currentMemo: e.target.value })}
-              // ローカルStateのみ更新
               placeholder="ここにつまづいた、次はこうする..."
               className="w-full bg-white border border-slate-200 rounded-xl p-3 text-sm font-medium text-slate-700 focus:outline-none focus:border-blue-500 resize-none h-20 shadow-sm"
             />
@@ -1063,12 +1077,9 @@ const TestsView = ({ tests, onSaveTest, onDeleteTest }: any) => {
                         <td className="py-2 font-black text-slate-700 bg-slate-50/50">{t.total4.dev}</td>
                         {(['math', 'japanese', 'science', 'social'] as Subject[]).map(s => <td key={s} className={`py-2 font-bold ${t.subjects[s].dev >= 60 ? 'text-rose-500' : 'text-slate-500'}`}>{t.subjects[s].dev}</td>)}
                         <td className="py-2 pr-2">
-                           <div className="flex flex-col gap-1 items-end opacity-0 group-hover:opacity-100 transition-opacity">
+                           <div className="flex flex-col gap-1 items-end opacity-100">
                              <button onClick={() => { setEditingTest(t); setModalOpen(true); }} className="p-1 text-slate-400 hover:text-blue-500 bg-white rounded shadow-sm border border-slate-200"><Edit2 size={10} /></button>
-                             <button onClick={() => {
-                               // モーダルを使用するためonDeleteTest内で処理する
-                               onDeleteTest(t.id);
-                             }} className="p-1 text-slate-400 hover:text-red-500 bg-white rounded shadow-sm border border-slate-200"><Trash2 size={10} /></button>
+                             <button onClick={() => onDeleteTest(t.id)} className="p-1 text-slate-400 hover:text-red-500 bg-white rounded shadow-sm border border-slate-200"><Trash2 size={10} /></button>
                            </div>
                         </td>
                      </tr>
@@ -1318,11 +1329,18 @@ export default function App() {
   const [selectedUnit, setSelectedUnit] = useState<string | null>(null);
   const [detailTaskId, setDetailTaskId] = useState<string | null>(null);
   
-  // 汎用確認モーダル用ステート
   const [confirmModalData, setConfirmModalData] = useState<{title: string, message: string, onConfirm: () => void} | null>(null);
 
   // Authentication & Initialization
   useEffect(() => {
+    if (!auth) {
+       setIsSampleMode(true);
+       setTasks(INITIAL_TASKS);
+       setTests(INITIAL_TESTS);
+       setIsAuthChecking(false);
+       return;
+    }
+
     const unsubscribe = onAuthStateChanged(auth, (u) => {
       setUser(u);
       setIsAuthChecking(false);
@@ -1332,6 +1350,7 @@ export default function App() {
   }, []);
 
   const handleEmailLogin = async (email: string, pass: string) => {
+    if (!auth) return;
     setIsAuthChecking(true);
     try {
       await signInWithEmailAndPassword(auth, email, pass);
@@ -1342,6 +1361,7 @@ export default function App() {
   };
 
   const handleLogout = () => {
+    if (!auth) return;
     setConfirmModalData({
       title: 'ログアウト',
       message: '本当にログアウトしますか？',
@@ -1355,14 +1375,17 @@ export default function App() {
   };
 
   const fetchData = useCallback(async (isSilent = false) => {
-    if (!user || isSampleMode) return;
+    const dbInstance = getSafeDb();
+    if (!dbInstance || !auth?.currentUser || isSampleMode) {
+      if (!dbInstance && !isSilent) console.warn('Firebase未設定のため、データ取得をスキップしサンプルモードで動作します');
+      return;
+    }
+    
     if (!isSilent) setSyncState('syncing');
     
     try {
-      const taskQ = query(getTasksCol());
-      const testQ = query(getTestsCol());
-      
-      const [taskSnap, testSnap] = await Promise.all([getDocs(taskQ), getDocs(testQ)]);
+      const taskSnap = await getDocs(query(getTasksCol(dbInstance)));
+      const testSnap = await getDocs(query(getTestsCol(dbInstance)));
       
       const fetchedTasks = taskSnap.docs.map(doc => {
         const data = doc.data();
@@ -1373,36 +1396,38 @@ export default function App() {
         return { id: doc.id, ...data } as TestResult;
       });
 
-      if (fetchedTasks.length > 0 || fetchedTests.length > 0) {
-        setTasks(fetchedTasks);
-        setTests(fetchedTests);
-      }
+      setTasks(fetchedTasks);
+      setTests(fetchedTests);
       
-      setCache('tasks', fetchedTasks);
-      setCache('tests', fetchedTests);
+      setCache(CACHE_KEY_TASKS, fetchedTasks);
+      setCache(CACHE_KEY_TESTS, fetchedTests);
       
       setSyncState('synced');
       setLastSync(new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }));
     } catch (err) {
       console.error(err);
       setSyncState('offline');
-      const ct = getCache('tasks');
-      if (ct) setTasks(ct);
+      const ctTasks = getCache(CACHE_KEY_TASKS);
+      const ctTests = getCache(CACHE_KEY_TESTS);
+      if (ctTasks) setTasks(ctTasks);
+      if (ctTests) setTests(ctTests);
     }
   }, [user, isSampleMode]);
 
   useEffect(() => {
     if (user && !isSampleMode) {
-      const ct = getCache('tasks');
-      if (ct) setTasks(ct);
+      const ctTasks = getCache(CACHE_KEY_TASKS);
+      const ctTests = getCache(CACHE_KEY_TESTS);
+      if (ctTasks) setTasks(ctTasks);
+      if (ctTests) setTests(ctTests);
       fetchData();
     }
   }, [user, fetchData, isSampleMode]);
 
   useEffect(() => {
     if (!isSampleMode && tasks.length > 0) {
-      setCache('tasks', tasks);
-      setCache('tests', tests);
+      setCache(CACHE_KEY_TASKS, tasks);
+      setCache(CACHE_KEY_TESTS, tests);
     }
   }, [tasks, tests, isSampleMode]);
 
@@ -1438,9 +1463,10 @@ export default function App() {
   };
 
   const syncTaskToCloud = async (id: string, cloudUpdates: any) => {
-    if (!user || isSampleMode) return;
+    const dbInstance = getSafeDb();
+    if (!dbInstance || !auth?.currentUser || isSampleMode) return;
     try {
-      const taskRef = doc(getTasksCol(), id);
+      const taskRef = getTaskDoc(dbInstance, id);
       await updateDoc(taskRef, cloudUpdates);
       setSyncState('synced');
       setLastSync(new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }));
@@ -1458,10 +1484,14 @@ export default function App() {
       return [testResult, ...prev];
     });
 
-    if (!user || isSampleMode) return;
+    const dbInstance = getSafeDb();
+    if (!dbInstance || !auth?.currentUser || isSampleMode) return;
     try {
-      const testRef = doc(getTestsCol(), testResult.id);
-      await setDoc(testRef, testResult);
+      const testRef = getTestDoc(dbInstance, testResult.id);
+      await setDoc(testRef, {
+        ...testResult,
+        updatedAt: serverTimestamp(),
+      }, { merge: true });
       setSyncState('synced');
       setLastSync(new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }));
     } catch (e) {
@@ -1475,9 +1505,10 @@ export default function App() {
       message: '本当にこのテスト記録を削除しますか？\nこの操作は取り消せません。',
       onConfirm: async () => {
         setTests(prev => prev.filter(t => t.id !== id));
-        if (!user || isSampleMode) return;
+        const dbInstance = getSafeDb();
+        if (!dbInstance || !auth?.currentUser || isSampleMode) return;
         try {
-          const testRef = doc(getTestsCol(), id);
+          const testRef = getTestDoc(dbInstance, id);
           await deleteDoc(testRef);
           setSyncState('synced');
           setLastSync(new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }));
@@ -1491,7 +1522,6 @@ export default function App() {
   // ==========================================
 
   const cycleStatus = (task: Task) => {
-    // ローカルのみ更新
     const next = task.status === 'not_started' ? 'in_progress' : task.status === 'in_progress' ? 'completed' : 'not_started';
     updateLocalTask(task.id, { status: next, lastUpdatedAt: Date.now() });
   };
@@ -1502,13 +1532,13 @@ export default function App() {
       id: Date.now().toString(),
       date: new Date().toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric' }),
       duration: task.currentDuration,
-      memo: task.currentMemo // 記録保存時にメモを履歴として保存
+      memo: task.currentMemo 
     };
     
     const updates = { 
       history: [...task.history, newHistory], 
       currentDuration: 0, 
-      currentMemo: '', // リセット
+      currentMemo: '', 
       isRunning: false,
       sessionStartTime: null,
       lastUpdatedAt: Date.now(),
@@ -1546,9 +1576,10 @@ export default function App() {
     setTasks(prev => [...newTasks, ...prev]);
     setSelectedUnit(unitName);
     
-    if (!user || isSampleMode) return;
-    const batch = writeBatch(db);
-    newTasks.forEach(t => batch.set(doc(getTasksCol(), t.id), { ...t, lastUpdatedAt: serverTimestamp() }));
+    const dbInstance = getSafeDb();
+    if (!dbInstance || !auth?.currentUser || isSampleMode) return;
+    const batch = writeBatch(dbInstance);
+    newTasks.forEach(t => batch.set(getTaskDoc(dbInstance, t.id), { ...t, lastUpdatedAt: serverTimestamp() }));
     await batch.commit();
   };
 
@@ -1557,9 +1588,10 @@ export default function App() {
     setTasks(prev => prev.filter(t => t.unit !== unit));
     if (selectedUnit === unit) setSelectedUnit(null);
     
-    if (!user || isSampleMode) return;
-    const batch = writeBatch(db);
-    toDelete.forEach(t => batch.delete(doc(getTasksCol(), t.id)));
+    const dbInstance = getSafeDb();
+    if (!dbInstance || !auth?.currentUser || isSampleMode) return;
+    const batch = writeBatch(dbInstance);
+    toDelete.forEach(t => batch.delete(getTaskDoc(dbInstance, t.id)));
     await batch.commit();
   };
 
@@ -1571,8 +1603,9 @@ export default function App() {
     };
     setTasks(prev => [...prev, newTask]);
 
-    if (!user || isSampleMode) return;
-    await setDoc(doc(getTasksCol(), newTask.id), { ...newTask, lastUpdatedAt: serverTimestamp() });
+    const dbInstance = getSafeDb();
+    if (!dbInstance || !auth?.currentUser || isSampleMode) return;
+    await setDoc(getTaskDoc(dbInstance, newTask.id), { ...newTask, lastUpdatedAt: serverTimestamp() });
   };
 
 
@@ -1601,7 +1634,7 @@ export default function App() {
         <div className="h-14 flex items-center justify-between px-5">
           <div>
             <h1 className="font-black text-lg text-slate-800 tracking-tight flex items-center gap-2">
-              Level Up Study<span className="bg-blue-100 text-blue-600 px-2 py-0.5 rounded text-[10px]">5年生</span>
+              Level Up Study<span className="bg-blue-100 text-blue-600 px-2 py-0.5 rounded text-[10px]">v5</span>
             </h1>
           </div>
           <div className="flex items-center gap-2">
@@ -1654,9 +1687,15 @@ export default function App() {
           <DailyView 
             tasks={tasks} updateLocalTask={updateLocalTask} syncTaskToCloud={syncTaskToCloud} cycleStatus={cycleStatus} 
             saveHistoryRecord={saveHistoryRecord} deleteUnitTasks={deleteUnitTasks} 
-            deleteTask={async (id: string) => { 
-               setTasks(prev => prev.filter(t => t.id !== id));
-               if(user && !isSampleMode) await deleteDoc(doc(getTasksCol(), id));
+            deleteTask={(id: string) => { 
+               setConfirmModalData({
+                 title: 'タスクの削除', message: '本当にこのタスクを削除しますか？',
+                 onConfirm: async () => {
+                    setTasks(prev => prev.filter(t => t.id !== id));
+                    const dbInstance = getSafeDb();
+                    if(dbInstance && user && !isSampleMode) await deleteDoc(getTaskDoc(dbInstance, id));
+                 }
+               });
             }}
             setAddModalOpen={setAddModalOpen} 
             selectedUnit={selectedUnit} setSelectedUnit={setSelectedUnit} 
@@ -1696,9 +1735,10 @@ export default function App() {
             onDelete={() => {
                setConfirmModalData({
                  title: 'タスクの削除', message: '本当にこのタスクを削除しますか？',
-                 onConfirm: () => {
+                 onConfirm: async () => {
                     setTasks(prev => prev.filter(t => t.id !== detailTaskId));
-                    if(user && !isSampleMode) deleteDoc(doc(getTasksCol(), detailTaskId));
+                    const dbInstance = getSafeDb();
+                    if(dbInstance && user && !isSampleMode) await deleteDoc(getTaskDoc(dbInstance, detailTaskId));
                     setDetailTaskId(null);
                  }
                });
