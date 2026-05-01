@@ -68,7 +68,7 @@ if (hasFirebaseConfig) {
 // ==========================================
 
 const FAMILY_ID = 'oomine-study-2026';
-const APP_KEY = 'v5';
+
 
 // Safe DB Wrapper
 const getSafeDb = () => {
@@ -80,11 +80,17 @@ const getSafeDb = () => {
 };
 
 // Firestore Path Helpers (Called only after db null check)
-const getTasksCol = (database: any) => collection(database, 'families', FAMILY_ID, 'apps', APP_KEY, 'tasks');
-const getTestsCol = (database: any) => collection(database, 'families', FAMILY_ID, 'apps', APP_KEY, 'tests');
+const getTasksCol = (database: any) =>
+  collection(database, 'families', FAMILY_ID, 'tasks');
 
-const getTaskDoc = (database: any, id: string) => doc(database, 'families', FAMILY_ID, 'apps', APP_KEY, 'tasks', id);
-const getTestDoc = (database: any, id: string) => doc(database, 'families', FAMILY_ID, 'apps', APP_KEY, 'tests', id);
+const getTestsCol = (database: any) =>
+  collection(database, 'families', FAMILY_ID, 'tests');
+
+const getTaskDoc = (database: any, id: string) =>
+  doc(database, 'families', FAMILY_ID, 'tasks', id);
+
+const getTestDoc = (database: any, id: string) =>
+  doc(database, 'families', FAMILY_ID, 'tests', id);
 
 // Cache Keys
 const CACHE_KEY_TASKS = `study-app-v5-${FAMILY_ID}-tasks`;
