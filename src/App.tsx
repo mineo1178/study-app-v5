@@ -1,1764 +1,1135 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { 
-  Clock, Play, Pause, Plus, Trash2, CheckCircle, Circle, Edit2,
-  ChevronDown, Award, X, Zap, Layers, History, LayoutDashboard, 
+  Play, Pause, Trash2, X, Zap, History, 
   TrendingUp, Calendar as CalendarIcon, PieChart as PieChartIcon, BarChart2,
-  AlertTriangle, RefreshCw, CloudOff, Cloud, FileText, FlaskConical, LogIn, LogOut
+  RefreshCw, FlaskConical, LogOut,
+  ChevronRight, BookOpen, GraduationCap, Laptop, Trophy, 
+  Save, ChevronLeft, Search, PlusCircle, Edit3, 
+  Eye, EyeOff, CheckSquare, Square, ListFilter, Award, Smartphone, Monitor
 } from 'lucide-react';
 import { 
   LineChart, Line, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, 
-  CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine 
+  CartesianGrid, Tooltip, ResponsiveContainer, Legend 
 } from 'recharts';
 import { initializeApp } from 'firebase/app';
-import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, signOut } from 'firebase/auth';
-import type { User } from 'firebase/auth';
+import {
+  getAuth,
+  signInWithEmailAndPassword,
+  onAuthStateChanged,
+  signOut,
+  type User as FirebaseUser
+} from 'firebase/auth';
 import { 
-  getFirestore, collection, doc, setDoc, getDocs, updateDoc, deleteDoc, 
-  serverTimestamp, writeBatch, query
+  getFirestore, collection, doc, getDocs, updateDoc, deleteDoc, 
+  enableIndexedDbPersistence, addDoc, setDoc
 } from 'firebase/firestore';
 
 // ==========================================
-// Firebase Initialization (Vite + Vercel)
+// TypeScript Interfaces
 // ==========================================
 
-const getEnv = (key: string): string | undefined => {
-  try {
-    return (import.meta as any).env?.[key];
-  } catch {
-    return undefined;
-  }
-};
-
-const firebaseConfig = {
-  apiKey: getEnv('VITE_FIREBASE_API_KEY'),
-  authDomain: getEnv('VITE_FIREBASE_AUTH_DOMAIN'),
-  projectId: getEnv('VITE_FIREBASE_PROJECT_ID'),
-  storageBucket: getEnv('VITE_FIREBASE_STORAGE_BUCKET'),
-  messagingSenderId: getEnv('VITE_FIREBASE_MESSAGING_SENDER_ID'),
-  appId: getEnv('VITE_FIREBASE_APP_ID'),
-};
-
-const hasFirebaseConfig =
-  !!firebaseConfig.apiKey &&
-  !!firebaseConfig.authDomain &&
-  !!firebaseConfig.projectId &&
-  !!firebaseConfig.appId;
-
-let app = null;
-let auth: ReturnType<typeof getAuth> | null = null;
-let db: ReturnType<typeof getFirestore> | null = null;
-
-if (hasFirebaseConfig) {
-  try {
-    app = initializeApp(firebaseConfig);
-    auth = getAuth(app);
-    db = getFirestore(app);
-  } catch (e) {
-    console.error("Firebase init error", e);
-  }
-}
-
-// ==========================================
-// 1. Type Definitions & Constants
-// ==========================================
-
-const FAMILY_ID = 'oomine-study-2026';
-
-
-// Safe DB Wrapper
-const getSafeDb = () => {
-  if (!db) {
-    console.warn("Firestore not initialized");
-    return null;
-  }
-  return db;
-};
-
-// Firestore Path Helpers (Called only after db null check)
-const getTasksCol = (database: any) =>
-  collection(database, 'families', FAMILY_ID, 'tasks');
-
-const getTestsCol = (database: any) =>
-  collection(database, 'families', FAMILY_ID, 'tests');
-
-const getTaskDoc = (database: any, id: string) =>
-  doc(database, 'families', FAMILY_ID, 'tasks', id);
-
-const getTestDoc = (database: any, id: string) =>
-  doc(database, 'families', FAMILY_ID, 'tests', id);
-
-// Cache Keys
-const CACHE_KEY_TASKS = `study-app-v5-${FAMILY_ID}-tasks`;
-const CACHE_KEY_TESTS = `study-app-v5-${FAMILY_ID}-tests`;
-
-type Subject = 'math' | 'japanese' | 'science' | 'social';
-
-interface SubjectConfig {
-  id: Subject; label: string; short: string; color: string; bg: string; lightBg: string; border: string; hex: string;
+interface StudyHistory {
+  id: string;
+  date: string;
+  duration: number;
+  memo: string;
 }
 
 interface Task {
   id: string;
-  unit: string;
-  subject: Subject;
-  category: string;
+  categoryId: string;
+  subjectId: string;
+  type: 'homework' | 'self';
   title: string;
-  materialName: string;
-  status: 'not_started' | 'in_progress' | 'completed';
+  history: StudyHistory[];
   currentDuration: number;
-  sessionStartTime: number | null; 
   isRunning: boolean;
-  lastUpdatedAt: number; 
-  currentMemo: string;
-  history: { id: string; date: string; duration: number; memo: string }[];
-  createdAt: string;
+  sessionStartTime: number | null;
+  lastUpdatedAt: number;
+  tempDetail?: string;
+  createdAt?: string;
+}
+
+interface ScoreMap {
+  [subjectId: string]: number;
 }
 
 interface TestResult {
   id: string;
-  date: string;
+  category: 'school' | 'juku';
+  subType: 'midterm' | 'final' | 'normal';
   name: string;
-  type: string;
-  subjects: Record<Subject, { score: number; avg: number; dev: number; rank?: string }>;
-  total4: { score: number; avg: number; dev: number; rank: string };
+  date: string;
+  scores: ScoreMap;
+  average: number;
+  rank: string;
+  lastUpdatedAt?: number;
 }
 
-const SUBJECT_CONFIG: Record<Subject, SubjectConfig> = {
-  math: { id: 'math', label: '算数', short: '算', color: 'text-blue-600', bg: 'bg-blue-500', lightBg: 'bg-blue-50', border: 'border-blue-200', hex: '#2563eb' },
-  japanese: { id: 'japanese', label: '国語', short: '国', color: 'text-rose-600', bg: 'bg-rose-500', lightBg: 'bg-rose-50', border: 'border-rose-200', hex: '#e11d48' },
-  science: { id: 'science', label: '理科', short: '理', color: 'text-amber-600', bg: 'bg-amber-500', lightBg: 'bg-amber-50', border: 'border-amber-200', hex: '#d97706' },
-  social: { id: 'social', label: '社会', short: '社', color: 'text-emerald-600', bg: 'bg-emerald-500', lightBg: 'bg-emerald-50', border: 'border-emerald-200', hex: '#059669' },
+// ==========================================
+// Firebase Initialization (Vite/Vercel Dedicated)
+// ==========================================
+
+const env = import.meta.env;
+
+const firebaseConfig = {
+  apiKey: env.VITE_FIREBASE_API_KEY || "dummy-api-key",
+  authDomain: env.VITE_FIREBASE_AUTH_DOMAIN || "dummy.firebaseapp.com",
+  projectId: env.VITE_FIREBASE_PROJECT_ID || "dummy-project",
+  storageBucket: env.VITE_FIREBASE_STORAGE_BUCKET || "dummy.appspot.com",
+  messagingSenderId: env.VITE_FIREBASE_MESSAGING_SENDER_ID || "000000000000",
+  appId: env.VITE_FIREBASE_APP_ID || "1:000000000000:web:dummy",
 };
 
-const TEST_TYPE_CONFIG: Record<string, { label: string; color: string; activeClass: string }> = {
-  kumiwake: { label: '組分け', color: 'text-purple-700', activeClass: 'bg-purple-600 text-white border-purple-600' },
-  curriculum: { label: 'カリテ', color: 'text-slate-700', activeClass: 'bg-slate-600 text-white border-slate-600' },
-  hantei: { label: '判定', color: 'text-orange-700', activeClass: 'bg-orange-600 text-white border-orange-600' },
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+
+try {
+  enableIndexedDbPersistence(db).catch((err) => {
+    if (err.code !== 'failed-precondition') console.warn("Offline persistence disabled");
+  });
+} catch (e) {}
+
+const FAMILY_ID = 'oomine-study-2026';
+const getTasksCol = () => collection(db, 'families', FAMILY_ID, 'apps', 'junior-high', 'tasks');
+const getTestsCol = () => collection(db, 'families', FAMILY_ID, 'apps', 'junior-high', 'tests');
+
+// ==========================================
+// Constants & Master Data
+// ==========================================
+
+const CATEGORIES = {
+  SCHOOL: { id: 'school', label: '中学校', icon: GraduationCap, color: 'text-blue-600', bg: 'bg-blue-50', border: 'border-blue-100', hex: '#3b82f6' },
+  JUKU: { id: 'juku', label: '塾', icon: BookOpen, color: 'text-emerald-600', bg: 'bg-emerald-50', border: 'border-emerald-100', hex: '#10b981' },
+  ETC: { id: 'etc', label: 'その他', icon: Laptop, color: 'text-purple-600', bg: 'bg-purple-50', border: 'border-purple-100', hex: '#a855f7' }
 };
 
-const CURRICULUM_PRESETS: Record<Subject, { category: string; items: string[] }[]> = {
-  math: [
-    { category: '予習シリーズ', items: ['類題', '基本問題', '練習問題'] },
-    { category: '演習問題集', items: ['基本問題', '練習問題', 'トレーニング', '実戦演習'] },
-    { category: '計算', items: ['①', '②', '③', '④', '⑤', '⑥', '⑦'] },
-    { category: 'プリント', items: ['確認テストB', '確認テストS', '確認テストA', '計算テストS', '計算テストA'] },
+const SUBJECT_DEFS = {
+  school: [
+    { id: 's_math', label: '数学', hex: '#3b82f6', isMajor: true }, 
+    { id: 's_japanese', label: '国語', hex: '#f43f5e', isMajor: true },
+    { id: 's_social', label: '社会', hex: '#10b981', isMajor: true }, 
+    { id: 's_science', label: '理科', hex: '#f59e0b', isMajor: true },
+    { id: 's_english', label: '英語', hex: '#8b5cf6', isMajor: true }, 
+    { id: 's_pe', label: '体育', hex: '#fb923c', isMajor: false },
+    { id: 's_tech', label: '技術', hex: '#64748b', isMajor: false }, 
+    { id: 's_music', label: '音楽', hex: '#ec4899', isMajor: false },
+    { id: 's_home', label: '家庭科', hex: '#06b6d4', isMajor: false }
   ],
-  japanese: [
-    { category: '予習シリーズ', items: ['基本問題', '発展問題', '言語知識'] },
-    { category: '漢字とことば', items: ['漢字練習', '漢字確認'] },
-    { category: '演習問題集', items: ['演習問題集'] },
-    { category: '練成問題', items: ['言語知識', '文章問題'] },
+  juku: [
+    { id: 'j_math', label: '数学', hex: '#2563eb' }, 
+    { id: 'j_japanese', label: '国語', hex: '#e11d48' },
+    { id: 'j_science', label: '理科', hex: '#d97706' }, 
+    { id: 'j_social', label: '社会', hex: '#059669' },
+    { id: 'j_english', label: '英語', hex: '#7c3aed' }
   ],
-  science: [
-    { category: '予習シリーズ', items: ['要点チェック'] },
-    { category: '演習問題集', items: ['まとめてみよう', '基本問題', '練習問題', '発展問題'] },
-    { category: 'プリント', items: ['確認テストB', '確認テストS', '確認テストA'] },
-    { category: '練成問題', items: ['トレーニング', '基本問題', '練習問題'] },
-  ],
-  social: [
-    { category: '予習シリーズ', items: ['要点チェック'] },
-    { category: '演習問題集', items: ['まとめてみよう', '練習問題', '発展問題'] },
-    { category: 'プリント', items: ['確認テストB', '確認テストS', '確認テストA'] },
-    { category: '練成問題', items: ['トレーニング', '基本問題', '練習問題'] },
+  etc: [
+    { id: 'e_news', label: '新聞', hex: '#475569' }, 
+    { id: 'e_manga', label: '歴史マンガ', hex: '#ea580c' },
+    { id: 'e_duolingo', label: 'Duolingo', hex: '#84cc16' }
   ]
 };
 
-const formatTime = (seconds: number) => {
+// ==========================================
+// Helper Functions
+// ==========================================
+
+const formatDuration = (seconds: number) => {
+  if (!seconds || seconds < 0) return "0分";
   const h = Math.floor(seconds / 3600);
   const m = Math.floor((seconds % 3600) / 60);
-  const s = Math.floor(seconds % 60);
-  if (h > 0) return `${h}h${m}m`;
-  return `${m}m${s}s`;
+  const s = seconds % 60;
+  return h > 0 ? `${h}h ${m}m` : `${m}m ${s}s`;
 };
 
-// ==========================================
-// Local Storage Cache Helpers
-// ==========================================
-const getCache = (key: string) => {
-  try { const d = localStorage.getItem(key); return d ? JSON.parse(d) : null; } catch { return null; }
-};
-const setCache = (key: string, val: any) => {
-  try { localStorage.setItem(key, JSON.stringify(val)); } catch {}
+const getTodayStr = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${(d.getMonth() + 1).toString().padStart(2, '0')}-${d.getDate().toString().padStart(2, '0')}`;
 };
 
-// ==========================================
-// Helper: Generate Dummy Data
-// ==========================================
-const generateDummyTasks = (): Task[] => {
+const generateSampleData = () => {
   const tasks: Task[] = [];
-  const subjects: Subject[] = ['math', 'japanese', 'science', 'social'];
-  const today = new Date();
-  
-  [14, 13].forEach(unitNum => {
-    const unit = `第${unitNum}回`;
-    subjects.forEach(subj => {
-      const presets = CURRICULUM_PRESETS[subj];
-      presets.forEach(cat => {
-        cat.items.forEach((item, idx) => {
-          const hasHistory = Math.random() > 0.3;
-          const history = [];
-          
-          if (hasHistory) {
-            const entries = Math.floor(Math.random() * 3) + 1;
-            for (let i = 0; i < entries; i++) {
-              const daysAgo = Math.floor(Math.random() * 30);
-              const date = new Date(today);
-              date.setDate(today.getDate() - daysAgo);
-              const duration = (Math.floor(Math.random() * 40) + 10) * 60;
-              history.push({
-                id: Math.random().toString(36).substr(2, 9),
-                date: `${date.getMonth() + 1}/${date.getDate()}`,
-                duration,
-                memo: Math.random() > 0.7 ? '難しかった' : ''
-              });
-            }
-            history.sort((a, b) => {
-               const [ma, da] = a.date.split('/').map(Number);
-               const [mb, db] = b.date.split('/').map(Number);
-               return (ma * 31 + da) - (mb * 31 + db);
-            });
-          }
+  const tests: TestResult[] = [];
+  const now = new Date();
+  const startDate = new Date(2026, 0, 1);
 
-          tasks.push({
-            id: `${unitNum}-${subj}-${idx}-${Math.random().toString(36).substr(2, 5)}`,
-            unit,
-            subject: subj,
-            category: cat.category,
-            title: item,
-            materialName: `${cat.category} - ${item}`,
-            status: hasHistory ? (Math.random() > 0.5 ? 'completed' : 'in_progress') : 'not_started',
-            currentDuration: 0,
-            sessionStartTime: null,
-            isRunning: false,
-            lastUpdatedAt: Date.now(),
-            currentMemo: '',
-            history,
-            createdAt: `${today.getMonth() + 1}/${today.getDate()}`
-          });
+  const baseTasks = [
+    { catId: 'school', subId: 's_math', type: 'homework' as const, title: '数学ワーク' },
+    { catId: 'school', subId: 's_english', type: 'homework' as const, title: '英語ワーク' },
+    { catId: 'school', subId: 's_japanese', type: 'self' as const, title: '漢字ドリル' },
+    { catId: 'juku', subId: 'j_math', type: 'homework' as const, title: '塾演習' },
+    { catId: 'etc', subId: 'e_duolingo', type: 'self' as const, title: 'Duolingo' },
+    { catId: 'school', subId: 's_social', type: 'self' as const, title: '歴史まとめ' }
+  ];
+
+  baseTasks.forEach((base, idx) => {
+    const history: StudyHistory[] = [];
+    let loopDate = new Date(startDate);
+    while (loopDate <= now) {
+      if (Math.random() > 0.3) {
+        const dStr = `${loopDate.getFullYear()}-${(loopDate.getMonth() + 1).toString().padStart(2, '0')}-${loopDate.getDate().toString().padStart(2, '0')}`;
+        history.push({
+          id: `h-${dStr}-${idx}`,
+          date: dStr,
+          duration: (Math.floor(Math.random() * 60) + 15) * 60,
+          memo: "演習と復習"
         });
-      });
+      }
+      loopDate.setDate(loopDate.getDate() + 1);
+    }
+    const lastUpdate = new Date(now.getTime() - Math.random() * 100000000).getTime();
+    tasks.push({
+      id: `sample-${idx}`, categoryId: base.catId, subjectId: base.subId, type: base.type, title: base.title,
+      history, currentDuration: 0, isRunning: false, sessionStartTime: null, lastUpdatedAt: lastUpdate
     });
   });
-  return tasks;
+
+  const testNames = ["1月実力", "3学期末", "3月模試", "4月診断", "1学期中間"];
+  const dates = ["2026-01-15", "2026-02-22", "2026-03-12", "2026-04-05", "2026-05-10"];
+  
+  dates.forEach((date, i) => {
+    tests.push({
+      id: `st-${i}`,
+      category: i % 2 === 0 ? 'school' : 'juku',
+      subType: 'normal',
+      name: testNames[i],
+      date: date,
+      scores: {
+        s_math: 60 + (i * 8),
+        s_japanese: 70 + (i * 4),
+        s_english: 65 + (i * 7),
+        j_math: 55 + (i * 9),
+        j_english: 60 + (i * 6)
+      },
+      average: 65 + (i * 3),
+      rank: `${20 - i}位`
+    });
+  });
+
+  return { tasks, tests };
 };
 
-const INITIAL_TASKS: Task[] = generateDummyTasks();
-
-const INITIAL_TESTS: TestResult[] = [
-  {
-    id: 't20261109', date: '2026/11/09', name: '5年公開組分-07', type: 'kumiwake',
-    subjects: {
-      math: { score: 90, avg: 97.1, dev: 48.1, rank: '6082/10342' },
-      japanese: { score: 75, avg: 69.4, dev: 52.3, rank: '4080/10342' },
-      science: { score: 70, avg: 62.9, dev: 53.8, rank: '3805/10069' },
-      social: { score: 87, avg: 60.7, dev: 61.4, rank: '1279/10001' },
-    },
-    total4: { score: 322, avg: 290.7, dev: 53.4, rank: '3844/10001' }
-  },
-  {
-    id: 't20261005', date: '2026/10/05', name: '5年公開組分-06', type: 'kumiwake',
-    subjects: {
-      math: { score: 72, avg: 90.9, dev: 44.6, rank: '7317/10413' },
-      japanese: { score: 98, avg: 85.8, dev: 54.8, rank: '3473/10413' },
-      science: { score: 76, avg: 77.8, dev: 48.9, rank: '6301/10152' },
-      social: { score: 81, avg: 66.8, dev: 55.9, rank: '3457/10075' },
-    },
-    total4: { score: 327, avg: 322.1, dev: 50.5, rank: '5210/10075' }
-  },
-];
-
-
 // ==========================================
-// Strict Anti-Cheat Timer Component
+// Component: Strict Timer (Anti-Cheat)
 // ==========================================
-const StrictTimer = React.memo(({ 
-  task, updateLocalTask, syncTaskToCloud, onSaveRecord
-}: { 
-  task: Task; 
-  updateLocalTask: (id: string, updates: Partial<Task>) => void;
-  syncTaskToCloud: (id: string, cloudUpdates: any) => void;
-  onSaveRecord: (task: Task) => void;
-}) => {
-  const [localSeconds, setLocalSeconds] = useState(task.currentDuration);
-  const [showAutoPauseAlert, setShowAutoPauseAlert] = useState(false);
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+interface StrictTimerProps {
+  task: Task;
+  isAnyOtherRunning: boolean;
+  onUpdate: (id: string, updates: Partial<Task>) => void;
+  onSave: (task: Task, seconds: number) => void;
+}
+
+const StrictTimer: React.FC<StrictTimerProps> = ({ task, isAnyOtherRunning, onUpdate, onSave }) => {
+  const [seconds, setSeconds] = useState(task.currentDuration || 0);
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const lastActive = useRef(Date.now());
-  const isRunning = task.isRunning;
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const stopTimer = useCallback((reason = "") => {
+    if (!task.isRunning || !task.sessionStartTime) return;
+    const now = Date.now();
+    const startTime = Number(task.sessionStartTime);
+    const elapsed = Math.floor((now - startTime) / 1000);
+    const finalSecs = (task.currentDuration || 0) + elapsed;
+    
+    onUpdate(task.id, { 
+      isRunning: false, 
+      currentDuration: finalSecs, 
+      sessionStartTime: null, 
+      lastUpdatedAt: now 
+    });
+    if (reason) setStatusMessage(reason);
+  }, [task.isRunning, task.sessionStartTime, task.currentDuration, task.id, onUpdate]);
 
   useEffect(() => {
-    if (!isRunning) setLocalSeconds(task.currentDuration);
-  }, [task.currentDuration, isRunning]);
-
-  useEffect(() => {
-    const handleActivity = () => { lastActive.current = Date.now(); };
-    window.addEventListener('mousemove', handleActivity);
-    window.addEventListener('keydown', handleActivity);
-    window.addEventListener('touchstart', handleActivity);
-    window.addEventListener('scroll', handleActivity);
-    return () => {
-      window.removeEventListener('mousemove', handleActivity);
-      window.removeEventListener('keydown', handleActivity);
-      window.removeEventListener('touchstart', handleActivity);
-      window.removeEventListener('scroll', handleActivity);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (isRunning) {
-      const startTime = task.sessionStartTime || Date.now();
-      const initialSec = task.currentDuration;
-      
+    if (task.isRunning && task.sessionStartTime) {
+      const startTime = Number(task.sessionStartTime);
+      const initialSec = task.currentDuration || 0;
       timerRef.current = setInterval(() => {
         const now = Date.now();
         const elapsed = Math.floor((now - startTime) / 1000);
-        setLocalSeconds(initialSec + elapsed);
+        setSeconds(initialSec + elapsed);
         
-        if (elapsed % 10 === 0) {
-           updateLocalTask(task.id, { lastUpdatedAt: now });
-        }
-
         if (now - lastActive.current > 5 * 60 * 1000) {
-          handlePause(true, initialSec + elapsed);
+          stopTimer("長時間無操作のため自動停止しました。");
         }
       }, 1000);
+    } else {
+      setSeconds(task.currentDuration || 0);
     }
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
-  }, [isRunning, task.sessionStartTime, task.currentDuration]);
+  }, [task.isRunning, task.sessionStartTime, task.currentDuration, stopTimer]);
 
   useEffect(() => {
-    const handleVis = () => {
-      if (document.hidden && task.isRunning) {
-        handlePause(false, localSeconds);
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && task.isRunning && task.sessionStartTime) {
+        const now = Date.now();
+        if (now - lastActive.current > 5 * 60 * 1000) {
+          stopTimer("長時間バックグラウンドにいたため停止しました。");
+        } else {
+          const startTime = Number(task.sessionStartTime);
+          setSeconds((task.currentDuration || 0) + Math.floor((now - startTime) / 1000));
+        }
+      }
+      if (document.visibilityState === 'hidden') {
+        lastActive.current = Date.now();
       }
     };
-    document.addEventListener('visibilitychange', handleVis);
-    return () => document.removeEventListener('visibilitychange', handleVis);
-  }, [task.isRunning, localSeconds]);
-
-  const handlePlay = (e?: React.MouseEvent) => {
-    e?.stopPropagation();
-    lastActive.current = Date.now();
-    const startTime = Date.now();
     
-    updateLocalTask(task.id, { 
-      isRunning: true, 
-      sessionStartTime: startTime,
-      lastUpdatedAt: startTime,
-      status: task.status === 'not_started' ? 'in_progress' : task.status
-    });
-
-    syncTaskToCloud(task.id, {
-      isRunning: true,
-      sessionStartTime: startTime,
-      lastUpdatedAt: startTime,
-      status: task.status === 'not_started' ? 'in_progress' : task.status
-    });
-  };
-
-  const handlePause = (isAutoPause: boolean, currentSecs: number) => {
-    const now = Date.now();
-    updateLocalTask(task.id, { 
-      isRunning: false, 
-      currentDuration: currentSecs,
-      sessionStartTime: null,
-      lastUpdatedAt: now
-    });
-    
-    syncTaskToCloud(task.id, {
-      isRunning: false,
-      currentDuration: currentSecs,
-      sessionStartTime: null,
-      lastUpdatedAt: now
-    });
-
-    if (isAutoPause) setShowAutoPauseAlert(true);
-  };
-
-  const handleStopAndSave = () => {
-    const finalDuration = isRunning ? localSeconds : task.currentDuration;
-    const now = Date.now();
-    
-    updateLocalTask(task.id, { isRunning: false, currentDuration: finalDuration, sessionStartTime: null, lastUpdatedAt: now });
-    syncTaskToCloud(task.id, { isRunning: false, currentDuration: finalDuration, sessionStartTime: null, lastUpdatedAt: now });
-    
-    setTimeout(() => {
-      onSaveRecord({ ...task, currentDuration: finalDuration, isRunning: false });
-    }, 100);
-  };
-
-  return (
-    <div className="flex flex-col gap-3 w-full relative">
-       <div className="flex items-center justify-between bg-slate-50 rounded-2xl p-3 border border-slate-200 shadow-inner w-full">
-          <div className="flex-1 text-center">
-             <span className={`font-mono text-3xl font-black tracking-widest ${isRunning ? 'text-blue-600' : 'text-slate-700'}`}>
-                {formatTime(localSeconds)}
-             </span>
-             {isRunning && <div className="text-[9px] text-blue-500 font-bold mt-1 animate-pulse">計測中 (サボり検知ON)</div>}
-          </div>
-          <div className="flex items-center gap-2 pr-2">
-             {!isRunning ? (
-               <button onClick={handlePlay} className="w-12 h-12 flex items-center justify-center rounded-full bg-blue-600 text-white shadow-lg active:scale-95 hover:bg-blue-700 transition-all">
-                  <Play size={20} fill="currentColor" className="ml-1" />
-               </button>
-             ) : (
-               <button onClick={() => handlePause(false, localSeconds)} className="w-12 h-12 flex items-center justify-center rounded-full bg-amber-500 text-white shadow-lg active:scale-95 hover:bg-amber-600 transition-all">
-                  <Pause size={20} fill="currentColor" />
-               </button>
-             )}
-          </div>
-       </div>
-
-       {showAutoPauseAlert && (
-          <div className="absolute inset-0 z-10 flex items-center justify-center bg-white/95 backdrop-blur-sm rounded-2xl p-4 shadow-lg border border-amber-200 animate-in fade-in zoom-in-95">
-            <div className="text-center">
-               <div className="w-10 h-10 bg-amber-100 text-amber-500 rounded-full flex items-center justify-center mx-auto mb-2"><AlertTriangle size={20} /></div>
-               <p className="text-xs font-bold text-slate-700 mb-3">5分以上操作がなかったため<br/>自動的に一時停止しました</p>
-               <button onClick={() => setShowAutoPauseAlert(false)} className="bg-amber-500 text-white px-5 py-2 rounded-xl text-sm font-bold shadow-md active:scale-95 w-full">確認</button>
-            </div>
-          </div>
-       )}
-
-       <button 
-         onClick={handleStopAndSave} 
-         disabled={localSeconds === 0} 
-         className="w-full bg-slate-800 text-white font-bold py-3.5 rounded-2xl shadow-lg active:scale-95 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
-       >
-         <History size={18} /> 計測を終了して記録を保存
-       </button>
-    </div>
-  );
-});
-StrictTimer.displayName = 'StrictTimer';
-
-
-// ==========================================
-// Generic Modals
-// ==========================================
-const ConfirmModal = ({ isOpen, onClose, onConfirm, title, message }: any) => {
-  if (!isOpen) return null;
-  return (
-    <div className="fixed inset-0 bg-slate-900/50 z-50 flex items-center justify-center p-6 backdrop-blur-sm animate-in fade-in">
-      <div className="bg-white w-full max-w-sm rounded-3xl p-6 shadow-2xl scale-100 animate-in zoom-in-95">
-        <div className="flex flex-col items-center text-center mb-6">
-          <div className="w-16 h-16 bg-red-100 text-red-500 rounded-full flex items-center justify-center mb-4">
-            <AlertTriangle size={32} />
-          </div>
-          <h3 className="text-xl font-black text-slate-800 mb-2">{title}</h3>
-          <p className="text-slate-500 text-sm whitespace-pre-wrap">{message}</p>
-        </div>
-        <div className="flex gap-3">
-          <button onClick={onClose} className="flex-1 py-3 rounded-xl font-bold text-slate-500 bg-slate-100 hover:bg-slate-200 transition-colors">キャンセル</button>
-          <button onClick={() => { onConfirm(); onClose(); }} className="flex-1 py-3 rounded-xl font-bold text-white bg-red-500 hover:bg-red-600 shadow-lg shadow-red-200 transition-colors">実行する</button>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-const CreateUnitOverlay = ({ isOpen, onClose, onCreate }: { isOpen: boolean; onClose: () => void; onCreate: (n: number) => void }) => {
-  const [unitNumber, setUnitNumber] = useState('');
-  if (!isOpen) return null;
-
-  return (
-    <div className="fixed inset-0 bg-slate-900/40 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
-      <div className="bg-white w-full max-w-sm rounded-3xl p-6 shadow-2xl animate-in zoom-in-95">
-        <div className="flex justify-between items-center mb-6">
-          <h3 className="text-xl font-black text-slate-800 flex items-center"><Layers className="mr-2 text-blue-600" /> 新しい回を追加</h3>
-          <button onClick={onClose}><X size={20} className="text-slate-400" /></button>
-        </div>
-        <div className="mb-6 bg-slate-50 rounded-2xl p-4 border border-slate-100 text-center">
-          <label className="block text-xs font-bold text-slate-400 mb-2 uppercase tracking-wider">Unit Number</label>
-          <div className="flex items-center justify-center gap-3">
-            <span className="text-2xl font-black text-slate-300">第</span>
-            <input type="number" value={unitNumber} onChange={(e) => setUnitNumber(e.target.value)} placeholder="?" className="w-24 bg-white border-2 border-blue-100 rounded-xl px-2 py-3 text-3xl font-black text-center text-blue-600 focus:outline-none focus:border-blue-500" autoFocus />
-            <span className="text-2xl font-black text-slate-300">回</span>
-          </div>
-        </div>
-        <button onClick={() => { if (parseInt(unitNumber) > 0) { onCreate(parseInt(unitNumber)); setUnitNumber(''); onClose(); } }} disabled={!unitNumber} className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 text-white font-bold py-4 rounded-xl shadow-lg active:scale-95 transition-all flex items-center justify-center gap-2 disabled:opacity-50">
-          <Zap size={20} fill="currentColor"/> カリキュラムを作成
-        </button>
-      </div>
-    </div>
-  );
-};
-
-const AddCustomTaskModal = ({ isOpen, onClose, onAdd}: any) => {
-  const [title, setTitle] = useState('');
-  const [category, setCategory] = useState('予習シリーズ');
-  if (!isOpen) return null;
-
-  return (
-    <div className="fixed inset-0 bg-slate-900/40 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
-      <div className="bg-white w-full max-w-sm rounded-3xl p-6 shadow-2xl animate-in zoom-in-95">
-        <div className="flex justify-between items-center mb-4">
-          <h3 className="text-lg font-black text-slate-800">タスクを追加</h3>
-          <button onClick={onClose}><X size={20} className="text-slate-400" /></button>
-        </div>
-        <div className="space-y-4">
-          <div>
-            <label className="block text-xs font-bold text-slate-400 mb-1">カテゴリ</label>
-            <select value={category} onChange={e => setCategory(e.target.value)} className="w-full bg-slate-50 border rounded-xl px-3 py-2 font-bold">
-              <option value="予習シリーズ">予習シリーズ</option>
-              <option value="演習問題集">演習問題集</option>
-              <option value="練成問題">練成問題</option>
-              <option value="計算">計算</option>
-              <option value="漢字とことば">漢字とことば</option>
-              <option value="プリント">プリント</option>
-              <option value="その他">その他</option>
-            </select>
-          </div>
-          <div>
-            <label className="block text-xs font-bold text-slate-400 mb-1">タイトル</label>
-            <input type="text" value={title} onChange={e => setTitle(e.target.value)} placeholder="例: 追加問題..." className="w-full bg-slate-50 border rounded-xl px-3 py-2 font-bold" autoFocus />
-          </div>
-          <button onClick={() => { if (title) { onAdd(title, category); setTitle(''); setCategory('予習シリーズ'); onClose(); } }} disabled={!title} className="w-full bg-blue-600 text-white font-bold py-3 rounded-xl shadow-lg mt-2">追加</button>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-const TestResultModal = ({ isOpen, onClose, onSave, initialData }: { isOpen: boolean, onClose: () => void, onSave: (data: TestResult) => void, initialData?: TestResult | null }) => {
-  const [date, setDate] = useState('');
-  const [name, setName] = useState('');
-  const [type, setType] = useState('curriculum');
-  const [devs, setDevs] = useState({ math: '', japanese: '', science: '', social: '' });
-  const [totalDev, setTotalDev] = useState('');
-  const [totalRank, setTotalRank] = useState('');
-  const [errorMsg, setErrorMsg] = useState('');
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, [task.isRunning, task.sessionStartTime, task.currentDuration, stopTimer]);
 
   useEffect(() => {
-    if (initialData) {
-      setDate(initialData.date.replace(/\//g, '-')); 
-      setName(initialData.name);
-      setType(initialData.type);
-      setDevs({
-        math: initialData.subjects.math.dev.toString(),
-        japanese: initialData.subjects.japanese.dev.toString(),
-        science: initialData.subjects.science.dev.toString(),
-        social: initialData.subjects.social.dev.toString(),
-      });
-      setTotalDev(initialData.total4.dev.toString());
-      setTotalRank(initialData.total4.rank || '');
-      setErrorMsg('');
-    } else {
-      setDate(new Date().toISOString().split('T')[0]);
-      setName('');
-      setType('curriculum');
-      setDevs({ math: '', japanese: '', science: '', social: '' });
-      setTotalDev('');
-      setTotalRank('');
-      setErrorMsg('');
-    }
-  }, [initialData, isOpen]);
-
-  if (!isOpen) return null;
-
-  const handleSubmit = () => {
-    if (!name || !date) { 
-       setErrorMsg("日付とテスト名は必須です。"); 
-       return; 
-    }
-    setErrorMsg('');
-    
-    const resultData: TestResult = {
-      id: initialData ? initialData.id : Date.now().toString(), 
-      date: date.replace(/-/g, '/'), 
-      name, 
-      type,
-      subjects: {
-        math: { score: initialData?.subjects.math.score || 0, avg: initialData?.subjects.math.avg || 0, dev: Number(devs.math) }, 
-        japanese: { score: initialData?.subjects.japanese.score || 0, avg: initialData?.subjects.japanese.avg || 0, dev: Number(devs.japanese) },
-        science: { score: initialData?.subjects.science.score || 0, avg: initialData?.subjects.science.avg || 0, dev: Number(devs.science) }, 
-        social: { score: initialData?.subjects.social.score || 0, avg: initialData?.subjects.social.avg || 0, dev: Number(devs.social) },
-      },
-      total4: { score: initialData?.total4.score || 0, avg: initialData?.total4.avg || 0, dev: Number(totalDev), rank: totalRank }
+    const recordActivity = () => { lastActive.current = Date.now(); };
+    window.addEventListener('mousemove', recordActivity);
+    window.addEventListener('touchstart', recordActivity);
+    window.addEventListener('keydown', recordActivity);
+    return () => {
+      window.removeEventListener('mousemove', recordActivity);
+      window.removeEventListener('touchstart', recordActivity);
+      window.removeEventListener('keydown', recordActivity);
     };
-    onSave(resultData);
-    onClose();
-  };
-
-  return (
-    <div className="fixed inset-0 bg-slate-900/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
-      <div className="bg-white w-full max-w-sm rounded-3xl p-5 shadow-2xl">
-        <div className="flex justify-between items-center mb-4">
-          <h3 className="text-lg font-black text-slate-800">{initialData ? 'テスト結果を編集' : 'テスト結果を追加'}</h3>
-          <button onClick={onClose} className="p-1 rounded-full bg-slate-100 text-slate-400 active:scale-95"><X size={18} /></button>
-        </div>
-        <div className="space-y-3">
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-[10px] font-bold text-slate-400 mb-1">実施日</label>
-              <input type="date" value={date} onChange={e => setDate(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-sm font-bold focus:outline-none focus:border-blue-400" />
-            </div>
-            <div>
-              <label className="block text-[10px] font-bold text-slate-400 mb-1">種類</label>
-              <select value={type} onChange={e => setType(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-sm font-bold focus:outline-none focus:border-blue-400">
-                {Object.entries(TEST_TYPE_CONFIG).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
-              </select>
-            </div>
-          </div>
-          <div>
-            <label className="block text-[10px] font-bold text-slate-400 mb-1">テスト名</label>
-            <input type="text" value={name} onChange={e => setName(e.target.value)} placeholder="例: 第14回 カリテ" className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-sm font-bold focus:outline-none focus:border-blue-400" />
-          </div>
-          
-          <div className="border-t border-slate-100 pt-3">
-            <h4 className="font-bold text-slate-600 mb-2 text-xs">各教科の偏差値</h4>
-            <div className="grid grid-cols-4 gap-2">
-              {(['math', 'japanese', 'science', 'social'] as Subject[]).map(subj => (
-                <div key={subj}>
-                  <label className={`block text-[10px] text-center font-bold ${SUBJECT_CONFIG[subj].color} mb-1`}>{SUBJECT_CONFIG[subj].short}</label>
-                  <input type="number" step="0.1" value={devs[subj]} onChange={e => setDevs({ ...devs, [subj]: e.target.value })} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-1 py-1.5 text-xs text-center font-bold focus:outline-none focus:border-blue-400" />
-                </div>
-              ))}
-            </div>
-          </div>
-          <div className="border-t border-slate-100 pt-3">
-             <h4 className="font-bold text-slate-600 mb-2 text-xs">4科合計</h4>
-             <div className="grid grid-cols-2 gap-3">
-               <div><label className="block text-[10px] font-bold text-slate-400 mb-1">偏差値</label><input type="number" step="0.1" value={totalDev} onChange={e => setTotalDev(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-sm font-bold focus:outline-none focus:border-blue-400" /></div>
-               <div><label className="block text-[10px] font-bold text-slate-400 mb-1">順位</label><input type="text" value={totalRank} onChange={e => setTotalRank(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 text-sm font-bold focus:outline-none focus:border-blue-400" /></div>
-             </div>
-          </div>
-          
-          {errorMsg && <div className="text-xs text-red-500 font-bold text-center mt-2">{errorMsg}</div>}
-          
-          <button onClick={handleSubmit} className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3.5 rounded-xl shadow-lg mt-2 active:scale-95 transition-colors">
-             {initialData ? '更新する' : '追加する'}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-
-// ==========================================
-// Views & Sub-components
-// ==========================================
-
-const TaskCard = ({ task, cycleStatus, setDetailTaskId }: any) => {
-  return (
-    <div 
-      onClick={() => setDetailTaskId(task.id)}
-      className={`group bg-white rounded-xl p-3 shadow-sm border border-slate-200 transition-all active:scale-[0.98] cursor-pointer flex flex-col gap-2 ${task.status === 'completed' ? 'opacity-60 bg-slate-50' : ''}`}
-    >
-      <div className="flex items-start gap-2">
-        <button onClick={(e) => { e.stopPropagation(); cycleStatus(task); }} className="p-1 -ml-1 mt-0.5 rounded-full active:scale-90 flex-shrink-0">
-          {task.status === 'completed' ? <CheckCircle size={18} className="text-green-500" fill="#f0fdf4" /> : task.status === 'in_progress' ? <Zap size={18} className="text-blue-500" fill="currentColor" /> : <Circle size={18} className="text-slate-200" />}
-        </button>
-        <div className="flex-1 min-w-0 pt-0.5">
-          <h4 className={`font-bold text-sm text-slate-800 leading-tight ${task.status === 'completed' ? 'line-through text-slate-400' : ''}`}>{task.title}</h4>
-          <div className="flex flex-wrap items-center gap-2 mt-1.5">
-             <span className="text-[9px] font-bold text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded flex items-center gap-1">
-               <History size={8} /> {task.history.length}回
-             </span>
-             {task.currentDuration > 0 && <span className={`text-[9px] font-bold font-mono px-1.5 py-0.5 rounded flex items-center gap-1 ${task.isRunning ? 'bg-blue-100 text-blue-600 animate-pulse' : 'bg-amber-50 text-amber-600'}`}><Clock size={8} /> {formatTime(task.currentDuration)}</span>}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-const TaskDetailModal = ({ task, onClose, updateLocalTask, syncTaskToCloud, onSaveRecord, onDelete }: any) => {
-  if (!task) return null;
-  const conf = SUBJECT_CONFIG[task.subject as Subject];
-  
-  return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center">
-      <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm transition-opacity" onClick={onClose} />
-      <div className="relative bg-slate-50 w-full max-w-md h-[90vh] sm:h-[85vh] sm:rounded-3xl rounded-t-3xl shadow-2xl flex flex-col animate-in slide-in-from-bottom-10">
-        <div className="bg-white px-5 py-4 rounded-t-3xl border-b border-slate-200 flex justify-between items-start shrink-0">
-          <div>
-            <div className="flex items-center gap-2 mb-1.5">
-              <span className={`text-[9px] font-black px-1.5 py-0.5 rounded ${conf.lightBg} ${conf.color} border ${conf.border}`}>{conf.label}</span>
-              <span className="text-[10px] font-bold text-slate-400">{task.unit} - {task.category}</span>
-            </div>
-            <h3 className="text-lg font-black text-slate-800 leading-tight pr-4">{task.title}</h3>
-          </div>
-          <button onClick={onClose} className="p-1.5 bg-slate-100 rounded-full text-slate-400 active:scale-95"><X size={18} /></button>
-        </div>
-
-        <div className="flex-1 overflow-y-auto px-5 py-5 space-y-6 scroll-smooth pb-10">
-          <div className="space-y-2">
-            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider px-1">状態</label>
-            <div className="flex gap-2">
-              {[
-                { id: 'not_started', label: '未着手', icon: Circle, active: 'bg-slate-200 text-slate-700 border-slate-300' },
-                { id: 'in_progress', label: '勉強中', icon: Zap, active: 'bg-blue-500 text-white border-blue-600' },
-                { id: 'completed', label: '完了', icon: CheckCircle, active: 'bg-green-500 text-white border-green-600' },
-              ].map(s => (
-                <button key={s.id} 
-                  onClick={() => {
-                    updateLocalTask(task.id, { status: s.id as any, lastUpdatedAt: Date.now() });
-                  }}
-                  className={`flex-1 py-2.5 rounded-xl font-bold text-xs flex flex-col items-center justify-center gap-1 border transition-all ${
-                    task.status === s.id ? s.active : 'bg-white text-slate-400 border-slate-200 hover:bg-slate-50'
-                  }`}
-                >
-                  <s.icon size={16} />{s.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="space-y-2 bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
-            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1"><Clock size={12} /> 計測タイマー (不正防止対応)</label>
-            <StrictTimer task={task} updateLocalTask={updateLocalTask} syncTaskToCloud={syncTaskToCloud} onSaveRecord={onSaveRecord} />
-          </div>
-
-          <div className="space-y-2">
-            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider px-1">メモ</label>
-            <textarea
-              value={task.currentMemo} onChange={(e) => updateLocalTask(task.id, { currentMemo: e.target.value })}
-              placeholder="ここにつまづいた、次はこうする..."
-              className="w-full bg-white border border-slate-200 rounded-xl p-3 text-sm font-medium text-slate-700 focus:outline-none focus:border-blue-500 resize-none h-20 shadow-sm"
-            />
-          </div>
-          
-          <div className="space-y-3 pt-2">
-            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider px-1">過去の履歴 ({task.history.length})</label>
-            {task.history.length === 0 ? (
-              <div className="text-center py-6 text-slate-300 text-xs font-bold bg-white rounded-xl border border-dashed border-slate-200">記録なし</div>
-            ) : (
-              <div className="space-y-2">
-                {[...task.history].reverse().map((h: any, i: number) => (
-                  <div key={h.id} className="bg-white border border-slate-200 rounded-xl p-3 shadow-sm flex gap-3">
-                    <div className="flex flex-col items-center justify-center px-1 border-r border-slate-100 min-w-[2.5rem]">
-                      <span className="text-[8px] font-bold text-slate-400">回目</span>
-                      <span className="text-base font-black text-slate-700">{task.history.length - i}</span>
-                    </div>
-                    <div className="flex-1 min-w-0 flex flex-col justify-center">
-                      <div className="flex justify-between items-center mb-1">
-                        <span className="text-[9px] font-bold text-slate-400 bg-slate-50 px-1.5 py-0.5 rounded">{h.date}</span>
-                        <span className="text-xs font-bold text-blue-600 font-mono flex items-center gap-1"><Clock size={10} />{formatTime(h.duration)}</span>
-                      </div>
-                      {h.memo && <p className="text-[10px] text-slate-600 bg-slate-50 p-1.5 rounded mt-1 truncate">{h.memo}</p>}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-
-        <div className="p-4 border-t border-slate-200 bg-white sm:rounded-b-3xl shrink-0 flex gap-3 pb-safe-bottom">
-           <button onClick={onDelete} className="text-red-500 bg-red-50 hover:bg-red-100 p-3 rounded-xl font-bold text-xs flex items-center justify-center gap-1.5 transition-colors">
-             <Trash2 size={14} /> 削除
-           </button>
-           <button onClick={onClose} className="bg-slate-800 text-white font-bold py-3 rounded-xl flex-1 shadow-lg active:scale-95 transition-transform">閉じる</button>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-
-const SubjectSection = ({ unit, subject, tasks, cycleStatus, setDetailTaskId, onAddCustomTask }: any) => {
-  const [filter, setFilter] = useState<'all' | 'not_started' | 'in_progress' | 'completed'>('all');
-  const [isAddModalOpen, setAddModalOpen] = useState(false);
-  
-  const subjTasks = tasks.filter((t: Task) => t.unit === unit && t.subject === subject);
-  if (subjTasks.length === 0 && filter === 'all') return null;
-
-  const totalDuration = subjTasks.reduce((acc: number, curr: Task) => acc + curr.currentDuration + curr.history.reduce((hAcc, h) => hAcc + h.duration, 0), 0);
-  const completedCount = subjTasks.filter((t: Task) => t.status === 'completed').length;
-  const progress = subjTasks.length > 0 ? Math.round((completedCount / subjTasks.length) * 100) : 0;
-  
-  const conf = SUBJECT_CONFIG[subject as Subject];
-  const filteredTasks = subjTasks.filter((t: Task) => filter === 'all' ? true : t.status === filter);
-
-  const tasksByCategory: Record<string, Task[]> = {};
-  filteredTasks.forEach((task: Task) => {
-     if (!tasksByCategory[task.category]) tasksByCategory[task.category] = [];
-     tasksByCategory[task.category].push(task);
-  });
-
-  return (
-    <div className="relative">
-       <div className="flex flex-col gap-2 mb-3">
-          <div className="flex flex-col px-3 py-3 bg-white rounded-xl shadow-sm border border-slate-200">
-             <div className="flex justify-between items-center mb-2">
-                 <div className="flex items-center gap-2">
-                   <div className={`w-2 h-6 rounded-full ${conf.bg}`} />
-                   <h3 className={`font-black text-lg ${conf.color}`}>{conf.label}</h3>
-                 </div>
-                 <div className="text-[10px] font-bold text-slate-500 font-mono bg-slate-50 px-2 py-0.5 rounded">
-                   計: {Math.floor(totalDuration / 60)}h {totalDuration % 60}m
-                 </div>
-             </div>
-             <div className="flex items-center gap-2">
-                 <div className="flex-1 h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                     <div className={`h-full ${conf.bg}`} style={{ width: `${progress}%` }} />
-                 </div>
-                 <span className="text-[10px] font-bold text-slate-400 font-mono w-6 text-right">{progress}%</span>
-             </div>
-          </div>
-          
-          <div className="flex items-center justify-between px-1">
-            <div className="flex gap-1 bg-white p-0.5 rounded-lg border border-slate-200">
-                {(['all', 'not_started', 'in_progress', 'completed'] as const).map(f => (
-                  <button 
-                    key={f} onClick={() => setFilter(f)}
-                    className={`px-2 py-1 text-[9px] font-bold rounded-md transition-all ${filter === f ? 'bg-slate-800 text-white' : 'text-slate-400 hover:bg-slate-50'}`}
-                  >
-                    {f === 'all' ? '全て' : f === 'not_started' ? '未着手' : f === 'in_progress' ? '勉強中' : '完了'}
-                  </button>
-                ))}
-            </div>
-            <button onClick={() => setAddModalOpen(true)} className="flex items-center gap-1 px-2 py-1 bg-white border border-slate-200 text-blue-600 rounded-lg text-[10px] font-bold active:bg-blue-50 transition-colors">
-              <Plus size={12} /> 追加
-            </button>
-          </div>
-       </div>
-
-       <div className="space-y-4 pl-1 border-l-2 border-slate-100 ml-2">
-         {Object.keys(tasksByCategory).length === 0 ? (
-           <div className="text-center py-6 text-slate-400 text-[10px] font-bold">タスクがありません</div>
-         ) : (
-           Object.keys(tasksByCategory).map(cat => (
-              <div key={cat} className="pl-3">
-                 <h4 className="text-[10px] font-bold text-slate-400 mb-2">{cat}</h4>
-                 <div className="flex flex-col gap-2">
-                   {tasksByCategory[cat].map((task: Task) => (
-                      <TaskCard 
-                        key={task.id} task={task} 
-                        cycleStatus={cycleStatus} setDetailTaskId={setDetailTaskId} 
-                      />
-                   ))}
-                 </div>
-              </div>
-           ))
-         )}
-       </div>
-
-       <AddCustomTaskModal 
-         isOpen={isAddModalOpen} onClose={() => setAddModalOpen(false)} 
-         unit={unit} subject={subject}
-         onAdd={(title: string, category: string) => onAddCustomTask(unit, subject, title, category)}
-       />
-    </div>
-  );
-};
-
-const DailyView = ({ 
-  tasks, cycleStatus, deleteUnitTasks,
-  setAddModalOpen, selectedUnit, setSelectedUnit, unitsWithTasks, onAddCustomTask, setDetailTaskId, setDeleteConfirmation
-}: any) => {
-
-  const getStats = (targetTasks: Task[]) => {
-    if (targetTasks.length === 0) return { progress: 0, totalTime: 0 };
-    const completed = targetTasks.filter(t => t.status === 'completed').length;
-    const progress = Math.round((completed / targetTasks.length) * 100);
-    const totalTime = targetTasks.reduce((acc, curr) => acc + curr.history.reduce((hAcc, h) => hAcc + h.duration, 0) + curr.currentDuration, 0);
-    return { progress, totalTime };
-  };
-
-  const allStats = useMemo(() => {
-      const total = getStats(tasks);
-      const subjects = (Object.keys(SUBJECT_CONFIG) as Subject[]).map(subj => ({
-        id: subj, ...getStats(tasks.filter((t: Task) => t.subject === subj))
-      }));
-      return { total, subjects };
-  }, [tasks]);
-
-  return (
-    <div className="flex flex-col h-full">
-      <div className="sticky top-0 z-20 px-4 py-3 bg-slate-50 border-b border-slate-200">
-        <div className="flex gap-2">
-          <button onClick={() => setSelectedUnit(null)} className={`px-4 py-2.5 rounded-xl font-bold text-xs flex items-center justify-center transition-all ${!selectedUnit ? 'bg-slate-800 text-white shadow-md' : 'bg-white text-slate-500 border border-slate-200'}`}>
-            <LayoutDashboard size={14} className="mr-1.5"/> 全体
-          </button>
-          <div className="flex-1 relative">
-            <select
-              value={selectedUnit || ''}
-              onChange={(e) => e.target.value === 'NEW' ? setAddModalOpen(true) : setSelectedUnit(e.target.value)}
-              className={`w-full h-full appearance-none rounded-xl font-bold text-xs pl-3 pr-8 focus:outline-none transition-all cursor-pointer ${selectedUnit ? 'bg-blue-600 text-white shadow-md shadow-blue-200' : 'bg-white border border-slate-200 text-slate-600'}`}
-            >
-              <option value="" disabled>回を選択...</option>
-              <optgroup label="学習中の回">
-                  {unitsWithTasks.map((w: string) => <option key={w} value={w} className="text-slate-800 bg-white">{w}</option>)}
-              </optgroup>
-              <optgroup label="アクション"><option value="NEW" className="text-blue-600 bg-white">+ 新しい回を追加</option></optgroup>
-            </select>
-            <ChevronDown className={`absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none ${selectedUnit ? 'text-white' : 'text-slate-400'}`} size={14} />
-          </div>
-        </div>
-      </div>
-
-      <div className="pt-4 px-4 space-y-6 pb-32">
-        {selectedUnit ? (
-          <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4">
-              {(() => {
-                const unitTasks = tasks.filter((t: Task) => t.unit === selectedUnit);
-                const { progress, totalTime } = getStats(unitTasks);
-                return (
-                  <div className="bg-white rounded-2xl p-5 shadow-sm border border-slate-200 relative overflow-hidden">
-                    <div className="flex justify-between items-end mb-3">
-                        <div>
-                            <h2 className="text-xl font-black text-slate-800">{selectedUnit}</h2>
-                        </div>
-                        <div className="text-right">
-                            <div className="text-3xl font-black text-slate-800 tracking-tight">{progress}<span className="text-sm font-bold text-slate-400 ml-0.5">%</span></div>
-                        </div>
-                    </div>
-                    <div className="flex justify-between items-center mb-1.5">
-                       <span className="text-[10px] font-bold text-slate-400">全体進捗</span>
-                       <span className="text-[10px] font-bold font-mono text-blue-600">計 {Math.floor(totalTime / 3600)}h {Math.floor((totalTime % 3600) / 60)}m</span>
-                    </div>
-                    <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
-                        <div className="h-full bg-blue-500 rounded-full" style={{ width: `${progress}%` }} />
-                    </div>
-                  </div>
-                );
-              })()}
-
-              {(Object.keys(SUBJECT_CONFIG) as Subject[]).map(subj => (
-                <SubjectSection 
-                  key={subj} unit={selectedUnit} subject={subj} tasks={tasks}
-                  cycleStatus={cycleStatus} setDetailTaskId={setDetailTaskId}
-                  onAddCustomTask={onAddCustomTask}
-                />
-              ))}
-          </div>
-        ) : (
-          <div className="space-y-5 animate-in fade-in">
-              <div className="bg-white rounded-3xl p-5 shadow-sm border border-slate-200">
-                 <h2 className="text-sm font-black text-slate-800 mb-3 flex items-center gap-1.5"><Award className="text-blue-500" size={16} /> 全期間サマリー</h2>
-                 <div className="flex justify-between items-end mb-4 pb-4 border-b border-slate-100">
-                     <div>
-                         <div className="text-[10px] text-slate-400 font-bold mb-0.5">全体完了率</div>
-                         <div className="text-3xl font-black text-slate-800">{allStats.total.progress}<span className="text-sm text-slate-400 ml-0.5">%</span></div>
-                     </div>
-                     <div className="text-right">
-                         <div className="text-[10px] text-slate-400 font-bold mb-0.5">総勉強時間</div>
-                         <div className="text-xl font-black text-blue-600 font-mono">
-                            {Math.floor(allStats.total.totalTime / 3600)}<span className="text-xs text-slate-400 mx-0.5">h</span>
-                            {Math.floor((allStats.total.totalTime % 3600) / 60)}<span className="text-xs text-slate-400 ml-0.5">m</span>
-                         </div>
-                     </div>
-                 </div>
-                 <div className="space-y-2.5">
-                    {allStats.subjects.map(s => {
-                       const conf = SUBJECT_CONFIG[s.id as Subject];
-                       return (
-                          <div key={s.id} className="flex items-center gap-2">
-                             <span className={`text-[10px] font-bold w-6 ${conf.color}`}>{conf.short}</span>
-                             <div className="flex-1 h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                                <div className={`h-full ${conf.bg}`} style={{ width: `${s.progress}%` }} />
-                             </div>
-                             <span className="text-[10px] font-bold text-slate-400 w-12 text-right font-mono">
-                                {Math.floor(s.totalTime / 3600)}h{Math.floor((s.totalTime % 3600) / 60)}
-                             </span>
-                          </div>
-                       )
-                    })}
-                 </div>
-              </div>
-
-              <h3 className="font-bold text-slate-500 text-xs pl-1">学習回ごとの詳細</h3>
-
-              {unitsWithTasks.map((unit: string) => {
-                const unitTasks = tasks.filter((t: Task) => t.unit === unit);
-                const { progress, totalTime } = getStats(unitTasks);
-                const subjStats = (Object.keys(SUBJECT_CONFIG) as Subject[]).map(subj => ({ id: subj, ...getStats(unitTasks.filter((t: Task) => t.subject === subj)) }));
-
-                return (
-                  <div key={unit} onClick={() => setSelectedUnit(unit)} className="bg-white rounded-2xl p-4 shadow-sm border border-slate-200 active:scale-[0.98] transition-all cursor-pointer relative">
-                     <button 
-                         onClick={(e) => { 
-                           e.stopPropagation(); 
-                           setDeleteConfirmation({
-                             title: `「${unit}」の削除`, message: `本当に「${unit}」を削除しますか？\nタスクと履歴がすべて消去されます。`,
-                             onConfirm: () => deleteUnitTasks(unit)
-                           });
-                         }} 
-                         className="absolute top-3 right-3 p-1.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors z-10"
-                     >
-                         <Trash2 size={14} />
-                     </button>
-                     <div className="flex justify-between items-center mb-3 pr-8">
-                        <div className="font-black text-lg text-slate-800">{unit}</div>
-                        <div className="text-[10px] font-bold text-slate-400 font-mono">{Math.floor(totalTime / 3600)}h {Math.floor((totalTime % 3600) / 60)}m</div>
-                     </div>
-                     <div className="mb-3">
-                        <div className="flex justify-between text-[10px] font-bold mb-1">
-                          <span className="text-slate-400">全体進捗</span>
-                          <span className="text-blue-600">{progress}%</span>
-                        </div>
-                        <div className="h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                           <div className="h-full bg-blue-500 rounded-full" style={{ width: `${progress}%` }} />
-                        </div>
-                     </div>
-                     <div className="grid grid-cols-4 gap-2 pt-3 border-t border-slate-50">
-                        {subjStats.map(s => {
-                           const conf = SUBJECT_CONFIG[s.id as Subject];
-                           return (
-                               <div key={s.id} className="flex flex-col gap-1">
-                                   <div className="flex justify-between items-center text-[9px] font-bold">
-                                       <span className={conf.color}>{conf.short}</span>
-                                       <span className="text-slate-400">{s.progress}%</span>
-                                   </div>
-                                   <div className="h-1 bg-slate-100 rounded-full overflow-hidden">
-                                       <div className={`h-full ${conf.bg}`} style={{ width: `${s.progress}%` }} />
-                                   </div>
-                               </div>
-                           );
-                        })}
-                     </div>
-                  </div>
-                );
-              })}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-};
-
-const TestsView = ({ tests, onSaveTest, onDeleteTest }: any) => {
-  const [selectedSubjects, setSelectedSubjects] = useState<string[]>(['4ko']);
-  const [isModalOpen, setModalOpen] = useState(false);
-  const [editingTest, setEditingTest] = useState<TestResult | null>(null);
-  const [filterType, setFilterType] = useState('all');
-
-  const toggleSubject = (subj: string) => { setSelectedSubjects(prev => prev.includes(subj) ? prev.filter(s => s !== subj) : [...prev, subj]); };
-
-  const chartData = useMemo(() => {
-    let filtered = filterType !== 'all' ? tests.filter((t:TestResult) => t.type === filterType) : [...tests];
-    return filtered.sort((a:TestResult, b:TestResult) => new Date(a.date).getTime() - new Date(b.date).getTime()).map((t:TestResult) => {
-       const dp: any = { name: t.date.slice(5), testName: t.name };
-       if (selectedSubjects.includes('4ko')) dp['4ko'] = t.total4.dev;
-       ['math', 'japanese', 'science', 'social'].forEach(s => { if (selectedSubjects.includes(s)) dp[s] = t.subjects[s as Subject].dev; });
-       return dp;
-    });
-  }, [tests, selectedSubjects, filterType]);
-
-  const tableData = [...tests].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-
-  return (
-    <div className="flex flex-col h-full bg-slate-50">
-       <div className="bg-white sticky top-0 z-20 px-4 py-3 border-b border-slate-200 shadow-sm space-y-2.5">
-          <div className="flex justify-between items-center gap-2">
-             <div className="flex gap-1.5">
-               <button onClick={() => setFilterType('all')} className={`px-2.5 py-1.5 rounded-lg text-[10px] font-bold border ${filterType === 'all' ? 'bg-slate-800 text-white border-slate-800' : 'bg-white border-slate-200 text-slate-500'}`}>全て</button>
-               {Object.entries(TEST_TYPE_CONFIG).map(([k, v]) => <button key={k} onClick={() => setFilterType(k)} className={`px-2.5 py-1.5 rounded-lg text-[10px] font-bold border ${filterType === k ? v.activeClass : 'bg-white border-slate-200 text-slate-500'}`}>{v.label}</button>)}
-             </div>
-             <button onClick={() => { setEditingTest(null); setModalOpen(true); }} className="bg-blue-50 text-blue-600 p-1.5 rounded-lg active:scale-95"><Plus size={18} /></button>
-          </div>
-          <div className="flex gap-1.5 overflow-x-auto pb-0.5 no-scrollbar">
-             <button onClick={() => toggleSubject('4ko')} className={`flex-1 py-1.5 px-2 rounded-lg text-[10px] font-bold whitespace-nowrap transition-colors ${selectedSubjects.includes('4ko') ? 'bg-slate-800 text-white' : 'bg-slate-100 text-slate-500'}`}>4科</button>
-             {(['math', 'japanese', 'science', 'social'] as Subject[]).map(s => <button key={s} onClick={() => toggleSubject(s)} className={`flex-1 py-1.5 px-2 rounded-lg text-[10px] font-bold whitespace-nowrap transition-colors ${selectedSubjects.includes(s) ? `${SUBJECT_CONFIG[s].bg} text-white` : 'bg-slate-100 text-slate-500'}`}>{SUBJECT_CONFIG[s].short}</button>)}
-          </div>
-       </div>
-
-       <div className="flex-1 overflow-y-auto px-3 py-4 space-y-5 pb-20">
-          <div className="bg-white p-3 rounded-2xl shadow-sm border border-slate-200 h-56 shrink-0">
-             <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={chartData} margin={{ top: 5, right: 5, left: -25, bottom: 0 }}>
-                   <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                   <XAxis dataKey="name" tick={{fontSize: 9}} axisLine={false} tickLine={false} />
-                   <YAxis domain={['auto', 'auto']} tick={{fontSize: 9}} axisLine={false} tickLine={false} />
-                   <Tooltip contentStyle={{borderRadius: '8px', fontSize:'10px', padding:'4px 8px'}} />
-                   <ReferenceLine y={50} stroke="#cbd5e1" strokeDasharray="3 3" />
-                   {selectedSubjects.includes('4ko') && <Line type="monotone" dataKey="4ko" name="4科" stroke="#334155" strokeWidth={2.5} dot={{r:3}} />}
-                   {selectedSubjects.includes('math') && <Line type="monotone" dataKey="math" name={SUBJECT_CONFIG.math.label} stroke={SUBJECT_CONFIG.math.hex} strokeWidth={2} dot={false} />}
-                   {selectedSubjects.includes('japanese') && <Line type="monotone" dataKey="japanese" name={SUBJECT_CONFIG.japanese.label} stroke={SUBJECT_CONFIG.japanese.hex} strokeWidth={2} dot={false} />}
-                   {selectedSubjects.includes('science') && <Line type="monotone" dataKey="science" name={SUBJECT_CONFIG.science.label} stroke={SUBJECT_CONFIG.science.hex} strokeWidth={2} dot={false} />}
-                   {selectedSubjects.includes('social') && <Line type="monotone" dataKey="social" name={SUBJECT_CONFIG.social.label} stroke={SUBJECT_CONFIG.social.hex} strokeWidth={2} dot={false} />}
-                </LineChart>
-             </ResponsiveContainer>
-          </div>
-
-          <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-            <h3 className="font-bold text-slate-700 text-xs px-3 pt-3 pb-2 flex items-center gap-1.5"><TrendingUp className="text-blue-500" size={14}/> 偏差値履歴</h3>
-            <table className="w-full text-center text-[10px]">
-               <thead className="text-slate-400 bg-slate-50 border-y border-slate-100"><tr><th className="py-2 pl-3 text-left font-bold">テスト名</th><th className="py-2 font-bold">4科</th>{(['math', 'japanese', 'science', 'social'] as Subject[]).map(s => <th key={s} className={`py-2 font-bold ${SUBJECT_CONFIG[s].color}`}>{SUBJECT_CONFIG[s].short}</th>)}<th className="py-2 w-12"></th></tr></thead>
-               <tbody>
-                  {tableData.map(t => (
-                     <tr key={t.id} className="border-b border-slate-50 hover:bg-slate-50 transition-colors group">
-                        <td className="py-2 pl-3 text-left"><div className="text-[8px] text-slate-400 font-bold">{t.date}</div><div className="font-bold text-slate-700 truncate max-w-[80px]">{t.name}</div></td>
-                        <td className="py-2 font-black text-slate-700 bg-slate-50/50">{t.total4.dev}</td>
-                        {(['math', 'japanese', 'science', 'social'] as Subject[]).map(s => <td key={s} className={`py-2 font-bold ${t.subjects[s].dev >= 60 ? 'text-rose-500' : 'text-slate-500'}`}>{t.subjects[s].dev}</td>)}
-                        <td className="py-2 pr-2">
-                           <div className="flex flex-col gap-1 items-end opacity-100">
-                             <button onClick={() => { setEditingTest(t); setModalOpen(true); }} className="p-1 text-slate-400 hover:text-blue-500 bg-white rounded shadow-sm border border-slate-200"><Edit2 size={10} /></button>
-                             <button onClick={() => onDeleteTest(t.id)} className="p-1 text-slate-400 hover:text-red-500 bg-white rounded shadow-sm border border-slate-200"><Trash2 size={10} /></button>
-                           </div>
-                        </td>
-                     </tr>
-                  ))}
-               </tbody>
-            </table>
-          </div>
-       </div>
-       <TestResultModal isOpen={isModalOpen} onClose={() => setModalOpen(false)} onSave={onSaveTest} initialData={editingTest} />
-    </div>
-  );
-};
-
-const AchievementsView = ({ tasks }: { tasks: Task[] }) => {
-  const [dateRange, setDateRange] = useState({
-    start: new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
-    end: new Date().toISOString().split('T')[0]
-  });
-  const [selectedSubjects, setSelectedSubjects] = useState<string[]>(['math', 'japanese', 'science', 'social']);
-
-  const toggleSubject = (subj: string) => { setSelectedSubjects(prev => prev.includes(subj) ? prev.filter(s => s !== subj) : [...prev, subj]); };
-
-  const setPresetRange = (days: number) => {
-    const end = new Date(); const start = new Date(); start.setDate(end.getDate() - days);
-    setDateRange({ start: start.toISOString().split('T')[0], end: end.toISOString().split('T')[0] });
-  };
-
-  const { chartData, pieData, maxStats } = useMemo(() => {
-    const start = new Date(dateRange.start); const end = new Date(dateRange.end); end.setHours(23, 59, 59, 999);
-    const dateMap = new Map<string, any>();
-    const totalBySubject: Record<string, number> = { math: 0, japanese: 0, science: 0, social: 0 };
-    
-    tasks.forEach(task => {
-       task.history.forEach(h => {
-          const [m, d] = h.date.split('/').map(Number);
-          const hDate = new Date(new Date().getFullYear(), m - 1, d);
-          if (new Date().getMonth() < 3 && m > 9) hDate.setFullYear(hDate.getFullYear() - 1);
-          if (hDate >= start && hDate <= end) {
-             const key = `${m}/${d}`;
-             if (!dateMap.has(key)) dateMap.set(key, { name: key, math: 0, japanese: 0, science: 0, social: 0, total: 0 });
-             const entry = dateMap.get(key);
-             const mins = Math.floor(h.duration / 60);
-             entry[task.subject] += mins; entry.total += mins; totalBySubject[task.subject] += mins;
-          }
-       });
-    });
-
-    const data = []; const loopDate = new Date(start);
-    const diffDays = Math.ceil(Math.abs(end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)); 
-    for(let i = 0; i <= diffDays; i++) {
-       const key = `${loopDate.getMonth() + 1}/${loopDate.getDate()}`;
-       data.push(dateMap.has(key) ? dateMap.get(key) : { name: key, math: 0, japanese: 0, science: 0, social: 0, total: 0 });
-       loopDate.setDate(loopDate.getDate() + 1);
-    }
-
-    const totalMins = Object.values(totalBySubject).reduce((a, b) => a + b, 0);
-    const pData = Object.entries(totalBySubject).filter(([k, v]) => selectedSubjects.includes(k) && v > 0).map(([k, v]) => ({ 
-         name: SUBJECT_CONFIG[k as Subject].label, value: v, color: SUBJECT_CONFIG[k as Subject].hex,
-         percent: totalMins > 0 ? Math.round((v / totalMins) * 100) : 0
-    }));
-
-    let maxTotal = { val: 0, date: '-' };
-    const maxSubj = { math: {val:0, date:'-'}, japanese: {val:0, date:'-'}, science: {val:0, date:'-'}, social: {val:0, date:'-'} };
-    for (const d of dateMap.values()) {
-       if (d.total > maxTotal.val) maxTotal = { val: d.total, date: d.name };
-       (['math', 'japanese', 'science', 'social'] as Subject[]).forEach(s => { if (d[s] > maxSubj[s].val) maxSubj[s] = { val: d[s], date: d.name }; });
-    }
-    return { chartData: data, pieData: pData, maxStats: { total: maxTotal, subjects: maxSubj } };
-  }, [tasks, dateRange, selectedSubjects]);
-
-  return (
-    <div className="flex flex-col h-full bg-slate-50">
-       <div className="bg-white sticky top-0 z-20 px-4 py-3 border-b border-slate-200 shadow-sm space-y-2.5">
-          <div className="flex gap-2">
-             <div className="flex-1 flex justify-between items-center bg-slate-50 p-1.5 rounded-lg border border-slate-200">
-                <div className="flex gap-1.5 items-center">
-                   <CalendarIcon size={14} className="text-slate-400 ml-1" />
-                   <input type="date" value={dateRange.start} onChange={(e) => setDateRange(prev => ({ ...prev, start: e.target.value }))} className="bg-transparent text-[10px] font-bold text-slate-600 outline-none w-20" />
-                   <span className="text-slate-300">-</span>
-                   <input type="date" value={dateRange.end} onChange={(e) => setDateRange(prev => ({ ...prev, end: e.target.value }))} className="bg-transparent text-[10px] font-bold text-slate-600 outline-none w-20" />
-                </div>
-             </div>
-             
-             <div className="flex gap-2">
-                {[
-                  { l: '1週間', d: 7 }, 
-                  { l: '2週間', d: 14 }, 
-                  { l: '1ヶ月', d: 30 }
-                ].map(r => (
-                  <button 
-                    key={r.l} 
-                    onClick={() => setPresetRange(r.d)} 
-                    className="flex-1 py-1.5 bg-white border border-slate-100 text-xs font-bold rounded-lg text-slate-500 hover:bg-slate-50 hover:text-slate-700 transition-colors shadow-sm"
-                  >
-                    {r.l}
-                  </button>
-                ))}
-             </div>
-          </div>
-
-          <div className="flex gap-1.5 overflow-x-auto pb-0.5 no-scrollbar">
-             {(['math', 'japanese', 'science', 'social'] as Subject[]).map(s => (
-               <button key={s} onClick={() => toggleSubject(s)} className={`flex-1 py-1.5 px-2 rounded-lg text-[10px] font-bold whitespace-nowrap transition-colors ${selectedSubjects.includes(s) ? `${SUBJECT_CONFIG[s].bg} text-white` : 'bg-slate-100 text-slate-400'}`}>{SUBJECT_CONFIG[s].short}</button>
-             ))}
-          </div>
-       </div>
-
-       <div className="flex-1 overflow-y-auto px-3 py-4 space-y-4 pb-20">
-          <div className="bg-white p-3 rounded-2xl shadow-sm border border-slate-200 h-52 shrink-0">
-             <h3 className="text-[10px] font-bold text-slate-500 mb-1 flex items-center gap-1"><BarChart2 size={12}/> 学習時間 (分)</h3>
-             <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={chartData} margin={{ top: 5, right: 5, left: -25, bottom: 0 }}>
-                   <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                   <XAxis dataKey="name" tick={{fontSize: 9}} axisLine={false} tickLine={false} interval="preserveStartEnd" minTickGap={15} />
-                   <YAxis tick={{fontSize: 9}} axisLine={false} tickLine={false} />
-                   <Tooltip cursor={{fill: '#f8fafc'}} contentStyle={{borderRadius: '8px', fontSize: '10px', padding: '4px 8px'}} />
-                   {selectedSubjects.includes('math') && <Bar dataKey="math" name={SUBJECT_CONFIG.math.label} stackId="a" fill={SUBJECT_CONFIG.math.hex} />}
-                   {selectedSubjects.includes('japanese') && <Bar dataKey="japanese" name={SUBJECT_CONFIG.japanese.label} stackId="a" fill={SUBJECT_CONFIG.japanese.hex} />}
-                   {selectedSubjects.includes('science') && <Bar dataKey="science" name={SUBJECT_CONFIG.science.label} stackId="a" fill={SUBJECT_CONFIG.science.hex} />}
-                   {selectedSubjects.includes('social') && <Bar dataKey="social" name={SUBJECT_CONFIG.social.label} stackId="a" fill={SUBJECT_CONFIG.social.hex} />}
-                </BarChart>
-             </ResponsiveContainer>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-             <div className="bg-white p-3 rounded-2xl shadow-sm border border-slate-200 min-h-[12rem] flex flex-col">
-                <h3 className="text-[10px] font-bold text-slate-500 mb-1 flex items-center gap-1"><PieChartIcon size={12}/> 比率</h3>
-                {pieData.length > 0 ? (
-                  <>
-                    <div className="flex-1 w-full relative mb-1 min-h-[80px]">
-                        <ResponsiveContainer width="100%" height="100%">
-                        <PieChart><Pie data={pieData} cx="50%" cy="50%" innerRadius={20} outerRadius={35} paddingAngle={2} dataKey="value">{pieData.map((e, i) => <Cell key={i} fill={e.color} />)}</Pie><Tooltip contentStyle={{borderRadius:'8px', fontSize:'9px', padding:'2px 4px'}} itemStyle={{padding:0}} /></PieChart>
-                        </ResponsiveContainer>
-                    </div>
-                    <div className="flex flex-col gap-1">
-                        {pieData.map(d => (
-                            <div key={d.name} className="flex justify-between items-center text-[9px]">
-                                <div className="flex items-center gap-1"><div className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: d.color }} /><span className="font-bold text-slate-600">{d.name}</span></div>
-                                <span className="font-mono font-bold text-slate-700">{Math.floor(d.value/60)}h{d.value%60}m <span className="text-slate-400 font-normal">({d.percent}%)</span></span>
-                            </div>
-                        ))}
-                    </div>
-                  </>
-                ) : <div className="text-[10px] text-slate-300 mt-4 text-center">データなし</div>}
-             </div>
-
-             <div className="space-y-3">
-                <div className="bg-gradient-to-br from-slate-800 to-slate-900 rounded-2xl p-3 text-white shadow-md">
-                   <div className="text-[9px] text-slate-300 font-bold mb-0.5">期間内ベスト(1日)</div>
-                   <div className="text-xl font-black">{Math.floor(maxStats.total.val / 60)}<span className="text-[10px] font-normal opacity-70">h</span>{maxStats.total.val % 60}<span className="text-[10px] font-normal opacity-70">m</span></div>
-                   <div className="text-[9px] text-slate-400 text-right mt-0.5">{maxStats.total.date}</div>
-                </div>
-                <div className="bg-white rounded-2xl p-2.5 border border-slate-200 shadow-sm">
-                   <div className="text-[9px] text-slate-400 font-bold mb-1.5">科目別ベスト</div>
-                   <div className="space-y-1">
-                      {(['math', 'japanese', 'science', 'social'] as Subject[]).map(s => (
-                         selectedSubjects.includes(s) && maxStats.subjects[s].val > 0 && (
-                            <div key={s} className="flex justify-between items-center text-[9px]">
-                               <span className={`font-bold ${SUBJECT_CONFIG[s].color}`}>{SUBJECT_CONFIG[s].short}</span>
-                               <span className="font-mono font-bold">{maxStats.subjects[s].val}m <span className="text-[8px] text-slate-300 font-normal">({maxStats.subjects[s].date})</span></span>
-                            </div>
-                         )
-                      ))}
-                   </div>
-                </div>
-             </div>
-          </div>
-       </div>
-    </div>
-  );
-};
-
-// ==========================================
-// User Authentication (Login View)
-// ==========================================
-const LoginForm = ({ onLogin, onSampleMode }: { onLogin: (e:string, p:string) => Promise<void>, onSampleMode: () => void }) => {
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if(!email || !password) { setError('メールアドレスとパスワードを入力してください'); return; }
-    try {
-      await onLogin(email, password);
-    } catch (err: any) {
-      setError(err.message);
-    }
-  };
-
-  return (
-    <div className="flex h-screen items-center justify-center bg-slate-50 px-4">
-      <div className="w-full max-w-sm bg-white rounded-3xl shadow-xl p-8">
-        <div className="text-center mb-8">
-          <div className="w-16 h-16 bg-blue-100 text-blue-600 rounded-2xl flex items-center justify-center mx-auto mb-4">
-            <Award size={32} />
-          </div>
-          <h1 className="text-2xl font-black text-slate-800 tracking-tight">Level Up Study</h1>
-          <p className="text-sm text-slate-500 mt-2 font-bold">学習管理へログイン</p>
-        </div>
-
-        <form onSubmit={handleSubmit} className="space-y-4 mb-6">
-          <div>
-            <label className="block text-xs font-bold text-slate-500 mb-1.5 ml-1">メールアドレス</label>
-            <input type="email" value={email} onChange={e => setEmail(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 font-medium text-slate-700 focus:outline-none focus:border-blue-500" placeholder="family@example.com" />
-          </div>
-          <div>
-            <label className="block text-xs font-bold text-slate-500 mb-1.5 ml-1">パスワード</label>
-            <input type="password" value={password} onChange={e => setPassword(e.target.value)} className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 font-medium text-slate-700 focus:outline-none focus:border-blue-500" placeholder="••••••••" />
-          </div>
-          {error && <div className="text-xs text-red-500 font-bold px-1">{error}</div>}
-          <button type="submit" className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3.5 rounded-xl shadow-lg shadow-blue-200 active:scale-95 transition-all flex justify-center items-center gap-2 mt-2">
-            <LogIn size={18} /> ログイン
-          </button>
-        </form>
-        
-        <div className="relative flex items-center py-4">
-          <div className="flex-grow border-t border-slate-100"></div>
-          <span className="flex-shrink-0 mx-4 text-slate-400 text-xs font-bold">または</span>
-          <div className="flex-grow border-t border-slate-100"></div>
-        </div>
-
-        <button onClick={onSampleMode} className="w-full bg-white border-2 border-slate-200 hover:border-slate-300 text-slate-600 font-bold py-3.5 rounded-xl active:scale-95 transition-all flex justify-center items-center gap-2">
-          <FlaskConical size={18} /> サンプルデータで試す
-        </button>
-      </div>
-    </div>
-  );
-};
-
-
-// ==========================================
-// Main Application Entry
-// ==========================================
-export default function App() {
-  const [user, setUser] = useState<User | null>(null);
-  const [isAuthChecking, setIsAuthChecking] = useState(true);
-  const [syncState, setSyncState] = useState<'synced' | 'syncing' | 'offline'>('synced');
-  const [lastSync, setLastSync] = useState(new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }));
-  const [isSampleMode, setIsSampleMode] = useState(false);
-  
-  const [activeTab, setActiveTab] = useState('daily');
-  const [tasks, setTasks] = useState<Task[]>([]);
-  const [tests, setTests] = useState<TestResult[]>([]);
-  
-  const [isAddModalOpen, setAddModalOpen] = useState(false);
-  const [selectedUnit, setSelectedUnit] = useState<string | null>(null);
-  const [detailTaskId, setDetailTaskId] = useState<string | null>(null);
-  
-  const [confirmModalData, setConfirmModalData] = useState<{title: string, message: string, onConfirm: () => void} | null>(null);
-
-  // Authentication & Initialization
-  useEffect(() => {
-    if (!auth) {
-       setIsSampleMode(true);
-       setTasks(INITIAL_TASKS);
-       setTests(INITIAL_TESTS);
-       setIsAuthChecking(false);
-       return;
-    }
-
-    const unsubscribe = onAuthStateChanged(auth, (u) => {
-      setUser(u);
-      setIsAuthChecking(false);
-    });
-
-    return () => unsubscribe();
   }, []);
 
-  const handleEmailLogin = async (email: string, pass: string) => {
-    if (!auth) return;
-    setIsAuthChecking(true);
-    try {
-      await signInWithEmailAndPassword(auth, email, pass);
-    } catch (e: any) {
-      setIsAuthChecking(false);
-      throw new Error("ログインに失敗しました。メールアドレスとパスワードを確認してください。");
-    }
-  };
-
-  const handleLogout = () => {
-    if (!auth) return;
-    setConfirmModalData({
-      title: 'ログアウト',
-      message: '本当にログアウトしますか？',
-      onConfirm: async () => {
-        await signOut(auth);
-        setTasks([]);
-        setTests([]);
-        setIsSampleMode(false);
-      }
-    });
-  };
-
-  const fetchData = useCallback(async (isSilent = false) => {
-    const dbInstance = getSafeDb();
-    if (!dbInstance || !auth?.currentUser || isSampleMode) {
-      if (!dbInstance && !isSilent) console.warn('Firebase未設定のため、データ取得をスキップしサンプルモードで動作します');
+  const handleStart = () => {
+    if (isAnyOtherRunning) {
+      alert("他の教科を計測中です。一度終了させてください。");
       return;
     }
-    
-    if (!isSilent) setSyncState('syncing');
-    
+    lastActive.current = Date.now();
+    setStatusMessage(null);
+    onUpdate(task.id, { isRunning: true, sessionStartTime: Date.now(), lastUpdatedAt: Date.now() });
+  };
+
+  const handleSaveClick = () => {
+    if (seconds < 10) {
+      alert("学習時間が短すぎます（10秒以上必要です）。");
+      return;
+    }
+    onSave(task, seconds);
+  };
+
+  return (
+    <div className="bg-slate-900 rounded-[2rem] p-6 sm:p-10 text-center shadow-2xl relative overflow-hidden border border-white/5">
+      {statusMessage && (
+        <div className="absolute top-0 left-0 w-full bg-rose-600 text-white text-[10px] font-black py-2 z-10 animate-in slide-in-from-top duration-300">
+           {statusMessage}
+        </div>
+      )}
+      <div className={`text-4xl sm:text-7xl font-mono font-black tracking-tighter mb-6 ${task.isRunning ? 'text-blue-400 animate-pulse' : 'text-white'}`}>
+        {formatDuration(seconds)}
+      </div>
+      <div className="flex gap-3">
+        {!task.isRunning ? (
+          <button onClick={handleStart} className="flex-1 bg-blue-600 text-white font-black py-4 sm:py-5 rounded-xl sm:rounded-2xl shadow-lg active:scale-95 transition flex items-center justify-center gap-2 text-sm sm:text-lg uppercase leading-none">
+            <Play size={20} fill="currentColor"/> START
+          </button>
+        ) : (
+          <button onClick={() => stopTimer()} className="flex-1 bg-amber-500 text-white font-black py-4 sm:py-5 rounded-xl sm:rounded-2xl shadow-lg active:scale-95 transition flex items-center justify-center gap-2 text-sm sm:text-lg uppercase leading-none">
+            <Pause size={20} fill="currentColor"/> PAUSE
+          </button>
+        )}
+        <button onClick={handleSaveClick} className="flex-1 bg-white/10 text-white font-black py-4 sm:py-5 rounded-xl sm:rounded-2xl hover:bg-white/20 transition flex items-center justify-center gap-2 text-sm sm:text-lg uppercase leading-none">
+          <Save size={20} /> FINISH
+        </button>
+      </div>
+    </div>
+  );
+};
+
+// ==========================================
+// Main Application Component
+// ==========================================
+
+export default function App() {
+  const [user, setUser] = useState<FirebaseUser | null>(null);
+  const [isSampleMode, setIsSampleMode] = useState(false);
+  const [isMobileView, setIsMobileView] = useState(false);
+  const [activeTab, setActiveTab] = useState('daily');
+  const [activeCategory, setActiveCategory] = useState<'school' | 'juku' | 'etc'>('school');
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [tests, setTests] = useState<TestResult[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [isAddingTask, setIsAddingTask] = useState(false);
+  const [isAddingTest, setIsAddingTest] = useState(false);
+  const [editingTest, setEditingTest] = useState<TestResult | null>(null);
+  const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth() + 1);
+  const [startDate, setStartDate] = useState(() => {
+    const d = new Date(); d.setDate(d.getDate() - 90);
+    return d.toISOString().split('T')[0];
+  });
+  const [endDate, setEndDate] = useState(new Date().toISOString().split('T')[0]);
+
+  const [visibleSubjects, setVisibleSubjects] = useState<string[]>(['s_math', 's_english', 'j_math', 'average']);
+
+  const isAnyTaskRunning = useMemo(() => tasks.some(t => t.isRunning), [tasks]);
+
+  const fetchData = useCallback(async (silent = false) => {
+    if (isSampleMode || !auth.currentUser) return;
+    if (!silent) setLoading(true);
     try {
-      const taskSnap = await getDocs(query(getTasksCol(dbInstance)));
-      const testSnap = await getDocs(query(getTestsCol(dbInstance)));
-      
-      const fetchedTasks = taskSnap.docs.map(doc => {
-        const data = doc.data();
-        return { id: doc.id, ...data } as Task;
-      });
-      const fetchedTests = testSnap.docs.map(doc => {
-        const data = doc.data();
-        return { id: doc.id, ...data } as TestResult;
-      });
-
-      setTasks(fetchedTasks);
-      setTests(fetchedTests);
-      
-      setCache(CACHE_KEY_TASKS, fetchedTasks);
-      setCache(CACHE_KEY_TESTS, fetchedTests);
-      
-      setSyncState('synced');
-      setLastSync(new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }));
+      const taskSnap = await getDocs(getTasksCol());
+      const testSnap = await getDocs(getTestsCol());
+      setTasks(taskSnap.docs.map(d => ({ id: d.id, ...d.data() } as Task)));
+      setTests(testSnap.docs.map(d => ({ id: d.id, ...d.data() } as TestResult)).sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()));
     } catch (err) {
-      console.error(err);
-      setSyncState('offline');
-      const ctTasks = getCache(CACHE_KEY_TASKS);
-      const ctTests = getCache(CACHE_KEY_TESTS);
-      if (ctTasks) setTasks(ctTasks);
-      if (ctTests) setTests(ctTests);
+      console.error("Fetch Error:", err);
+    } finally {
+      if (!silent) setLoading(false);
     }
-  }, [user, isSampleMode]);
-
-  useEffect(() => {
-    if (user && !isSampleMode) {
-      const ctTasks = getCache(CACHE_KEY_TASKS);
-      const ctTests = getCache(CACHE_KEY_TESTS);
-      if (ctTasks) setTasks(ctTasks);
-      if (ctTests) setTests(ctTests);
-      fetchData();
-    }
-  }, [user, fetchData, isSampleMode]);
-
-  useEffect(() => {
-    if (!isSampleMode && tasks.length > 0) {
-      setCache(CACHE_KEY_TASKS, tasks);
-      setCache(CACHE_KEY_TESTS, tests);
-    }
-  }, [tasks, tests, isSampleMode]);
-
-  useEffect(() => {
-    if (isSampleMode) return;
-    const interval = setInterval(() => {
-       setTasks(prev => {
-          let changed = false;
-          const now = Date.now();
-          const next = prev.map(t => {
-             if (t.isRunning && t.sessionStartTime && (now - t.lastUpdatedAt > 10 * 60 * 1000)) {
-                changed = true;
-                const abnormalDuration = t.currentDuration + Math.floor((t.lastUpdatedAt - t.sessionStartTime)/1000);
-                return { 
-                  ...t, isRunning: false, sessionStartTime: null, 
-                  currentDuration: abnormalDuration, lastUpdatedAt: now 
-                };
-             }
-             return t;
-          });
-          return changed ? next : prev;
-       });
-    }, 60000);
-    return () => clearInterval(interval);
   }, [isSampleMode]);
 
-  // ==========================================
-  // Cloud Sync Optimizations
-  // ==========================================
-  
-  const updateLocalTask = (id: string, updates: Partial<Task>) => {
+  useEffect(() => {
+    const unsub = onAuthStateChanged(auth, (u) => {
+      if (!isSampleMode) {
+        setUser(u);
+        if (u) fetchData();
+        else setLoading(false);
+      }
+    });
+    return () => unsub();
+  }, [isSampleMode, fetchData]);
+
+  useEffect(() => {
+    if (user && !isSampleMode) fetchData(true);
+  }, [user, isSampleMode, fetchData]);
+
+  const handleLogin = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const fd = new FormData(e.currentTarget);
+    try {
+      setLoading(true);
+      await signInWithEmailAndPassword(auth, fd.get('email') as string, fd.get('password') as string);
+    } catch (err) {
+      alert("ログイン失敗。");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const toggleSampleMode = () => {
+    if (!isSampleMode) {
+      const { tasks: sTasks, tests: sTests } = generateSampleData();
+      setTasks(sTasks);
+      setTests(sTests);
+      setIsSampleMode(true);
+      setLoading(false);
+    } else {
+      setIsSampleMode(false);
+      setIsMobileView(false);
+      setLoading(true);
+      fetchData();
+    }
+  };
+
+  const handleUpdateLocalTask = (id: string, updates: Partial<Task>) => {
     setTasks(prev => prev.map(t => t.id === id ? { ...t, ...updates } : t));
   };
 
-  const syncTaskToCloud = async (id: string, cloudUpdates: any) => {
-    const dbInstance = getSafeDb();
-    if (!dbInstance || !auth?.currentUser || isSampleMode) return;
-    try {
-      const taskRef = getTaskDoc(dbInstance, id);
-      await updateDoc(taskRef, cloudUpdates);
-      setSyncState('synced');
-      setLastSync(new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }));
-    } catch (e) {
-      setSyncState('offline');
-    }
-  };
+  const handleSaveRecord = async (task: Task, totalSeconds: number) => {
+    const memo = prompt("学習内容：") || "";
+    const now = Date.now();
+    const historyItem: StudyHistory = { id: now.toString(), date: getTodayStr(), duration: totalSeconds, memo };
+    const updatedHistory = [...(task.history || []), historyItem];
+    const updates: Partial<Task> = { history: updatedHistory, currentDuration: 0, isRunning: false, sessionStartTime: null, lastUpdatedAt: now };
 
-  const saveTestToCloud = async (testResult: TestResult) => {
-    setTests(prev => {
-      const existing = prev.find(t => t.id === testResult.id);
-      if (existing) {
-        return prev.map(t => t.id === testResult.id ? testResult : t);
+    handleUpdateLocalTask(task.id, updates);
+    if (!isSampleMode && user) {
+      try {
+        await updateDoc(doc(getTasksCol(), task.id), updates);
+      } catch (e) {
+        alert("保存に失敗しました。");
       }
-      return [testResult, ...prev];
-    });
-
-    const dbInstance = getSafeDb();
-    if (!dbInstance || !auth?.currentUser || isSampleMode) return;
-    try {
-      const testRef = getTestDoc(dbInstance, testResult.id);
-      await setDoc(testRef, {
-        ...testResult,
-        updatedAt: serverTimestamp(),
-      }, { merge: true });
-      setSyncState('synced');
-      setLastSync(new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }));
-    } catch (e) {
-      setSyncState('offline');
     }
+    setSelectedTaskId(null);
   };
 
-  const deleteTestFromCloud = (id: string) => {
-    setConfirmModalData({
-      title: 'テスト記録の削除',
-      message: '本当にこのテスト記録を削除しますか？\nこの操作は取り消せません。',
-      onConfirm: async () => {
-        setTests(prev => prev.filter(t => t.id !== id));
-        const dbInstance = getSafeDb();
-        if (!dbInstance || !auth?.currentUser || isSampleMode) return;
-        try {
-          const testRef = getTestDoc(dbInstance, id);
-          await deleteDoc(testRef);
-          setSyncState('synced');
-          setLastSync(new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' }));
-        } catch (e) {
-          setSyncState('offline');
-        }
+  const handleAddTask = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const fd = new FormData(e.currentTarget);
+    const newTask: Omit<Task, 'id'> = {
+      categoryId: activeCategory, 
+      subjectId: fd.get('subjectId') as string, 
+      type: fd.get('type') as 'homework' | 'self', 
+      title: fd.get('detail') as string,
+      history: [], currentDuration: 0, isRunning: false, sessionStartTime: null,
+      lastUpdatedAt: Date.now()
+    };
+    if (isSampleMode) {
+      setTasks(prev => [{ id: `s-${Date.now()}`, ...newTask } as Task, ...prev]);
+    } else {
+      try {
+        await addDoc(getTasksCol(), newTask);
+        fetchData(true);
+      } catch (e) {
+        alert("追加に失敗しました。");
       }
-    });
-  };
-
-  // ==========================================
-
-  const cycleStatus = (task: Task) => {
-    const next = task.status === 'not_started' ? 'in_progress' : task.status === 'in_progress' ? 'completed' : 'not_started';
-    updateLocalTask(task.id, { status: next, lastUpdatedAt: Date.now() });
-  };
-
-  const saveHistoryRecord = async (task: Task) => {
-    if (task.currentDuration === 0) return;
-    const newHistory = {
-      id: Date.now().toString(),
-      date: new Date().toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric' }),
-      duration: task.currentDuration,
-      memo: task.currentMemo 
-    };
-    
-    const updates = { 
-      history: [...task.history, newHistory], 
-      currentDuration: 0, 
-      currentMemo: '', 
-      isRunning: false,
-      sessionStartTime: null,
-      lastUpdatedAt: Date.now(),
-      status: task.status === 'not_started' ? 'in_progress' : task.status
-    };
-    const cloudUpdates = {
-      ...updates,
-      lastUpdatedAt: serverTimestamp()
     }
-    
-    updateLocalTask(task.id, updates as Partial<Task>);
-    if (!isSampleMode) {
-      await syncTaskToCloud(task.id, cloudUpdates);
-    }
-    setDetailTaskId(null);
+    setIsAddingTask(false);
   };
 
-  const addUnitWithPresets = async (unitNumber: number) => {
-    const unitName = `第${unitNumber}回`;
-    const newTasks: Task[] = [];
-    (Object.keys(SUBJECT_CONFIG) as Subject[]).forEach(subject => {
-        CURRICULUM_PRESETS[subject as Subject].forEach(preset => {
-            preset.items.forEach((item, index) => {
-                newTasks.push({
-                    id: Date.now().toString() + Math.random().toString(36).substr(2, 9) + index,
-                    unit: unitName, subject: subject as Subject, category: preset.category, title: item,
-                    materialName: `${preset.category} - ${item}`, status: 'not_started',
-                    currentDuration: 0, sessionStartTime: null, isRunning: false,
-                    lastUpdatedAt: Date.now(), currentMemo: '', history: [], createdAt: new Date().toISOString()
-                });
-            });
-        });
+  const handleSaveTest = async (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const fd = new FormData(e.currentTarget);
+    const testCat = fd.get('testCategory') as 'school' | 'juku';
+    const subType = fd.get('testSubType') as 'midterm' | 'final' | 'normal';
+    const scores: ScoreMap = {};
+    const relevantSubjects = [...SUBJECT_DEFS.school, ...SUBJECT_DEFS.juku];
+    relevantSubjects.forEach(s => {
+      const val = fd.get(`score_${s.id}`);
+      if (val !== null && val !== "") scores[s.id] = Number(val);
+    });
+
+    const testData: Omit<TestResult, 'id'> = { 
+      name: fd.get('name') as string, date: fd.get('date') as string, 
+      category: testCat, subType, scores, 
+      average: Number(fd.get('average')), rank: fd.get('rank') as string, 
+      lastUpdatedAt: Date.now() 
+    };
+
+    if (isSampleMode) {
+      if (editingTest) setTests(prev => prev.map(t => t.id === editingTest.id ? { ...t, ...testData } : t));
+      else setTests(prev => [{ id: `st-${Date.now()}`, ...testData } as TestResult, ...prev]);
+    } else {
+      try {
+        if (editingTest) await setDoc(doc(getTestsCol(), editingTest.id), testData, { merge: true });
+        else await addDoc(getTestsCol(), testData);
+        fetchData(true);
+      } catch (e) {
+        alert("保存に失敗しました。");
+      }
+    }
+    setIsAddingTest(false); setEditingTest(null);
+  };
+
+  const handleDeleteTest = async (id: string) => {
+    if (!confirm("成績を削除しますか？")) return;
+    if (isSampleMode) setTests(prev => prev.filter(t => t.id !== id));
+    else {
+      try {
+        await deleteDoc(doc(getTestsCol(), id));
+        fetchData(true);
+      } catch (e) {
+        alert("削除に失敗しました。");
+      }
+    }
+  };
+
+  const toggleSubjectVisibility = (subId: string) => {
+    setVisibleSubjects(prev => prev.includes(subId) ? prev.filter(id => id !== subId) : [...prev, subId]);
+  };
+
+  const bulkSelectSubjects = (type: string) => {
+    const major5 = SUBJECT_DEFS.school.filter(s => s.isMajor).map(s => s.id);
+    const sub4 = SUBJECT_DEFS.school.filter(s => !s.isMajor).map(s => s.id);
+    const juku5 = SUBJECT_DEFS.juku.map(s => s.id);
+    switch(type) {
+      case 'all': setVisibleSubjects(['average', ...major5, ...sub4, ...juku5]); break;
+      case 'none': setVisibleSubjects([]); break;
+      case 'school_major': setVisibleSubjects(prev => Array.from(new Set([...prev, ...major5]))); break;
+      case 'school_sub': setVisibleSubjects(prev => Array.from(new Set([...prev, ...sub4]))); break;
+      case 'juku': setVisibleSubjects(prev => Array.from(new Set([...prev, ...juku5]))); break;
+    }
+  };
+
+  const stats = useMemo(() => {
+    const sDate = new Date(startDate);
+    const eDate = new Date(endDate); eDate.setHours(23,59,59,999);
+    const rangeHistory: (StudyHistory & { categoryId: string, subjectId: string })[] = [];
+    tasks.forEach(t => { 
+      (t.history || []).forEach((h) => { 
+        const d = new Date(h.date); 
+        if (d >= sDate && d <= eDate) rangeHistory.push({ ...h, categoryId: t.categoryId, subjectId: t.subjectId }); 
+      }); 
+    });
+
+    const totalSec = rangeHistory.reduce((acc, h) => acc + h.duration, 0);
+    const dailyMap = new Map<string, any>();
+    rangeHistory.forEach(h => {
+      if (!dailyMap.has(h.date)) dailyMap.set(h.date, { name: h.date.split('-').slice(1).join('/'), school: 0, juku: 0, etc: 0 });
+      dailyMap.get(h.date)[h.categoryId] += Math.round(h.duration / 60);
     });
     
-    setTasks(prev => [...newTasks, ...prev]);
-    setSelectedUnit(unitName);
-    
-    const dbInstance = getSafeDb();
-    if (!dbInstance || !auth?.currentUser || isSampleMode) return;
-    const batch = writeBatch(dbInstance);
-    newTasks.forEach(t => batch.set(getTaskDoc(dbInstance, t.id), { ...t, lastUpdatedAt: serverTimestamp() }));
-    await batch.commit();
-  };
+    const breakdown = Object.values(CATEGORIES).map(cat => {
+      const items = rangeHistory.filter(h => h.categoryId === cat.id);
+      const catSec = items.reduce((acc, h) => acc + h.duration, 0);
+      const subjects = (SUBJECT_DEFS[cat.id as keyof typeof SUBJECT_DEFS] || []).map(s => {
+        const sSec = tasks.filter(t => t.subjectId === s.id).reduce((acc, t) => acc + (t.history || []).filter(h => {
+          const d = new Date(h.date);
+          return d >= sDate && d <= eDate;
+        }).reduce((sum, h) => sum + h.duration, 0), 0);
+        return { ...s, duration: sSec, percent: catSec > 0 ? Math.round((sSec / catSec) * 100) : 0 };
+      }).filter(s => s.duration > 0);
+      return { ...cat, duration: catSec, subjects, percent: totalSec > 0 ? Math.round((catSec / totalSec) * 100) : 0 };
+    });
+    return { totalSec, breakdown, dailyData: Array.from(dailyMap.values()).sort((a, b) => new Date(a.name).getTime() - new Date(b.name).getTime()) };
+  }, [tasks, startDate, endDate]);
 
-  const deleteUnitTasks = async (unit: string) => {
-    const toDelete = tasks.filter(t => t.unit === unit);
-    setTasks(prev => prev.filter(t => t.unit !== unit));
-    if (selectedUnit === unit) setSelectedUnit(null);
-    
-    const dbInstance = getSafeDb();
-    if (!dbInstance || !auth?.currentUser || isSampleMode) return;
-    const batch = writeBatch(dbInstance);
-    toDelete.forEach(t => batch.delete(getTaskDoc(dbInstance, t.id)));
-    await batch.commit();
-  };
+  const filteredTests = useMemo(() => {
+    const sDate = new Date(startDate);
+    const eDate = new Date(endDate); eDate.setHours(23,59,59,999);
+    return tests.filter(t => { const d = new Date(t.date); return d >= sDate && d <= eDate; });
+  }, [tests, startDate, endDate]);
 
-  const onAddCustomTask = async (unit: string, subject: Subject, title: string, category: string) => {
-    const newTask: Task = {
-      id: Date.now().toString(), unit, subject, category, title, materialName: `${category} - ${title}`,
-      status: 'not_started', currentDuration: 0, sessionStartTime: null, isRunning: false, lastUpdatedAt: Date.now(),
-      currentMemo: '', history: [], createdAt: new Date().toISOString()
-    };
-    setTasks(prev => [...prev, newTask]);
+  const allChartSubjects = useMemo(() => [
+    { id: 'average', label: '学年平均', hex: '#94a3b8' },
+    ...SUBJECT_DEFS.school.filter(s => s.isMajor).map(s => ({ ...s, label: `${s.label}(中)` })),
+    ...SUBJECT_DEFS.school.filter(s => !s.isMajor).map(s => ({ ...s, label: `${s.label}(中)` })),
+    ...SUBJECT_DEFS.juku.map(s => ({ ...s, label: `${s.label}(塾)` }))
+  ], []);
 
-    const dbInstance = getSafeDb();
-    if (!dbInstance || !auth?.currentUser || isSampleMode) return;
-    await setDoc(getTaskDoc(dbInstance, newTask.id), { ...newTask, lastUpdatedAt: serverTimestamp() });
-  };
+  // モーダル等のCSS制御用
+  const modalOverlayClass = isMobileView 
+    ? "absolute inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4" 
+    : "fixed inset-0 bg-slate-900/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4";
 
+  const taskDetailOverlayClass = isMobileView
+    ? "absolute inset-0 z-[100] flex items-end justify-center p-0"
+    : "fixed inset-0 z-[100] flex items-end lg:items-center justify-center p-0 sm:p-4";
 
-  const unitsWithTasks = useMemo(() => Array.from(new Set(tasks.map(t => t.unit))).sort((a, b) => {
-    const numA = parseInt(a.replace('第', '').replace('回', '')) || 0;
-    const numB = parseInt(b.replace('第', '').replace('回', '')) || 0;
-    return numB - numA;
-  }), [tasks]);
+  if (loading && !isSampleMode) return <div className="h-screen flex items-center justify-center bg-slate-50 font-black text-blue-600 animate-pulse uppercase tracking-[0.2em]">Syncing System...</div>;
 
-  // --- Routing / Auth Gate ---
-  if (isAuthChecking) return <div className="flex h-screen items-center justify-center bg-slate-50 text-slate-400 font-bold">起動中...</div>;
-
-  if (!user && !isSampleMode) {
-    return <LoginForm onLogin={handleEmailLogin} onSampleMode={() => { setIsSampleMode(true); setTasks(INITIAL_TASKS); setTests(INITIAL_TESTS); }} />;
-  }
+  if (!user && !isSampleMode) return (
+    <div className="h-screen bg-slate-100 flex items-center justify-center p-4 text-center">
+      <div className="w-full max-w-sm bg-white rounded-[2.5rem] shadow-2xl p-8 space-y-6">
+        <div className="mx-auto w-20 h-20 bg-blue-600 rounded-3xl flex items-center justify-center text-white shadow-xl shadow-blue-100">
+           <GraduationCap size={40} />
+        </div>
+        <h1 className="text-2xl font-black tracking-tighter uppercase leading-tight">Level Up JH</h1>
+        <form onSubmit={handleLogin} className="space-y-4 text-left">
+           <input name="email" type="email" required placeholder="メールアドレス" className="w-full p-4 bg-slate-50 border-none rounded-2xl font-bold focus:ring-2 focus:ring-blue-600 transition outline-none text-sm leading-none" />
+           <input name="password" type="password" required placeholder="パスワード" className="w-full p-4 bg-slate-50 border-none rounded-2xl font-bold focus:ring-2 focus:ring-blue-600 transition outline-none text-sm leading-none" />
+           <button type="submit" className="w-full bg-blue-600 text-white font-black py-4 rounded-2xl shadow-xl active:scale-95 transition text-md uppercase leading-none">LOGIN</button>
+        </form>
+        <button onClick={toggleSampleMode} className="text-slate-400 font-bold hover:text-blue-600 transition flex items-center justify-center gap-2 w-full text-xs uppercase leading-none"><FlaskConical size={14} /> サンプルデータでお試し</button>
+      </div>
+    </div>
+  );
 
   return (
-    <div className="flex flex-col h-screen bg-slate-50 font-sans text-slate-900 max-w-md mx-auto shadow-2xl overflow-hidden relative">
-      {isSampleMode && (
-        <div className="bg-amber-100 text-amber-800 text-[10px] font-bold text-center py-1 flex items-center justify-center gap-1.5 z-40 relative">
-          <AlertTriangle size={12} />
-          サンプルモード表示中（データは保存されません）
-        </div>
-      )}
-      <header className="bg-white/80 backdrop-blur-xl pt-4 sticky top-0 z-30 border-b border-slate-100">
-        <div className="h-14 flex items-center justify-between px-5">
-          <div>
-            <h1 className="font-black text-lg text-slate-800 tracking-tight flex items-center gap-2">
-              Level Up Study<span className="bg-blue-100 text-blue-600 px-2 py-0.5 rounded text-[10px]">v5</span>
-            </h1>
+    <div className={isMobileView 
+      ? "min-h-screen bg-slate-800 p-4 sm:p-8 flex justify-center items-center font-sans selection:bg-blue-100" 
+      : "min-h-screen bg-slate-50 text-slate-900 lg:pl-72 pb-24 lg:pb-0 font-sans selection:bg-blue-100 overflow-x-hidden text-left"
+    }>
+      <div className={isMobileView 
+        ? "w-full max-w-[400px] h-[800px] bg-slate-50 rounded-[3rem] shadow-2xl relative overflow-hidden border-[12px] border-slate-900 text-slate-900 flex flex-col text-left" 
+        : "w-full h-full contents"
+      }>
+        
+        {/* --- Sidebar (PC) --- */}
+        <aside className={isMobileView 
+          ? "hidden" 
+          : "hidden lg:flex flex-col fixed inset-y-0 left-0 w-72 bg-white border-r border-slate-100 p-8 z-40 text-left"
+        }>
+          <div className="flex items-center gap-3 mb-10 text-left">
+            <div className="bg-blue-600 p-3 rounded-2xl text-white shadow-xl shadow-blue-200"><Trophy size={24} /></div>
+            <h1 className="text-xl font-black tracking-tighter leading-none uppercase">Level Up<br/><span className="text-blue-600 text-md uppercase leading-none">Study JH</span></h1>
           </div>
-          <div className="flex items-center gap-2">
-             {!isSampleMode ? (
-               <div className="flex items-center gap-2">
-                 <div className="flex flex-col items-end mr-1">
-                    <div className="text-[9px] text-slate-400 font-bold mb-0.5 flex items-center gap-1">
-                      {syncState === 'syncing' ? <RefreshCw size={10} className="animate-spin text-blue-500" /> :
-                       syncState === 'offline' ? <CloudOff size={10} className="text-red-400"/> : <Cloud size={10} className="text-green-500"/>}
-                      {lastSync} 同期
-                    </div>
-                    <button onClick={() => fetchData(false)} className="text-[10px] bg-slate-100 hover:bg-slate-200 text-slate-600 px-2 py-1 rounded font-bold transition-colors flex items-center gap-1 active:scale-95">
-                      手動更新
-                    </button>
-                 </div>
-                 <button onClick={handleLogout} className="text-slate-400 hover:text-slate-600 p-1" title="ログアウト">
-                    <LogOut size={16} />
-                 </button>
+          <nav className="flex-1 space-y-2">
+            {[{ id: 'daily', label: '学習記録', icon: Zap }, { id: 'stats', label: '実績分析', icon: BarChart2 }, { id: 'tests', label: '成績推移', icon: TrendingUp }].map(item => (
+              <button key={item.id} onClick={() => setActiveTab(item.id)} className={`w-full flex items-center gap-4 px-6 py-4 rounded-3xl font-black transition-all leading-none ${activeTab === item.id ? 'bg-blue-600 text-white shadow-2xl' : 'text-slate-400 hover:bg-slate-50'}`}>
+                <item.icon size={20} /> {item.label}
+              </button>
+            ))}
+          </nav>
+          <button onClick={toggleSampleMode} className={`mt-8 w-full flex items-center justify-between p-4 rounded-2xl border-2 transition-all leading-none ${isSampleMode ? 'bg-amber-50 border-amber-200 text-amber-700' : 'bg-slate-50 border-slate-100 text-slate-400'}`}>
+            <span className="text-[10px] font-black uppercase tracking-wider leading-none">Sample Mode</span>
+            <FlaskConical size={16} />
+          </button>
+          
+          {isSampleMode && (
+            <button onClick={() => setIsMobileView(true)} className="mt-4 w-full flex items-center justify-between p-4 rounded-2xl bg-slate-900 text-white font-black transition-all leading-none shadow-xl">
+              <span className="text-[10px] uppercase tracking-wider">スマホプレビュー</span>
+              <Smartphone size={16} />
+            </button>
+          )}
+
+          {!isSampleMode && <button onClick={() => signOut(auth)} className="mt-4 flex items-center gap-2 text-xs font-black text-slate-300 hover:text-rose-500 transition px-4 leading-none"><LogOut size={14}/> LOGOUT</button>}
+        </aside>
+
+        {/* --- Mobile Header --- */}
+        <header className={isMobileView 
+          ? "bg-white border-b border-slate-100 p-4 sticky top-0 z-40 flex justify-between items-center px-6 leading-none shrink-0" 
+          : "lg:hidden bg-white border-b border-slate-100 p-4 sticky top-0 z-40 flex justify-between items-center px-6 leading-none"
+        }>
+          <div className="flex items-center gap-2 leading-none text-left">
+            <Trophy className="text-blue-600" size={20} />
+            <h1 className="text-sm font-black tracking-tighter uppercase leading-none">Study JH</h1>
+          </div>
+          <div className="flex items-center">
+            {isSampleMode && isMobileView && (
+              <button onClick={() => setIsMobileView(false)} className="p-2 rounded-xl bg-slate-100 text-slate-600 flex items-center gap-1 leading-none mr-2">
+                <Monitor size={14} />
+                <span className="text-[9px] font-black uppercase">PC</span>
+              </button>
+            )}
+            <button onClick={toggleSampleMode} className={`p-2 rounded-xl border leading-none ${isSampleMode ? 'bg-amber-100 border-amber-200 text-amber-600' : 'bg-slate-50 border-slate-100 text-slate-400'}`}>
+              <FlaskConical size={18} />
+            </button>
+          </div>
+        </header>
+
+        {/* --- Main Container --- */}
+        <div className={isMobileView ? "flex-1 overflow-y-auto pb-24 no-scrollbar relative" : ""}>
+          <main className="p-4 sm:p-6 lg:p-10 max-w-6xl mx-auto space-y-6 sm:space-y-10">
+            {(activeTab === 'stats' || activeTab === 'tests') && (
+               <div className="bg-white/80 backdrop-blur-xl p-4 sm:p-6 rounded-[2rem] shadow-sm border border-white flex flex-wrap items-center gap-4 justify-center lg:sticky lg:top-4 z-30 transition-all text-left">
+                  <div className="flex items-center gap-2 bg-slate-50 p-2 rounded-xl shrink-0 overflow-hidden leading-none">
+                     <CalendarIcon className="text-slate-400" size={14} />
+                     <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="bg-transparent border-none p-0 text-[10px] font-bold outline-none leading-none" />
+                     <span className="text-slate-300 mx-1">/</span>
+                     <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className="bg-transparent border-none p-0 text-[10px] font-bold outline-none leading-none" />
+                  </div>
+                  <div className="flex gap-1 overflow-x-auto no-scrollbar whitespace-nowrap">
+                     {[7, 14, 30, 0].map(days => (
+                       <button key={days} onClick={() => {
+                         const d = new Date(); 
+                         if(days === 0) setStartDate("2026-01-01"); 
+                         else { d.setDate(d.getDate() - days); setStartDate(d.toISOString().split('T')[0]); }
+                         setEndDate(new Date().toISOString().split('T')[0]);
+                       }} className="px-3 py-2 bg-slate-100 hover:bg-blue-50 hover:text-blue-600 rounded-lg text-[9px] font-black transition-all whitespace-nowrap leading-none">
+                         {days === 30 ? '1月' : days === 14 ? '2週' : days === 7 ? '1週' : '全'}
+                       </button>
+                     ))}
+                     {!isSampleMode && <button onClick={() => fetchData()} className="p-2 bg-blue-50 text-blue-600 rounded-lg ml-2 leading-none"><RefreshCw size={14}/></button>}
+                  </div>
                </div>
-             ) : (
-                <button 
-                  onClick={() => { setIsSampleMode(false); fetchData(true); }}
-                  className="text-[10px] bg-slate-800 text-white px-3 py-1.5 rounded font-bold transition-colors active:scale-95"
-                >
-                  データに戻る
-                </button>
-             )}
-             <button 
-                onClick={() => {
-                  if (!isSampleMode) {
-                    setIsSampleMode(true);
-                    setTasks(generateDummyTasks());
-                    setTests(INITIAL_TESTS);
-                  } else {
-                    setIsSampleMode(false);
-                    fetchData(true);
-                  }
-                }}
-                className={`text-[10px] px-2 py-2 rounded-lg font-bold transition-colors flex items-center gap-1 active:scale-95 ${isSampleMode ? 'bg-amber-500 text-white' : 'bg-slate-100 text-slate-500 hover:bg-slate-200'}`}
-                title="サンプル表示"
-              >
-                <FlaskConical size={14} />
-             </button>
+            )}
+
+            {activeTab === 'daily' && (
+          <div className="space-y-8 animate-in fade-in duration-500">
+            <div className="flex items-center justify-between bg-white/80 backdrop-blur-xl p-4 rounded-[2rem] shadow-sm border border-white lg:sticky lg:top-4 z-30">
+              <button onClick={() => setSelectedMonth(m => m === 1 ? 12 : m - 1)} className="p-2 bg-slate-50 hover:bg-slate-100 rounded-xl transition leading-none text-left"><ChevronLeft size={20}/></button>
+              <h2 className="text-lg sm:text-2xl font-black text-slate-800 tracking-tight leading-none text-center flex-1">{selectedMonth}月の学習記録</h2>
+              <button onClick={() => setSelectedMonth(m => m === 12 ? 1 : m + 1)} className="p-2 bg-slate-50 hover:bg-slate-100 rounded-xl transition leading-none text-left"><ChevronRight size={20}/></button>
+            </div>
+
+            <div className={`grid gap-3 sm:gap-4 text-center ${isMobileView ? 'grid-cols-1' : 'grid-cols-1 md:grid-cols-4'}`}>
+              <div className={`${isMobileView ? '' : 'md:col-span-1'} bg-gradient-to-br from-blue-600 to-indigo-700 p-3 sm:p-6 rounded-[1.5rem] sm:rounded-[2rem] text-white shadow-xl relative overflow-hidden text-center flex flex-col justify-center min-h-[70px] sm:min-h-[120px]`}>
+                 <p className="text-[9px] sm:text-[10px] font-black opacity-70 mb-1 sm:mb-2 uppercase tracking-widest leading-none">Monthly</p>
+                 <p className="text-2xl sm:text-4xl font-black font-mono leading-none tracking-tighter">
+                   {formatDuration(tasks.reduce((sum, t) => sum + (t.history || []).filter((h) => parseInt(h.date.split('-')[1]) === selectedMonth).reduce((s, h) => s + h.duration, 0), 0))}
+                 </p>
+              </div>
+              <div className={`${isMobileView ? 'grid grid-cols-3 gap-2' : 'md:col-span-3 grid grid-cols-3 gap-2 sm:gap-4'} text-center`}>
+                 {Object.values(CATEGORIES).map(cat => {
+                   const catTotal = tasks.filter(t => t.categoryId === cat.id).reduce((sum, t) => sum + (t.history || []).filter((h) => parseInt(h.date.split('-')[1]) === selectedMonth).reduce((s, h) => s + h.duration, 0), 0);
+                   return (
+                     <div key={cat.id} className="bg-white p-2 sm:p-4 rounded-[1.5rem] sm:rounded-[2rem] border border-slate-100 shadow-sm flex flex-col items-center justify-center min-h-[70px] sm:min-h-[120px] text-center leading-none">
+                        <cat.icon size={16} className={`sm:w-6 sm:h-6 ${cat.color}`} />
+                        <p className="text-[9px] sm:text-sm font-black text-slate-600 mt-1.5 sm:mt-3 uppercase leading-none">{cat.label}</p>
+                        <p className="text-xs sm:text-lg font-black font-mono text-slate-800 mt-1 sm:mt-2 w-full text-center leading-none tracking-tighter whitespace-nowrap">{formatDuration(catTotal)}</p>
+                     </div>
+                   );
+                 })}
+              </div>
+            </div>
+
+            <div className="space-y-6 text-center">
+              <div className="flex gap-2 bg-slate-100 p-1.5 rounded-[1.75rem] w-full max-w-md mx-auto shadow-inner overflow-hidden leading-none text-center">
+                    {Object.values(CATEGORIES).map(cat => (
+                      <button key={cat.id} onClick={() => setActiveCategory(cat.id as any)} className={`flex-1 flex items-center justify-center gap-1.5 py-3 rounded-2xl text-[10px] font-black transition-all leading-none ${activeCategory === cat.id ? 'bg-white text-slate-900 shadow-md' : 'text-slate-400'}`}>
+                        <cat.icon size={14} /> {cat.label}
+                      </button>
+                    ))}
+                  </div>
+
+                  <div className="flex justify-center">
+                    <button onClick={() => setIsAddingTask(true)} className="bg-white border-2 border-dashed border-blue-200 text-blue-600 font-black px-6 py-4 rounded-[1.75rem] flex items-center gap-2 hover:bg-blue-50 active:scale-95 transition-all shadow-sm text-xs leading-none">
+                      <PlusCircle size={20} /> 項目を追加
+                    </button>
+                  </div>
+
+                  <div className="space-y-8 pb-10 text-left">
+                    {tasks.filter(t => t.categoryId === activeCategory).length === 0 ? (
+                      <div className="py-16 text-center border-2 border-dashed border-slate-200 rounded-3xl">
+                        <p className="text-slate-300 font-black text-sm uppercase">記録が見つかりません</p>
+                      </div>
+                    ) : (
+                      SUBJECT_DEFS[activeCategory as keyof typeof SUBJECT_DEFS]?.map(subject => {
+                        const subjectTasks = tasks.filter(t => t.categoryId === activeCategory && t.subjectId === subject.id);
+                        if (subjectTasks.length === 0) return null;
+                        
+                        return (
+                          <div key={subject.id} className="space-y-4">
+                            <div className="flex items-center gap-2 px-2">
+                               <div className="w-1.5 h-4 rounded-full" style={{ backgroundColor: subject.hex }} />
+                               <h3 className="font-black text-slate-700 text-base sm:text-lg leading-none">{subject.label}</h3>
+                            </div>
+                            <div className={`gap-3 sm:gap-4 ${isMobileView ? 'grid grid-cols-1' : 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3'}`}>
+                              {subjectTasks.sort((a, b) => b.lastUpdatedAt - a.lastUpdatedAt).map(task => {
+                                const monthlyTime = (task.history || []).filter((h) => parseInt(h.date.split('-')[1]) === selectedMonth).reduce((acc, h) => acc + h.duration, 0);
+                                return (
+                                  <div key={task.id} onClick={() => setSelectedTaskId(task.id)} className="bg-white p-4 sm:p-6 rounded-[1.5rem] sm:rounded-[2rem] border border-slate-100 shadow-sm hover:shadow-xl transition-all cursor-pointer relative overflow-hidden text-left group">
+                                    <div className="flex justify-between items-start mb-2 sm:mb-3 text-left">
+                                      <div className="flex items-center gap-1.5 sm:gap-2 leading-none text-left">
+                                        <span className={`text-[8px] sm:text-[9px] font-black px-2 py-0.5 rounded-full leading-none ${CATEGORIES[task.categoryId.toUpperCase() as keyof typeof CATEGORIES].bg} ${CATEGORIES[task.categoryId.toUpperCase() as keyof typeof CATEGORIES].color}`}>{task.type === 'homework' ? '宿題' : '自習'}</span>
+                                      </div>
+                                      {task.isRunning && <div className="w-2 h-2 sm:w-2.5 sm:h-2.5 bg-blue-500 rounded-full animate-ping" />}
+                                    </div>
+                                    <div className="text-[9px] sm:text-[10px] font-bold text-slate-400 mb-2 sm:mb-3">
+                                       {new Date(task.lastUpdatedAt).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })} 更新
+                                    </div>
+                                    <h4 className="font-black text-slate-800 text-base sm:text-lg mb-3 sm:mb-4 truncate leading-tight text-left">{task.title || "Untitled"}</h4>
+                                    <div className="flex justify-between items-end border-t border-slate-50 pt-3 sm:pt-4 leading-none text-left">
+                                       <div className="text-[9px] sm:text-[10px] font-black text-slate-300 flex items-center gap-1 uppercase leading-none text-left"><History size={12} /> {task.history?.length || 0}回</div>
+                                       <p className="text-lg sm:text-xl font-black font-mono text-blue-600 tracking-tighter leading-none text-left">{formatDuration(monthlyTime)}</p>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {activeTab === 'stats' && (
+              <div className="space-y-10 animate-in slide-in-from-bottom-5 duration-500 text-center">
+                <div className="bg-white p-6 rounded-[2rem] border border-slate-100 shadow-sm overflow-hidden text-center text-left">
+                   <h3 className="text-lg font-black mb-6 flex items-center justify-center gap-2 leading-none text-center"><BarChart2 className="text-blue-600" size={20}/> 学習推移 (分)</h3>
+                   <div className="h-64 sm:h-80 w-full text-center">
+                      <ResponsiveContainer width="100%" height="100%">
+                         <BarChart data={stats.dailyData} margin={{ top: 0, right: 0, left: -20, bottom: 0 }}>
+                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                            <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fontSize: 9, fontWeight: '900', fill: '#cbd5e1'}} />
+                            <YAxis axisLine={false} tickLine={false} tick={{fontSize: 9, fontWeight: '900', fill: '#cbd5e1'}} />
+                            <Tooltip contentStyle={{borderRadius: '12px', border: 'none', fontSize: '10px'}} />
+                            <Legend iconType="circle" wrapperStyle={{paddingTop: '10px', fontSize: '10px', fontWeight: '900'}} />
+                            <Bar dataKey="school" name="中学校" stackId="a" fill="#3b82f6" />
+                            <Bar dataKey="juku" name="塾" stackId="a" fill="#10b981" />
+                            <Bar dataKey="etc" name="その他" stackId="a" fill="#8b5cf6" />
+                         </BarChart>
+                      </ResponsiveContainer>
+                   </div>
+                </div>
+
+                <div className={`grid gap-6 text-center text-left ${isMobileView ? 'grid-cols-1' : 'grid-cols-1 lg:grid-cols-2'}`}>
+                   <div className="bg-white p-8 rounded-[2.5rem] border border-slate-100 shadow-sm text-center">
+                  <h3 className="text-lg font-black mb-6 flex items-center justify-center gap-2 leading-none text-center text-center"><PieChartIcon className="text-indigo-600" size={20}/> 学習比率</h3>
+                  <div className="h-56 sm:h-64 text-center">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie data={stats.breakdown} innerRadius="60%" outerRadius="85%" paddingAngle={5} dataKey="duration">
+                          {stats.breakdown.map((e) => <Cell key={e.id} fill={e.hex} stroke="none" />)}
+                        </Pie>
+                        <Tooltip contentStyle={{ borderRadius: '12px', border: 'none', fontSize: '10px' }} />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  </div>
+                  <div className="flex justify-center gap-2 sm:gap-4 mt-2 sm:mt-4 flex-wrap leading-none">
+                    {stats.breakdown.map(d => (
+                      <div key={d.id} className="flex flex-col items-center p-2 sm:p-3 bg-slate-50 rounded-lg sm:rounded-xl min-w-[50px] sm:min-w-[60px] leading-none text-center">
+                         <div className="w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full mb-1 leading-none text-center" style={{ backgroundColor: d.hex }} />
+                         <span className="text-[9px] sm:text-[10px] font-black text-slate-800 font-mono leading-none">{d.percent}%</span>
+                      </div>
+                    ))}
+                  </div>
+               </div>
+
+               <div className="space-y-4 text-left">
+                      {stats.breakdown.map(cat => (
+                        <div key={cat.id} className="bg-white p-6 rounded-[2.5rem] border border-slate-100 shadow-sm relative overflow-hidden group text-left">
+                           <h4 className={`font-black text-[10px] ${cat.color} uppercase mb-4 tracking-widest flex items-center gap-2 leading-none text-left`}>
+                             <Award size={14} /> {cat.label}の内訳
+                           </h4>
+                           <div className="space-y-4 text-left">
+                              {cat.subjects.map((s: any) => (
+                                <div key={s.id} className="space-y-1.5 text-left leading-none">
+                                   <div className="flex justify-between text-[10px] font-black leading-none text-left text-left">
+                                      <span className="text-slate-600 truncate text-left">{s.label}</span>
+                                      <span className="text-slate-400 font-mono text-left text-left">{formatDuration(s.duration)}</span>
+                                   </div>
+                                   <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden text-left leading-none text-left">
+                                      <div className={`h-full rounded-full ${cat.id === 'school' ? 'bg-blue-600' : cat.id === 'juku' ? 'bg-emerald-500' : 'bg-purple-500'}`} style={{ width: `${s.percent}%` }} />
+                                   </div>
+                                </div>
+                              ))}
+                           </div>
+                        </div>
+                      ))}
+                   </div>
+                </div>
+              </div>
+            )}
+
+            {activeTab === 'tests' && (
+              <div className="space-y-10 animate-in zoom-in-95 duration-500 pb-10 text-center text-left">
+                <div className={`flex items-center gap-4 px-4 text-center leading-none text-center ${isMobileView ? 'flex-col' : 'flex-col sm:flex-row justify-between'}`}>
+                  <h3 className="text-2xl font-black text-slate-800 tracking-tight flex items-center justify-center gap-2 leading-none text-center text-center">
+                    <TrendingUp className="text-rose-500" size={24} /> Score Trends
+                  </h3>
+                  <button onClick={() => { setEditingTest(null); setIsAddingTest(true); }} className="w-full sm:w-auto bg-rose-500 text-white font-black px-8 py-3 rounded-2xl shadow-xl active:scale-95 transition text-sm uppercase leading-none">成績登録</button>
+                </div>
+
+                <div className="bg-white p-4 sm:p-8 rounded-[2rem] border border-slate-100 shadow-sm space-y-6 text-left overflow-x-hidden leading-none text-left">
+                   <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-50 pb-4 leading-none text-left">
+                      <div className="flex items-center gap-2 text-slate-400 leading-none text-left text-left">
+                         <ListFilter size={16} />
+                         <span className="text-[10px] font-black uppercase leading-none text-left">教科選択</span>
+                      </div>
+                      <div className="flex gap-1 leading-none text-left">
+                         <button onClick={() => bulkSelectSubjects('all')} className="px-2 py-1 bg-slate-900 text-white rounded-lg text-[9px] font-black leading-none">全</button>
+                         <button onClick={() => bulkSelectSubjects('none')} className="px-2 py-1 bg-slate-100 text-slate-400 rounded-lg text-[9px] font-black leading-none">無</button>
+                      </div>
+                   </div>
+
+                   <div className="flex flex-col gap-4 text-left leading-none text-left">
+                      <div className="text-left leading-none text-left text-left">
+                        <h5 className="text-[9px] font-black text-blue-600 uppercase mb-2 leading-none text-left text-left">中学校</h5>
+                        <div className="flex flex-wrap gap-1.5 leading-none text-left text-left">
+                           {SUBJECT_DEFS.school.map(s => (
+                             <button key={s.id} onClick={() => toggleSubjectVisibility(s.id)} className={`px-2.5 py-1.5 rounded-lg text-[9px] font-black flex items-center gap-1.5 transition-all leading-none ${visibleSubjects.includes(s.id) ? 'bg-blue-50 text-blue-600 border border-blue-100 shadow-sm' : 'bg-slate-50 text-slate-400 border border-transparent'}`}>
+                               {visibleSubjects.includes(s.id) ? <CheckSquare size={10}/> : <Square size={10}/>} {s.label}
+                             </button>
+                           ))}
+                        </div>
+                      </div>
+                      <div className="text-left leading-none text-left text-left text-left">
+                        <h5 className="text-[9px] font-black text-emerald-600 uppercase mb-2 leading-none text-left text-left">塾</h5>
+                        <div className="flex flex-wrap gap-1.5 leading-none text-left text-left">
+                           {SUBJECT_DEFS.juku.map(s => (
+                             <button key={s.id} onClick={() => toggleSubjectVisibility(s.id)} className={`px-2.5 py-1.5 rounded-lg text-[9px] font-black flex items-center gap-1.5 transition-all leading-none ${visibleSubjects.includes(s.id) ? 'bg-emerald-50 text-emerald-600 border border-emerald-100 shadow-sm' : 'bg-slate-50 text-slate-400 border border-transparent'}`}>
+                               {visibleSubjects.includes(s.id) ? <CheckSquare size={10}/> : <Square size={10}/>} {s.label}
+                           </button>
+                           ))}
+                        </div>
+                      </div>
+                      <button onClick={() => toggleSubjectVisibility('average')} className={`self-start px-3 py-2 rounded-xl text-[9px] font-black transition-all flex items-center gap-2 ${visibleSubjects.includes('average') ? 'bg-slate-200 text-slate-800 shadow-inner' : 'bg-slate-50 text-slate-400'} leading-none text-left text-left`}>
+                         {visibleSubjects.includes('average') ? <Eye size={12}/> : <EyeOff size={12}/>} 学年平均
+                      </button>
+                   </div>
+                </div>
+
+                <div className="bg-white p-4 sm:p-10 rounded-[2.5rem] border border-slate-100 shadow-sm relative overflow-hidden text-center leading-none text-center">
+                   <div className="h-64 sm:h-96 w-full text-center leading-none text-center">
+                      <ResponsiveContainer width="100%" height="100%">
+                         <LineChart data={filteredTests} margin={{ top: 10, right: 10, left: -25, bottom: 0 }}>
+                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                            <XAxis dataKey="date" axisLine={false} tickLine={false} tick={{fontSize: 9, fontWeight: '900', fill: '#cbd5e1'}} />
+                            <YAxis domain={[0, 100]} axisLine={false} tickLine={false} tick={{fontSize: 9, fontWeight: '900', fill: '#cbd5e1'}} />
+                            <Tooltip contentStyle={{ borderRadius: '12px', border: 'none', fontSize: '10px' }} />
+                            <Legend iconType="circle" wrapperStyle={{ paddingTop: '20px', fontWeight: '900', fontSize: '10px' }} />
+                            
+                            {visibleSubjects.includes('average') && (
+                              <Line type="monotone" dataKey="average" name="学年平均" stroke="#94a3b8" strokeDasharray="5 5" strokeWidth={2} dot={false} connectNulls />
+                            )}
+                            {allChartSubjects.filter(s => s.id !== 'average').map(sub => (
+                              visibleSubjects.includes(sub.id) && (
+                                <Line key={sub.id} type="monotone" dataKey={`scores.${sub.id}`} name={sub.label} stroke={sub.hex} strokeWidth={3} dot={{r:4, fill: sub.hex, strokeWidth: 1, stroke: '#fff'}} connectNulls animationDuration={800} />
+                              )
+                            ))}
+                         </LineChart>
+                      </ResponsiveContainer>
+                   </div>
+                </div>
+
+                <div className="bg-white rounded-[2rem] border border-slate-100 shadow-sm overflow-hidden text-left leading-none text-left text-left">
+                  <div className="p-5 border-b border-slate-50 flex justify-between items-center bg-slate-50/30 leading-none text-left text-left">
+                    <h4 className="font-black text-sm text-slate-800 leading-none text-left text-left">成績データ一覧</h4>
+                    <span className="text-[10px] font-black text-slate-400 uppercase leading-none text-left text-left">{filteredTests.length}回分</span>
+                  </div>
+                  <div className="overflow-x-auto overflow-y-hidden no-scrollbar text-left leading-none text-left">
+                    <table className="w-full text-left border-collapse min-w-[800px] leading-none text-left text-left">
+                      <thead>
+                        <tr className="bg-slate-50/80 text-[9px] font-black text-slate-400 uppercase tracking-widest border-b border-slate-100 text-left leading-none text-left">
+                          <th className="px-6 py-4 sticky left-0 bg-slate-50/95 backdrop-blur-md z-10 text-left leading-none text-left">テスト名 / 日付</th>
+                          <th className="px-4 py-4 text-center leading-none text-left">平均</th>
+                          <th className="px-4 py-4 text-center text-blue-600 leading-none text-left">数学</th>
+                          <th className="px-4 py-4 text-center text-rose-600 leading-none text-left">国語</th>
+                          <th className="px-4 py-4 text-center text-indigo-600 leading-none text-left">英語</th>
+                          <th className="px-4 py-4 text-center text-emerald-600 leading-none text-left">理科</th>
+                          <th className="px-4 py-4 text-center text-amber-600 leading-none text-left">社会</th>
+                          <th className="px-6 py-4 text-right leading-none text-left text-left">操作</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-50 text-center leading-none text-left text-left">
+                        {[...filteredTests].reverse().map(test => {
+                          const prefix = test.category === 'school' ? 's_' : 'j_' ;
+                          return (
+                            <tr key={test.id} className="group hover:bg-blue-50/10 transition-colors leading-none text-left">
+                              <td className="px-6 py-5 sticky left-0 bg-white group-hover:bg-blue-50/10 backdrop-blur-md z-10 transition-colors text-left leading-none text-left text-left text-left">
+                                <p className="font-black text-slate-800 text-sm leading-tight truncate w-32 sm:w-auto text-left text-left text-left">{test.name}</p>
+                                <p className="text-[8px] font-bold text-slate-400 mt-1 uppercase text-left leading-none text-left">{test.date}</p>
+                              </td>
+                              <td className="px-4 py-5 text-center font-mono font-black text-slate-700 text-xs leading-none text-left">{test.average}</td>
+                              <td className="px-4 py-5 text-center font-mono font-black text-blue-600 text-sm leading-none text-left">{test.scores[`${prefix}math`] || "-"}</td>
+                              <td className="px-4 py-5 text-center font-mono font-black text-rose-600 text-sm leading-none text-left">{test.scores[`${prefix}japanese`] || "-"}</td>
+                              <td className="px-4 py-5 text-center font-mono font-black text-indigo-600 text-sm leading-none text-left">{test.scores[`${prefix}english`] || "-"}</td>
+                              <td className="px-4 py-5 text-center font-mono font-black text-emerald-600 text-sm leading-none text-left">{test.scores[`${prefix}science`] || "-"}</td>
+                              <td className="px-4 py-5 text-center font-mono font-black text-amber-600 text-sm leading-none text-left">{test.scores[`${prefix}social`] || "-"}</td>
+                              <td className="px-6 py-5 text-right leading-none text-left text-left">
+                                <div className="flex justify-end gap-2 leading-none text-left">
+                                  <button onClick={() => { setEditingTest(test); setIsAddingTest(true); }} className="p-1.5 bg-slate-100 text-slate-400 rounded-lg hover:bg-blue-600 hover:text-white transition-all leading-none text-left"><Edit3 size={14}/></button>
+                                  <button onClick={() => handleDeleteTest(test.id)} className="p-1.5 bg-slate-100 text-slate-400 rounded-lg hover:bg-rose-600 hover:text-white transition-all leading-none text-left"><Trash2 size={14}/></button>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            )}
+          </main>
+        </div>
+
+        {/* --- Modals --- */}
+        {isAddingTask && (
+          <div className={modalOverlayClass}>
+             <div className="bg-white w-full max-w-md rounded-[2.5rem] shadow-2xl overflow-hidden animate-in zoom-in-95 duration-300">
+                <div className="p-6 border-b border-slate-50 flex justify-between items-center bg-slate-50/50 leading-none">
+                   <h3 className="text-lg font-black tracking-tight text-center flex-1 leading-none text-center">学習項目の追加</h3>
+                   <button onClick={() => setIsAddingTask(false)} className="p-2 bg-white rounded-xl shadow-sm hover:bg-slate-50 transition leading-none text-left text-left"><X size={20}/></button>
+                </div>
+                <form onSubmit={handleAddTask} className="p-8 space-y-6 text-left leading-none text-left">
+                   <div className="text-left leading-none text-left text-left">
+                      <label className="block text-[10px] font-black text-slate-400 uppercase mb-2 ml-2 leading-none text-left text-left text-left">教科</label>
+                      <select name="subjectId" required className="w-full bg-slate-50 border-none rounded-xl p-4 font-black text-slate-800 appearance-none shadow-inner text-sm outline-none focus:ring-2 focus:ring-blue-600 leading-none">
+                         {SUBJECT_DEFS[activeCategory as keyof typeof SUBJECT_DEFS]?.map(s => <option key={s.id} value={s.id}>{s.label}</option>)}
+                      </select>
+                   </div>
+                   <div className="text-left leading-none text-left text-left text-left">
+                      <label className="block text-[10px] font-black text-slate-400 uppercase mb-2 ml-2 leading-none text-left text-left text-left">種類</label>
+                      <div className="grid grid-cols-2 gap-3 leading-none text-left text-left">
+                         {['homework', 'self'].map(t => (
+                           <label key={t} className="relative cursor-pointer group text-center leading-none text-left text-left">
+                             <input type="radio" name="type" value={t} defaultChecked={t === 'homework'} className="peer sr-only" />
+                             <div className="p-3 border-2 border-slate-100 rounded-xl text-center font-black text-xs peer-checked:border-blue-600 peer-checked:bg-blue-50 peer-checked:text-blue-600 transition leading-none">
+                               {t === 'homework' ? '宿題' : '自習'}
+                             </div>
+                           </label>
+                         ))}
+                      </div>
+                   </div>
+                   <div className="text-left leading-none text-left text-left text-left">
+                      <label className="block text-[10px] font-black text-slate-400 uppercase mb-2 ml-2 leading-none text-left text-left text-left text-left">内容</label>
+                      <input name="detail" required placeholder="例：数学ワーク P.40" className="w-full bg-slate-50 border-none rounded-xl p-4 font-black placeholder:text-slate-300 shadow-inner text-sm outline-none leading-none text-left" />
+                   </div>
+                   <button type="submit" className="w-full bg-blue-600 text-white font-black py-4 rounded-xl shadow-2xl active:scale-95 transition text-md uppercase leading-none">Add Task</button>
+                </form>
+             </div>
           </div>
-        </div>
-      </header>
-
-      <main className="flex-1 overflow-y-auto overscroll-contain no-scrollbar flex flex-col pb-24">
-        {activeTab === 'daily' ? (
-          <DailyView 
-            tasks={tasks} updateLocalTask={updateLocalTask} syncTaskToCloud={syncTaskToCloud} cycleStatus={cycleStatus} 
-            saveHistoryRecord={saveHistoryRecord} deleteUnitTasks={deleteUnitTasks} 
-            deleteTask={(id: string) => { 
-               setConfirmModalData({
-                 title: 'タスクの削除', message: '本当にこのタスクを削除しますか？',
-                 onConfirm: async () => {
-                    setTasks(prev => prev.filter(t => t.id !== id));
-                    const dbInstance = getSafeDb();
-                    if(dbInstance && user && !isSampleMode) await deleteDoc(getTaskDoc(dbInstance, id));
-                 }
-               });
-            }}
-            setAddModalOpen={setAddModalOpen} 
-            selectedUnit={selectedUnit} setSelectedUnit={setSelectedUnit} 
-            unitsWithTasks={unitsWithTasks} onAddCustomTask={onAddCustomTask}
-            setDetailTaskId={setDetailTaskId} setDeleteConfirmation={setConfirmModalData}
-          />
-        ) : activeTab === 'tests' ? (
-          <TestsView tests={tests} onSaveTest={saveTestToCloud} onDeleteTest={deleteTestFromCloud} />
-        ) : (
-          <AchievementsView tasks={tasks} />
         )}
-      </main>
 
-      <nav className="bg-white/90 backdrop-blur-lg border-t border-slate-100 fixed bottom-0 left-0 right-0 z-40 pb-6 max-w-md mx-auto rounded-t-3xl shadow-[0_-10px_30px_rgba(0,0,0,0.04)]">
-        <div className="h-16 flex justify-around items-center px-2">
-          <button onClick={() => setActiveTab('daily')} className={`flex-1 flex flex-col items-center justify-center h-full space-y-1 transition-all duration-300 ${activeTab === 'daily' ? 'text-blue-600 -translate-y-1' : 'text-slate-400 hover:text-slate-500'}`}>
-            <div className={`p-1.5 rounded-xl ${activeTab === 'daily' ? 'bg-blue-50' : ''}`}><FileText size={22} strokeWidth={activeTab === 'daily' ? 2.5 : 2} fill={activeTab === 'daily' ? "currentColor" : "none"} /></div><span className="text-[10px] font-bold">学習</span>
-          </button>
-          <button onClick={() => setActiveTab('achievements')} className={`flex-1 flex flex-col items-center justify-center h-full space-y-1 transition-all duration-300 ${activeTab === 'achievements' ? 'text-blue-600 -translate-y-1' : 'text-slate-400 hover:text-slate-500'}`}>
-             <div className={`p-1.5 rounded-xl ${activeTab === 'achievements' ? 'bg-blue-50' : ''}`}><BarChart2 size={22} strokeWidth={activeTab === 'achievements' ? 2.5 : 2} /></div><span className="text-[10px] font-bold">実績</span>
-          </button>
-          <button onClick={() => setActiveTab('tests')} className={`flex-1 flex flex-col items-center justify-center h-full space-y-1 transition-all duration-300 ${activeTab === 'tests' ? 'text-blue-600 -translate-y-1' : 'text-slate-400 hover:text-slate-500'}`}>
-             <div className={`p-1.5 rounded-xl ${activeTab === 'tests' ? 'bg-blue-50' : ''}`}><Award size={22} strokeWidth={activeTab === 'tests' ? 2.5 : 2} /></div><span className="text-[10px] font-bold">成績</span>
-          </button>
-        </div>
-      </nav>
+        {selectedTaskId && (
+          <div className={taskDetailOverlayClass}>
+             <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-md" onClick={() => setSelectedTaskId(null)} />
+             <div className="relative bg-white w-full max-w-2xl rounded-t-[2.5rem] lg:rounded-[3rem] shadow-2xl flex flex-col overflow-hidden animate-in slide-in-from-bottom-10 h-[90vh] max-h-[90vh]">
+                {(() => {
+                  const task = tasks.find(t => t.id === selectedTaskId);
+                  if (!task) return null;
+                  const cat = CATEGORIES[task.categoryId.toUpperCase() as keyof typeof CATEGORIES];
+                  return (
+                    <>
+                      <div className="p-6 sm:p-10 border-b border-slate-50 flex justify-between items-start shrink-0 text-left bg-slate-50/50">
+                         <div className="space-y-2 text-left text-left text-left">
+                            <div className="flex gap-2 leading-none text-left text-left text-left">
+                               <span className={`text-[9px] font-black px-3 py-1 rounded-full ${cat.bg} ${cat.color} uppercase leading-none text-left text-left text-left`}>{cat.label}</span>
+                               <span className="text-[9px] font-black bg-white text-slate-400 px-3 py-1 rounded-full uppercase shadow-sm leading-none text-left text-left text-left">{task.type === 'homework' ? '宿題' : '自習'}</span>
+                            </div>
+                            <h2 className="text-2xl sm:text-3xl font-black text-slate-800 tracking-tighter leading-tight text-left text-left text-left">{task.title}</h2>
+                         </div>
+                         <button onClick={() => setSelectedTaskId(null)} className="p-3 bg-white rounded-2xl shadow-sm hover:bg-slate-50 transition shrink-0 leading-none text-left text-left text-left"><X size={24}/></button>
+                      </div>
+                      <div className="flex-1 overflow-y-auto p-6 sm:p-10 space-y-10 no-scrollbar pb-32 text-left">
+                         <StrictTimer 
+                           task={task} 
+                           isAnyOtherRunning={isAnyTaskRunning && !task.isRunning} 
+                           onUpdate={handleUpdateLocalTask} 
+                           onSave={handleSaveRecord} 
+                         />
+                         <div className="space-y-4 text-left leading-none text-left text-left text-left">
+                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2 px-2 leading-none text-left text-left text-left text-left text-left"><Search size={14}/> 学習メモ</label>
+                            <textarea value={task.tempDetail || ""} onChange={(e) => handleUpdateLocalTask(task.id, { tempDetail: e.target.value })} placeholder="内容をメモ..." className="w-full h-28 bg-slate-50/50 border-none rounded-2xl p-4 font-black text-md resize-none shadow-inner outline-none focus:ring-2 focus:ring-blue-100 text-left leading-snug text-left text-left text-left" />
+                         </div>
+                         <div className="space-y-6 text-left leading-none text-left text-left text-left">
+                            <h3 className="font-black text-lg flex items-center gap-2 px-2 leading-none text-left text-left text-left text-left"><History className="text-blue-500" /> 履歴</h3>
+                            <div className="space-y-3 text-left leading-none text-left text-left text-left text-left">
+                              {(task.history || []).length === 0 ? <p className="text-center py-10 text-slate-300 font-bold italic text-sm leading-none text-center">記録なし</p> : 
+                              [...task.history].reverse().map(h => (
+                                <div key={h.id} className="bg-white border border-slate-100 p-4 rounded-2xl flex flex-col sm:flex-row justify-between items-start sm:items-center shadow-sm text-left leading-none gap-3">
+                                   <div className="flex-1 pr-4 text-left leading-none text-left text-left text-left w-full">
+                                      <span className="text-[10px] font-black bg-slate-50 text-slate-500 px-3 py-1 rounded-full mb-2 inline-block leading-none text-left text-left text-left text-left">{h.date}</span>
+                                      <p className="font-bold text-slate-500 text-xs leading-snug break-words text-left text-left text-left text-left">{h.memo || "詳細なし"}</p>
+                                   </div>
+                                   <div className="text-blue-600 font-mono font-black text-xl tracking-tighter shrink-0 leading-none self-end sm:self-auto">{formatDuration(h.duration)}</div>
+                                </div>
+                              ))}
+                            </div>
+                         </div>
+                         <button onClick={async () => { if(confirm("削除しますか？")) { try { await deleteDoc(doc(getTasksCol(), task.id)); setTasks(prev => prev.filter(t => t.id !== task.id)); setSelectedTaskId(null); fetchData(true); } catch(e) { alert("失敗"); } } }} className="w-full py-6 text-rose-300 hover:text-rose-500 font-black text-[10px] flex items-center justify-center gap-2 border-2 border-dashed border-rose-50 rounded-2xl transition-all hover:bg-rose-50/50 uppercase tracking-widest mt-10 leading-none text-center">Delete Task Item</button>
+                      </div>
+                    </>
+                  );
+                })()}
+             </div>
+          </div>
+        )}
 
-      <CreateUnitOverlay isOpen={isAddModalOpen} onClose={() => setAddModalOpen(false)} onCreate={addUnitWithPresets} />
-      
-      {detailTaskId && (
-         <TaskDetailModal 
-            task={tasks.find((t: Task) => t.id === detailTaskId)!}
-            onClose={() => setDetailTaskId(null)}
-            updateLocalTask={updateLocalTask}
-            syncTaskToCloud={syncTaskToCloud}
-            onSaveRecord={saveHistoryRecord}
-            onDelete={() => {
-               setConfirmModalData({
-                 title: 'タスクの削除', message: '本当にこのタスクを削除しますか？',
-                 onConfirm: async () => {
-                    setTasks(prev => prev.filter(t => t.id !== detailTaskId));
-                    const dbInstance = getSafeDb();
-                    if(dbInstance && user && !isSampleMode) await deleteDoc(getTaskDoc(dbInstance, detailTaskId));
-                    setDetailTaskId(null);
-                 }
-               });
-            }}
-         />
-      )}
+        {isAddingTest && (
+          <div className={modalOverlayClass}>
+             <div className="bg-white w-full max-w-lg rounded-[2.5rem] shadow-2xl overflow-hidden animate-in zoom-in-95 duration-300 h-[85vh] flex flex-col text-left">
+                <div className="p-6 border-b border-slate-50 flex justify-between items-center bg-slate-50/50 shrink-0 text-left leading-none text-left text-left">
+                   <h3 className="text-lg font-black tracking-tight text-center flex-1 leading-none text-center">成績登録</h3>
+                   <button onClick={() => { setIsAddingTest(false); setEditingTest(null); }} className="p-2 bg-white rounded-xl shadow-sm transition leading-none text-left text-left text-left text-left"><X size={20}/></button>
+                </div>
+                <form onSubmit={handleSaveTest} className="p-6 space-y-6 overflow-y-auto no-scrollbar pb-24 text-left leading-none text-left text-left">
+                   <div className="grid grid-cols-2 gap-4 text-left leading-none text-left text-left text-left">
+                      <div className="text-left leading-none text-left text-left text-left">
+                        <label className="block text-[9px] font-black text-slate-400 uppercase mb-2 leading-none text-left text-left text-left">カテゴリ</label>
+                        <select name="testCategory" defaultValue={editingTest?.category || "school"} className="w-full bg-slate-50 border-none rounded-xl p-3 font-black text-sm shadow-inner appearance-none leading-none"><option value="school">中学校</option><option value="juku">塾</option></select>
+                      </div>
+                      <div className="text-left leading-none text-left text-left text-left">
+                        <label className="block text-[9px] font-black text-slate-400 uppercase mb-2 leading-none text-left text-left text-left">種別</label>
+                        <select name="testSubType" defaultValue={editingTest?.subType || "midterm"} className="w-full bg-slate-50 border-none rounded-xl p-3 font-black text-sm shadow-inner appearance-none leading-none"><option value="midterm">中間</option><option value="final">期末</option><option value="normal">その他</option></select>
+                      </div>
+                   </div>
+                   <div className="grid grid-cols-2 gap-4 text-left leading-none text-left text-left text-left">
+                      <div className="text-left leading-none text-left text-left text-left text-left"><label className="block text-[9px] font-black text-slate-400 uppercase mb-2 leading-none text-left text-left text-left text-left">名称</label><input name="name" required defaultValue={editingTest?.name} placeholder="考査名" className="w-full bg-slate-50 border-none rounded-xl p-3 font-black text-sm shadow-inner leading-none text-left text-left text-left" /></div>
+                      <div className="text-left leading-none text-left text-left text-left text-left text-left"><label className="block text-[9px] font-black text-slate-400 uppercase mb-2 leading-none text-left text-left text-left text-left">日</label><input name="date" type="date" required defaultValue={editingTest?.date} className="w-full bg-slate-50 border-none rounded-xl p-3 font-black text-sm shadow-inner leading-none text-left text-left text-left" /></div>
+                   </div>
+                   <div className="space-y-4 text-left">
+                      <label className="block text-[9px] font-black text-slate-400 uppercase leading-none text-left">点数入力</label>
+                      <div className="grid grid-cols-3 gap-3 text-left">
+                         {[...SUBJECT_DEFS.school, ...SUBJECT_DEFS.juku].map(sub => (
+                           <div key={sub.id} className="bg-slate-50 p-3 rounded-2xl border border-slate-100 shadow-inner text-center leading-none">
+                              <p className="text-[8px] font-black text-slate-400 mb-1 truncate leading-none text-center">{sub.label}</p>
+                              <input name={`score_${sub.id}`} type="number" defaultValue={editingTest?.scores?.[sub.id]} placeholder="0" className="w-full bg-white border-none rounded-lg p-2 font-black text-sm text-center shadow-sm outline-none focus:ring-1 focus:ring-blue-600 leading-none" />
+                           </div>
+                         ))}
+                      </div>
+                   </div>
+                   <div className="grid grid-cols-2 gap-4 border-t border-slate-50 pt-6 text-left">
+                      <div className="text-left"><label className="block text-[9px] font-black text-slate-400 uppercase mb-2 leading-none text-left">平均点</label><input name="average" type="number" step="0.1" defaultValue={editingTest?.average} className="w-full bg-slate-50 border-none rounded-xl p-3 font-black text-sm leading-none" /></div>
+                      <div className="text-left"><label className="block text-[9px] font-black text-slate-400 uppercase mb-2 leading-none text-left">順位</label><input name="rank" defaultValue={editingTest?.rank} placeholder="例: 10位" className="w-full bg-slate-50 border-none rounded-xl p-3 font-black text-sm leading-none" /></div>
+                   </div>
+                   <button type="submit" className="w-full bg-rose-500 text-white font-black py-4 rounded-2xl shadow-xl active:scale-95 transition text-md uppercase leading-none mt-4 text-center">Save</button>
+                </form>
+             </div>
+          </div>
+        )}
 
-      <ConfirmModal 
-        isOpen={!!confirmModalData} 
-        onClose={() => setConfirmModalData(null)} 
-        onConfirm={confirmModalData?.onConfirm || (() => {})} 
-        title={confirmModalData?.title} 
-        message={confirmModalData?.message} 
-      />
+        {/* --- Mobile Nav Bar --- */}
+        <nav className={isMobileView 
+          ? "absolute bottom-0 left-0 right-0 bg-white/90 backdrop-blur-3xl border-t border-slate-100 flex justify-around p-3 pb-8 z-50 rounded-t-[1.75rem] shadow-2xl leading-none text-center" 
+          : "lg:hidden fixed bottom-0 left-0 right-0 bg-white/90 backdrop-blur-3xl border-t border-slate-100 flex justify-around p-3 pb-8 z-50 rounded-t-[1.75rem] shadow-2xl leading-none text-center"
+        }>
+          {[ { id: 'daily', icon: Zap }, { id: 'stats', icon: BarChart2 }, { id: 'tests', icon: TrendingUp } ].map(item => (
+            <button key={item.id} onClick={() => setActiveTab(item.id)} className={`p-4 rounded-2xl transition-all duration-300 leading-none text-center ${activeTab === item.id ? 'bg-blue-600 text-white shadow-xl -translate-y-2 text-center' : 'text-slate-300 text-center'}`}><item.icon size={22} /></button>
+          ))}
+        </nav>
+      </div>
     </div>
   );
 }
