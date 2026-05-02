@@ -45,6 +45,7 @@ if (hasFirebaseConfig) {
 // 1. Type Definitions & Constants
 // ==========================================
 const FAMILY_ID = 'oomine-study-2026';
+// Firestore path: families/{FAMILY_ID}/tasks and families/{FAMILY_ID}/tests
 // Safe DB Wrapper
 const getSafeDb = () => {
     if (!db) {
@@ -688,7 +689,7 @@ const SubjectSection = ({ unit, subject, tasks, cycleStatus, setDetailTaskId, on
                    <h3 className={`font-black text-lg ${conf.color}`}>{conf.label}</h3>
                  </div>
                  <div className="text-[10px] font-bold text-slate-500 font-mono bg-slate-50 px-2 py-0.5 rounded">
-                   計: {Math.floor(totalDuration / 60)}h {totalDuration % 60}m
+                   計: {Math.floor(totalDuration / 3600)}h {Math.floor((totalDuration % 3600) / 60)}m
                  </div>
              </div>
              <div className="flex items-center gap-2">
@@ -808,7 +809,7 @@ const DailyView = ({ tasks, updateLocalTask, syncTaskToCloud, cycleStatus, saveH
                                 <div className={`h-full ${conf.bg}`} style={{ width: `${s.progress}%` }}/>
                              </div>
                              <span className="text-[10px] font-bold text-slate-400 w-12 text-right font-mono">
-                                {Math.floor(s.totalTime / 3600)}h{Math.floor((s.totalTime % 3600) / 60)}
+                                {Math.floor(s.totalTime / 3600)}h{Math.floor((s.totalTime % 3600) / 60)}m
                              </span>
                           </div>);
             })}
