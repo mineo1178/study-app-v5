@@ -45,7 +45,6 @@ if (hasFirebaseConfig) {
 // 1. Type Definitions & Constants
 // ==========================================
 const FAMILY_ID = 'oomine-study-2026';
-// Firestore実データ参照先: families/{FAMILY_ID}/tasks, families/{FAMILY_ID}/tests
 // Safe DB Wrapper
 const getSafeDb = () => {
     if (!db) {
@@ -208,7 +207,7 @@ const INITIAL_TESTS = [
 // ==========================================
 // Strict Anti-Cheat Timer Component
 // ==========================================
-const StrictTimer = React.memo(({ task, updateLocalTask, syncTaskToCloud, onSaveRecord }) => {
+const StrictTimer = React.memo(({ task, updateLocalTask, syncTaskToCloud, onSaveRecord, pauseAllOtherTasks }) => {
     const [localSeconds, setLocalSeconds] = useState(task.currentDuration);
     const [showAutoPauseAlert, setShowAutoPauseAlert] = useState(false);
     const timerRef = useRef(null);
@@ -285,9 +284,11 @@ const StrictTimer = React.memo(({ task, updateLocalTask, syncTaskToCloud, onSave
         document.addEventListener('visibilitychange', handleVis);
         return () => document.removeEventListener('visibilitychange', handleVis);
     }, [task.isRunning, getAccurateSeconds]);
-    const handlePlay = (e) => {
+    const handlePlay = async (e) => {
         e?.stopPropagation();
         lastActive.current = Date.now();
+        // タイマー排他制御：他のタイマーをすべてストップさせる
+        await pauseAllOtherTasks(task.id);
         const startTime = Date.now();
         updateLocalTask(task.id, {
             isRunning: true,
@@ -562,24 +563,33 @@ const TestResultModal = ({ isOpen, onClose, onSave, initialData }) => {
 // Views & Sub-components
 // ==========================================
 const TaskCard = ({ task, cycleStatus, setDetailTaskId }) => {
-    return (<div onClick={() => setDetailTaskId(task.id)} className={`group bg-white rounded-xl p-3 shadow-sm border border-slate-200 transition-all active:scale-[0.98] cursor-pointer flex flex-col gap-2 ${task.status === 'completed' ? 'opacity-60 bg-slate-50' : ''}`}>
-      <div className="flex items-start gap-2">
+    return (<div onClick={() => setDetailTaskId(task.id)} className={`relative group rounded-xl p-3 shadow-sm border transition-all active:scale-[0.98] cursor-pointer flex flex-col gap-2 overflow-hidden ${task.status === 'completed' ? 'opacity-60 bg-slate-50 border-slate-200' :
+            task.isRunning ? 'bg-blue-50/50 border-blue-400 shadow-[0_0_15px_rgba(59,130,246,0.2)] ring-1 ring-blue-400' :
+                'bg-white border-slate-200 hover:border-blue-200'}`}>
+      {task.isRunning && (<>
+          <div className="absolute inset-0 bg-blue-400/10 animate-pulse pointer-events-none"/>
+          <div className="absolute top-0 left-0 bottom-0 w-1.5 bg-blue-500 shadow-[0_0_8px_rgba(59,130,246,0.8)] pointer-events-none"/>
+        </>)}
+      <div className="flex items-start gap-2 relative z-10">
         <button onClick={(e) => { e.stopPropagation(); cycleStatus(task); }} className="p-1 -ml-1 mt-0.5 rounded-full active:scale-90 flex-shrink-0">
           {task.status === 'completed' ? <CheckCircle size={18} className="text-green-500" fill="#f0fdf4"/> : task.status === 'in_progress' ? <Zap size={18} className="text-blue-500" fill="currentColor"/> : <Circle size={18} className="text-slate-200"/>}
         </button>
         <div className="flex-1 min-w-0 pt-0.5">
           <h4 className={`font-bold text-sm text-slate-800 leading-tight ${task.status === 'completed' ? 'line-through text-slate-400' : ''}`}>{task.title}</h4>
           <div className="flex flex-wrap items-center gap-2 mt-1.5">
-             <span className="text-[9px] font-bold text-slate-400 bg-slate-100 px-1.5 py-0.5 rounded flex items-center gap-1">
+             <span className="text-[9px] font-bold text-slate-400 bg-slate-100/80 backdrop-blur-sm px-1.5 py-0.5 rounded flex items-center gap-1">
                <History size={8}/> {task.history.length}回
              </span>
-             {task.currentDuration > 0 && <span className={`text-[9px] font-bold font-mono px-1.5 py-0.5 rounded flex items-center gap-1 ${task.isRunning ? 'bg-blue-100 text-blue-600 animate-pulse' : 'bg-amber-50 text-amber-600'}`}><Clock size={8}/> {formatTime(task.currentDuration)}</span>}
+             {task.currentDuration > 0 && <span className={`text-[9px] font-bold font-mono px-1.5 py-0.5 rounded flex items-center gap-1 backdrop-blur-sm ${task.isRunning ? 'bg-blue-100/80 text-blue-700' : 'bg-amber-50 text-amber-600'}`}><Clock size={8}/> {formatTime(task.currentDuration)}</span>}
+             {task.isRunning && (<span className="text-[9px] font-bold text-white bg-gradient-to-r from-blue-500 to-indigo-500 px-2 py-0.5 rounded shadow-sm flex items-center gap-1 animate-pulse">
+                 <Play size={8} fill="currentColor"/> 計測中
+               </span>)}
           </div>
         </div>
       </div>
     </div>);
 };
-const TaskDetailModal = ({ task, onClose, updateLocalTask, syncTaskToCloud, onSaveRecord, onDelete }) => {
+const TaskDetailModal = ({ task, onClose, updateLocalTask, syncTaskToCloud, onSaveRecord, onDelete, pauseAllOtherTasks }) => {
     if (!task)
         return null;
     const conf = SUBJECT_CONFIG[task.subject];
@@ -615,7 +625,7 @@ const TaskDetailModal = ({ task, onClose, updateLocalTask, syncTaskToCloud, onSa
 
           <div className="space-y-2 bg-white p-4 rounded-2xl border border-slate-200 shadow-sm">
             <label className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1"><Clock size={12}/> 計測タイマー (不正防止対応)</label>
-            <StrictTimer task={task} updateLocalTask={updateLocalTask} syncTaskToCloud={syncTaskToCloud} onSaveRecord={onSaveRecord}/>
+            <StrictTimer task={task} updateLocalTask={updateLocalTask} syncTaskToCloud={syncTaskToCloud} onSaveRecord={onSaveRecord} pauseAllOtherTasks={pauseAllOtherTasks}/>
           </div>
 
           <div className="space-y-2">
@@ -713,7 +723,7 @@ const SubjectSection = ({ unit, subject, tasks, cycleStatus, setDetailTaskId, on
        <AddCustomTaskModal isOpen={isAddModalOpen} onClose={() => setAddModalOpen(false)} unit={unit} subject={subject} onAdd={(title, category) => onAddCustomTask(unit, subject, title, category)}/>
     </div>);
 };
-const DailyView = ({ tasks, updateLocalTask, syncTaskToCloud, cycleStatus, saveHistoryRecord, deleteUnitTasks, setAddModalOpen, selectedUnit, setSelectedUnit, unitsWithTasks, onAddCustomTask, setDetailTaskId, setDeleteConfirmation }) => {
+const DailyView = ({ tasks, updateLocalTask, syncTaskToCloud, cycleStatus, saveHistoryRecord, deleteUnitTasks, setAddModalOpen, selectedUnit, setSelectedUnit, unitsWithTasks, onAddCustomTask, setDetailTaskId, setDeleteConfirmation, pauseAllOtherTasks }) => {
     const getStats = (targetTasks) => {
         if (targetTasks.length === 0)
             return { progress: 0, totalTime: 0 };
@@ -1330,6 +1340,7 @@ export default function App() {
     };
     // ==========================================
     const cycleStatus = (task) => {
+        // ローカルのみ更新
         const next = task.status === 'not_started' ? 'in_progress' : task.status === 'in_progress' ? 'completed' : 'not_started';
         updateLocalTask(task.id, { status: next, lastUpdatedAt: Date.now() });
     };
@@ -1361,6 +1372,50 @@ export default function App() {
         }
         setDetailTaskId(null);
     };
+    // タイマー排他制御：指定したタスク以外の稼働中タスクをすべてストップさせる
+    const pauseAllOtherTasks = useCallback(async (currentTaskId) => {
+        const now = Date.now();
+        let tasksToPause = [];
+        setTasks(prev => {
+            tasksToPause = prev.filter(t => t.isRunning && t.id !== currentTaskId);
+            if (tasksToPause.length === 0)
+                return prev;
+            return prev.map(t => {
+                if (t.isRunning && t.id !== currentTaskId) {
+                    const elapsed = t.sessionStartTime ? Math.floor((now - t.sessionStartTime) / 1000) : 0;
+                    return {
+                        ...t,
+                        isRunning: false,
+                        currentDuration: t.currentDuration + elapsed,
+                        sessionStartTime: null,
+                        lastUpdatedAt: now
+                    };
+                }
+                return t;
+            });
+        });
+        if (tasksToPause.length > 0) {
+            const dbInstance = getSafeDb();
+            if (dbInstance && auth?.currentUser && !isSampleMode) {
+                try {
+                    const batch = writeBatch(dbInstance);
+                    tasksToPause.forEach(t => {
+                        const elapsed = t.sessionStartTime ? Math.floor((now - t.sessionStartTime) / 1000) : 0;
+                        batch.update(getTaskDoc(dbInstance, t.id), {
+                            isRunning: false,
+                            currentDuration: t.currentDuration + elapsed,
+                            sessionStartTime: null,
+                            lastUpdatedAt: now
+                        });
+                    });
+                    await batch.commit();
+                }
+                catch (e) {
+                    console.error("Batch update failed", e);
+                }
+            }
+        }
+    }, [isSampleMode]);
     const addUnitWithPresets = async (unitNumber) => {
         const unitName = `第${unitNumber}回`;
         const newTasks = [];
@@ -1479,7 +1534,7 @@ export default function App() {
                             await deleteDoc(getTaskDoc(dbInstance, id));
                     }
                 });
-            }} setAddModalOpen={setAddModalOpen} selectedUnit={selectedUnit} setSelectedUnit={setSelectedUnit} unitsWithTasks={unitsWithTasks} onAddCustomTask={onAddCustomTask} setDetailTaskId={setDetailTaskId} setDeleteConfirmation={setConfirmModalData}/>) : activeTab === 'tests' ? (<TestsView tests={tests} onSaveTest={saveTestToCloud} onDeleteTest={deleteTestFromCloud}/>) : (<AchievementsView tasks={tasks}/>)}
+            }} setAddModalOpen={setAddModalOpen} selectedUnit={selectedUnit} setSelectedUnit={setSelectedUnit} unitsWithTasks={unitsWithTasks} onAddCustomTask={onAddCustomTask} setDetailTaskId={setDetailTaskId} setDeleteConfirmation={setConfirmModalData} pauseAllOtherTasks={pauseAllOtherTasks}/>) : activeTab === 'tests' ? (<TestsView tests={tests} onSaveTest={saveTestToCloud} onDeleteTest={deleteTestFromCloud}/>) : (<AchievementsView tasks={tasks}/>)}
       </main>
 
       <nav className="bg-white/90 backdrop-blur-lg border-t border-slate-100 fixed bottom-0 left-0 right-0 z-40 pb-6 max-w-md mx-auto rounded-t-3xl shadow-[0_-10px_30px_rgba(0,0,0,0.04)]">
@@ -1509,7 +1564,7 @@ export default function App() {
                         setDetailTaskId(null);
                     }
                 });
-            }}/>)}
+            }} pauseAllOtherTasks={pauseAllOtherTasks}/>)}
 
       <ConfirmModal isOpen={!!confirmModalData} onClose={() => setConfirmModalData(null)} onConfirm={confirmModalData?.onConfirm || (() => { })} title={confirmModalData?.title} message={confirmModalData?.message}/>
     </div>);
