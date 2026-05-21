@@ -1241,7 +1241,7 @@ const AchievementsView = ({ tasks }: { tasks: Task[] }) => {
        </div>
 
        <div className="flex-1 overflow-y-auto px-3 py-4 md:px-6 md:py-6 lg:px-8 lg:py-8 space-y-4 md:space-y-6 lg:space-y-8 pb-20 md:pb-32">
-          <div className="bg-white p-3 md:p-5 lg:p-6 rounded-2xl md:rounded-3xl shadow-sm border border-slate-200 h-56 md:h-80 lg:h-[28rem] shrink-0">
+          <div className="bg-white p-3 md:p-5 lg:p-6 rounded-2xl md:rounded-3xl shadow-sm border border-slate-200 h-52 md:h-80 lg:h-[28rem] shrink-0">
              <h3 className="text-[10px] md:text-sm lg:text-base font-bold text-slate-500 mb-1 md:mb-3 flex items-center gap-1 md:gap-1.5"><BarChart2 className="w-3 h-3 md:w-4 md:h-4 lg:w-5 lg:h-5"/> 学習時間 (分)</h3>
              <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={chartData} margin={{ top: 5, right: 5, left: -25, bottom: 0 }}>
@@ -1723,7 +1723,7 @@ export default function App() {
   }
 
   return (
-    <div className="flex flex-col h-screen w-full bg-slate-50 font-sans text-slate-900 max-w-md md:max-w-2xl lg:max-w-4xl xl:max-w-[1600px] mx-auto shadow-2xl overflow-hidden relative">
+    <div className="flex flex-col h-screen w-full bg-slate-50 font-sans text-slate-900 max-w-[1600px] mx-auto shadow-2xl overflow-x-hidden relative">
       {isSampleMode && (
         <div className="bg-amber-100 text-amber-800 text-[10px] md:text-xs lg:text-sm font-bold text-center py-1 md:py-2 flex items-center justify-center gap-1.5 z-40 relative">
           <AlertTriangle className="w-3 h-3 md:w-4 md:h-4 lg:w-5 lg:h-5" />
@@ -1810,7 +1810,7 @@ export default function App() {
         )}
       </main>
 
-      <nav className="bg-white/90 backdrop-blur-lg border-t border-slate-100 fixed bottom-0 left-0 right-0 z-40 pb-6 md:pb-8 lg:pb-8 max-w-md md:max-w-2xl lg:max-w-4xl xl:max-w-[1600px] mx-auto rounded-t-3xl md:rounded-t-[2rem] shadow-[0_-10px_30px_rgba(0,0,0,0.04)]">
+      <nav className="bg-white/90 backdrop-blur-lg border-t border-slate-100 fixed bottom-0 left-0 right-0 z-40 pb-6 md:pb-8 lg:pb-8 w-full max-w-[1600px] mx-auto rounded-t-3xl md:rounded-t-[2rem] shadow-[0_-10px_30px_rgba(0,0,0,0.04)]">
         <div className="h-16 md:h-20 lg:h-24 flex justify-around items-center px-2 md:px-6 lg:px-10">
           <button onClick={() => setActiveTab('daily')} className={`flex-1 flex flex-col items-center justify-center h-full space-y-1 md:space-y-2 transition-all duration-300 ${activeTab === 'daily' ? 'text-blue-600 -translate-y-1 md:-translate-y-2' : 'text-slate-400 hover:text-slate-500'}`}>
             <div className={`p-1.5 md:p-3 rounded-xl md:rounded-2xl ${activeTab === 'daily' ? 'bg-blue-50' : ''}`}><FileText className="w-[22px] h-[22px] md:w-6 md:h-6 lg:w-7 lg:h-7" strokeWidth={activeTab === 'daily' ? 2.5 : 2} fill={activeTab === 'daily' ? "currentColor" : "none"} /></div><span className="text-[10px] md:text-sm lg:text-base font-bold">学習</span>
