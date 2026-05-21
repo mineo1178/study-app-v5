@@ -10,7 +10,8 @@ import {
   CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine 
 } from 'recharts';
 import { initializeApp } from 'firebase/app';
-import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, signOut, User } from 'firebase/auth';
+import { getAuth, signInWithEmailAndPassword, onAuthStateChanged, signOut } from 'firebase/auth';
+import type { User } from 'firebase/auth';
 import { 
   getFirestore, collection, doc, setDoc, getDocs, updateDoc, deleteDoc, 
   serverTimestamp, writeBatch, query
@@ -512,7 +513,7 @@ const CreateUnitOverlay = ({ isOpen, onClose, onCreate }: { isOpen: boolean; onC
   );
 };
 
-const AddCustomTaskModal = ({ isOpen, onClose, onAdd, unit, subject }: any) => {
+const AddCustomTaskModal = ({ isOpen, onClose, onAdd }: any) => {
   const [title, setTitle] = useState('');
   const [category, setCategory] = useState('予習シリーズ');
   if (!isOpen) return null;
@@ -675,7 +676,7 @@ const TaskCard = ({ task, cycleStatus, setDetailTaskId }: any) => {
       className={`relative group rounded-xl md:rounded-2xl p-3 md:p-4 lg:p-5 shadow-sm border transition-all active:scale-[0.98] cursor-pointer flex flex-col gap-2 md:gap-3 overflow-hidden ${
         task.status === 'completed' ? 'opacity-60 bg-slate-50 border-slate-200' : 
         task.isRunning ? 'bg-blue-50/50 border-blue-400 shadow-[0_0_15px_rgba(59,130,246,0.2)] ring-1 ring-blue-400' : 
-        'bg-white border-slate-200 hover:border-blue-200'
+        'bg-white border-slate-200 hover:border-blue-200 hover:-translate-y-0.5 hover:shadow-md'
       }`}
     >
       {task.isRunning && (
@@ -866,7 +867,7 @@ const SubjectSection = ({ unit, subject, tasks, cycleStatus, setDetailTaskId, on
            Object.keys(tasksByCategory).map(cat => (
               <div key={cat} className="pl-3 md:pl-4 lg:pl-5">
                  <h4 className="text-[10px] md:text-[11px] lg:text-xs font-bold text-slate-400 mb-2 md:mb-3">{cat}</h4>
-                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2 md:gap-3 lg:gap-4">
+                 <div className="grid grid-cols-1 md:grid-cols-2 2xl:grid-cols-3 gap-3 md:gap-4 lg:gap-5">
                    {tasksByCategory[cat].map((task: Task) => (
                       <TaskCard 
                         key={task.id} task={task} 
@@ -889,8 +890,8 @@ const SubjectSection = ({ unit, subject, tasks, cycleStatus, setDetailTaskId, on
 };
 
 const DailyView = ({ 
-  tasks, updateLocalTask, syncTaskToCloud, cycleStatus, saveHistoryRecord, deleteUnitTasks,
-  setAddModalOpen, selectedUnit, setSelectedUnit, unitsWithTasks, onAddCustomTask, setDetailTaskId, setDeleteConfirmation, pauseAllOtherTasks
+  tasks, cycleStatus, deleteUnitTasks,
+  setAddModalOpen, selectedUnit, setSelectedUnit, unitsWithTasks, onAddCustomTask, setDetailTaskId, setDeleteConfirmation
 }: any) => {
 
   const getStats = (targetTasks: Task[]) => {
@@ -911,7 +912,7 @@ const DailyView = ({
 
   return (
     <div className="flex flex-col h-full">
-      <div className="sticky top-0 z-20 px-4 py-3 md:px-6 md:py-4 lg:px-8 lg:py-5 bg-slate-50 border-b border-slate-200">
+      <div className="sticky top-0 z-20 px-4 py-3 md:px-6 md:py-4 lg:px-8 lg:py-5 bg-white/80 backdrop-blur-md border-b border-slate-200">
         <div className="flex gap-2 md:gap-3">
           <button onClick={() => setSelectedUnit(null)} className={`px-4 py-2.5 md:px-5 md:py-3 lg:px-6 lg:py-3.5 rounded-xl md:rounded-2xl font-bold text-xs md:text-sm lg:text-base flex items-center justify-center transition-all ${!selectedUnit ? 'bg-slate-800 text-white shadow-md' : 'bg-white text-slate-500 border border-slate-200'}`}>
             <LayoutDashboard className="mr-1.5 w-[14px] h-[14px] md:w-4 md:h-4 lg:w-5 lg:h-5 lg:mr-2"/> 全体
@@ -970,7 +971,7 @@ const DailyView = ({
           </div>
         ) : (
           <div className="space-y-5 md:space-y-7 animate-in fade-in">
-              <div className="bg-white rounded-3xl p-5 md:p-7 lg:p-8 shadow-sm border border-slate-200">
+              <div className="bg-white rounded-3xl p-5 md:p-7 lg:p-8 shadow-md border border-slate-200">
                  <h2 className="text-sm md:text-base lg:text-lg font-black text-slate-800 mb-3 md:mb-5 flex items-center gap-1.5 md:gap-2"><Award className="text-blue-500 w-4 h-4 md:w-5 md:h-5 lg:w-6 lg:h-6" /> 全期間サマリー</h2>
                  <div className="flex justify-between items-end mb-4 md:mb-6 pb-4 md:pb-6 border-b border-slate-100">
                      <div>
