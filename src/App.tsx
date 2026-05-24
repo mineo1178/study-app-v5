@@ -1011,9 +1011,15 @@ const ActiveStudyTimerPanel = ({ tasks }: { tasks: Task[] }) => {
 };
 
 const TodayStudyTimeline = ({ tasks }: { tasks: Task[] }) => {
-  const now = Date.now();
+  const [now, setNow] = useState(Date.now());
+  const [showDetails, setShowDetails] = useState(false);
   const todayLabel = new Date().toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric' });
   const todayAltLabel = `${new Date().getMonth() + 1}/${new Date().getDate()}`;
+
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
 
   const sessions = useMemo<TodayTimelineSession[]>(() => {
     const list: TodayTimelineSession[] = [];
@@ -1039,7 +1045,7 @@ const TodayStudyTimeline = ({ tasks }: { tasks: Task[] }) => {
       });
 
       if (task.isRunning && task.sessionStartTime) {
-        const runningDuration = task.currentDuration + Math.floor((Date.now() - task.sessionStartTime) / 1000);
+        const runningDuration = task.currentDuration + Math.floor((now - task.sessionStartTime) / 1000);
         list.push({
           id: `${task.id}-running`,
           subject: task.subject,
@@ -1048,7 +1054,7 @@ const TodayStudyTimeline = ({ tasks }: { tasks: Task[] }) => {
           category: task.category,
           duration: runningDuration,
           startAt: task.sessionStartTime,
-          endAt: Date.now(),
+          endAt: now,
           isRunning: true,
         });
       }
@@ -1070,28 +1076,32 @@ const TodayStudyTimeline = ({ tasks }: { tasks: Task[] }) => {
 
     const minStart = Math.min(...sessions.map(s => s.startAt));
     const maxEnd = Math.max(...sessions.map(s => s.endAt));
-    const startDate = new Date(minStart - 30 * 60 * 1000);
-    startDate.setMinutes(0, 0, 0);
-    const endDate = new Date(maxEnd + 30 * 60 * 1000);
-    endDate.setMinutes(0, 0, 0);
-    endDate.setHours(endDate.getHours() + 1);
 
-    if (endDate.getTime() - startDate.getTime() < 60 * 60 * 1000) {
-      endDate.setHours(startDate.getHours() + 1);
+    // 横軸は「最初に勉強した時刻」から「最後に勉強した時刻」までに合わせる。
+    // ただし同一時刻に近い短時間記録でも描画が潰れないよう、表示上だけ最低10分幅を確保する。
+    if (maxEnd - minStart < 10 * 60 * 1000) {
+      return { start: minStart, end: minStart + 10 * 60 * 1000 };
     }
 
-    return { start: startDate.getTime(), end: endDate.getTime() };
+    return { start: minStart, end: maxEnd };
   }, [sessions]);
 
-  const hourLabels = useMemo(() => {
-    const labels: number[] = [];
-    const startHour = new Date(range.start);
-    startHour.setMinutes(0, 0, 0);
-    for (let t = startHour.getTime(); t <= range.end; t += 60 * 60 * 1000) {
-      labels.push(t);
+  const axisLabels = useMemo(() => {
+    if (sessions.length === 0) {
+      return [range.start, range.end];
     }
-    return labels;
-  }, [range]);
+
+    const span = range.end - range.start;
+    const labels = [range.start];
+
+    if (span >= 45 * 60 * 1000) {
+      labels.push(range.start + span / 2);
+    }
+
+    labels.push(range.end);
+
+    return labels.filter((time, index, arr) => index === 0 || Math.abs(time - arr[index - 1]) > 60 * 1000);
+  }, [range, sessions.length]);
 
   const formatClock = (time: number) => {
     const d = new Date(time);
@@ -1103,19 +1113,21 @@ const TodayStudyTimeline = ({ tasks }: { tasks: Task[] }) => {
     sessions: sessions.filter(s => s.subject === subject),
   }));
 
+  const getLeftPercent = (time: number) => ((time - range.start) / Math.max(1, range.end - range.start)) * 100;
+
   return (
-    <div className="bg-white rounded-3xl p-5 md:p-7 lg:p-8 shadow-md border border-slate-200">
-      <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-3 md:gap-4 mb-5 md:mb-6">
-        <div>
+    <div className="bg-white rounded-3xl p-4 md:p-7 lg:p-8 shadow-md border border-slate-200 overflow-hidden">
+      <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3 md:gap-4 mb-5 md:mb-6 min-w-0">
+        <div className="min-w-0">
           <h2 className="text-sm md:text-base lg:text-lg font-black text-slate-800 flex items-center gap-1.5 md:gap-2">
-            <Clock className="text-blue-500 w-4 h-4 md:w-5 md:h-5 lg:w-6 lg:h-6" />
+            <Clock className="text-blue-500 w-4 h-4 md:w-5 md:h-5 lg:w-6 lg:h-6 shrink-0" />
             今日の学習タイムライン
           </h2>
           <p className="text-[10px] md:text-xs lg:text-sm font-bold text-slate-400 mt-1">
             何時にどの教科を勉強したかを表示します
           </p>
         </div>
-        <div className="bg-blue-50 border border-blue-100 rounded-2xl px-4 py-3 text-right">
+        <div className="bg-blue-50 border border-blue-100 rounded-2xl px-4 py-3 text-right shrink-0 self-start sm:self-auto">
           <div className="text-[10px] md:text-xs font-bold text-blue-400 mb-0.5">本日の総勉強時間</div>
           <div className="text-2xl md:text-3xl lg:text-4xl font-black text-blue-600 font-mono">
             {Math.floor(totalSeconds / 3600)}<span className="text-xs md:text-sm text-blue-300 mx-0.5">h</span>
@@ -1130,57 +1142,70 @@ const TodayStudyTimeline = ({ tasks }: { tasks: Task[] }) => {
           <div className="text-[10px] md:text-xs text-slate-300 mt-1">タイマーで記録を保存すると、ここに時間帯が表示されます</div>
         </div>
       ) : (
-        <div className="overflow-x-auto pb-2">
-          <div className="min-w-[680px]">
-            <div className="ml-12 md:ml-14 relative h-7 border-b border-slate-200">
-              {hourLabels.map((t) => {
-                const left = ((t - range.start) / (range.end - range.start)) * 100;
-                return (
-                  <div key={t} className="absolute top-0 -translate-x-1/2 text-[10px] md:text-xs font-bold text-slate-400" style={{ left: `${left}%` }}>
-                    {new Date(t).getHours()}時
-                  </div>
-                );
-              })}
-            </div>
+        <div className="min-w-0">
+          <div className="ml-8 md:ml-12 relative h-8 border-b border-slate-200 min-w-0">
+            {axisLabels.map((t, idx) => {
+              const left = getLeftPercent(t);
+              const alignClass = idx === 0 ? 'translate-x-0 text-left' : idx === axisLabels.length - 1 ? '-translate-x-full text-right' : '-translate-x-1/2 text-center';
+              return (
+                <div key={`${t}-${idx}`} className={`absolute top-0 text-[9px] md:text-xs font-bold text-slate-400 whitespace-nowrap ${alignClass}`} style={{ left: `${left}%` }}>
+                  {formatClock(t)}
+                </div>
+              );
+            })}
+          </div>
 
-            <div className="space-y-3 mt-3">
-              {groupedSessions.map(({ subject, sessions: subjectSessions }) => {
-                const conf = SUBJECT_CONFIG[subject];
-                return (
-                  <div key={subject} className="flex items-center gap-3">
-                    <div className={`w-9 md:w-11 text-xs md:text-sm font-black text-center ${conf.color}`}>{conf.short}</div>
-                    <div className="relative flex-1 h-10 md:h-12 bg-slate-50 rounded-xl border border-slate-100 overflow-hidden">
-                      {hourLabels.map((t) => {
-                        const left = ((t - range.start) / (range.end - range.start)) * 100;
-                        return <div key={t} className="absolute top-0 bottom-0 w-px bg-slate-200/70" style={{ left: `${left}%` }} />;
-                      })}
-                      {subjectSessions.map((s) => {
-                        const left = Math.max(0, ((s.startAt - range.start) / (range.end - range.start)) * 100);
-                        const width = Math.max(2.5, ((s.endAt - s.startAt) / (range.end - range.start)) * 100);
-                        return (
-                          <div
-                            key={s.id}
-                            className={`absolute top-1.5 bottom-1.5 ${conf.bg} text-white rounded-lg shadow-sm px-2 flex items-center overflow-hidden ${s.isRunning ? 'animate-pulse ring-2 ring-blue-200' : ''}`}
-                            style={{ left: `${left}%`, width: `${Math.min(width, 100 - left)}%` }}
-                            title={`${conf.label} ${s.unit} ${s.title} ${formatClock(s.startAt)}-${formatClock(s.endAt)} ${formatTime(s.duration)}`}
-                          >
-                            <span className="text-[10px] md:text-xs font-black truncate">
-                              {formatClock(s.startAt)} {s.title} {s.isRunning ? '計測中' : ''}
-                            </span>
-                          </div>
-                        );
-                      })}
-                    </div>
+          <div className="space-y-2.5 md:space-y-3 mt-3 min-w-0">
+            {groupedSessions.map(({ subject, sessions: subjectSessions }) => {
+              const conf = SUBJECT_CONFIG[subject];
+              return (
+                <div key={subject} className="flex items-center gap-2 md:gap-3 min-w-0">
+                  <div className={`w-6 md:w-9 text-xs md:text-sm font-black text-center shrink-0 ${conf.color}`}>{conf.short}</div>
+                  <div className="relative flex-1 min-w-0 h-9 md:h-12 bg-slate-50 rounded-xl border border-slate-100 overflow-hidden">
+                    {axisLabels.map((t, idx) => {
+                      const left = getLeftPercent(t);
+                      return <div key={`${t}-${idx}-grid`} className="absolute top-0 bottom-0 w-px bg-slate-200/70" style={{ left: `${left}%` }} />;
+                    })}
+                    {subjectSessions.map((s) => {
+                      const left = Math.max(0, Math.min(99, getLeftPercent(s.startAt)));
+                      const rawWidth = ((s.endAt - s.startAt) / Math.max(1, range.end - range.start)) * 100;
+                      const width = Math.min(Math.max(3, rawWidth), Math.max(1, 100 - left));
+                      return (
+                        <div
+                          key={s.id}
+                          className={`absolute top-1.5 bottom-1.5 ${conf.bg} text-white rounded-lg shadow-sm px-1.5 md:px-2 flex items-center overflow-hidden ${s.isRunning ? 'animate-pulse ring-2 ring-blue-200' : ''}`}
+                          style={{ left: `${left}%`, width: `${width}%` }}
+                          title={`${conf.label} ${s.unit} ${s.title} ${formatClock(s.startAt)}-${formatClock(s.endAt)} ${formatTime(s.duration)}`}
+                        >
+                          <span className="text-[9px] md:text-xs font-black truncate">
+                            {formatClock(s.startAt)} {s.isRunning ? '計測中' : s.title}
+                          </span>
+                        </div>
+                      );
+                    })}
                   </div>
-                );
-              })}
-            </div>
+                </div>
+              );
+            })}
+          </div>
 
-            <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-2">
+          <div className="mt-4 flex justify-end">
+            <button
+              type="button"
+              onClick={() => setShowDetails(prev => !prev)}
+              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[10px] md:text-xs font-black text-slate-500 active:scale-95 transition-all hover:bg-slate-100"
+            >
+              <ChevronDown className={`w-3.5 h-3.5 md:w-4 md:h-4 transition-transform ${showDetails ? 'rotate-180' : ''}`} />
+              {showDetails ? '詳細を閉じる' : `詳細を表示（${sessions.length}件）`}
+            </button>
+          </div>
+
+          {showDetails && (
+            <div className="mt-3 grid grid-cols-1 md:grid-cols-2 gap-2">
               {sessions.map((s) => {
                 const conf = SUBJECT_CONFIG[s.subject];
                 return (
-                  <div key={`detail-${s.id}`} className="flex items-center justify-between gap-3 bg-slate-50 rounded-xl px-3 py-2 border border-slate-100">
+                  <div key={`detail-${s.id}`} className="flex items-center justify-between gap-3 bg-slate-50 rounded-xl px-3 py-2 border border-slate-100 min-w-0">
                     <div className="min-w-0 flex items-center gap-2">
                       <span className={`shrink-0 text-[10px] font-black text-white ${conf.bg} rounded px-1.5 py-0.5`}>{conf.short}</span>
                       <span className="truncate text-xs md:text-sm font-bold text-slate-700">{s.unit} / {s.title}</span>
@@ -1192,13 +1217,12 @@ const TodayStudyTimeline = ({ tasks }: { tasks: Task[] }) => {
                 );
               })}
             </div>
-          </div>
+          )}
         </div>
       )}
     </div>
   );
 };
-
 
 const DailyView = ({ 
   tasks, cycleStatus, deleteUnitTasks,
