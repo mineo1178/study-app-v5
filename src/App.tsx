@@ -1663,6 +1663,16 @@ const TodayStudyTimeline = ({ tasks }: { tasks: Task[] }) => {
     return () => clearInterval(timer);
   }, []);
 
+  const activeRunningTask = useMemo(() => {
+    return [...tasks]
+      .filter((task: Task) => task.isRunning && task.sessionStartTime)
+      .sort(
+        (a: Task, b: Task) =>
+          (b.lastUpdatedAt || b.sessionStartTime || 0) -
+          (a.lastUpdatedAt || a.sessionStartTime || 0),
+      )[0];
+  }, [tasks]);
+
   const sessions = useMemo<TodayTimelineSession[]>(() => {
     const list: TodayTimelineSession[] = [];
 
@@ -1689,7 +1699,7 @@ const TodayStudyTimeline = ({ tasks }: { tasks: Task[] }) => {
         });
       });
 
-      if (task.isRunning && task.sessionStartTime) {
+      if (activeRunningTask?.id === task.id && task.sessionStartTime) {
         const runningDuration =
           task.currentDuration +
           Math.floor((now - task.sessionStartTime) / 1000);
@@ -1708,7 +1718,7 @@ const TodayStudyTimeline = ({ tasks }: { tasks: Task[] }) => {
     });
 
     return list.sort((a, b) => a.startAt - b.startAt);
-  }, [tasks, todayLabel, todayAltLabel, now]);
+  }, [tasks, todayLabel, todayAltLabel, now, activeRunningTask?.id]);
 
   const displaySessions = useMemo<TodayTimelineSession[]>(() => {
     // 既存バグや同期遅延で複数教科のrunning履歴が重なった場合でも、
@@ -1786,30 +1796,49 @@ const TodayStudyTimeline = ({ tasks }: { tasks: Task[] }) => {
   const totalSeconds = displaySessions.reduce((sum, s) => sum + s.duration, 0);
 
   const range = useMemo(() => {
+    const minute = 60 * 1000;
+    const pickStep = (span: number) => {
+      const steps = [5, 10, 30, 60].map((m) => m * minute);
+      return steps.find((candidate) => span / candidate <= 6) || steps[steps.length - 1];
+    };
+    const floorToStep = (value: number, step: number) =>
+      Math.floor(value / step) * step;
+    const ceilToStep = (value: number, step: number) =>
+      Math.ceil(value / step) * step;
+
     if (displaySessions.length === 0) {
       const base = new Date();
       base.setHours(6, 0, 0, 0);
       const end = new Date(base);
       end.setHours(22, 0, 0, 0);
-      return { start: base.getTime(), end: end.getTime() };
+      const step = 60 * minute;
+      return { start: base.getTime(), end: end.getTime(), step };
     }
 
     const minStart = Math.min(...displaySessions.map((s) => s.startAt));
     const maxEnd = Math.max(...displaySessions.map((s) => s.endAt));
     const studiedSpan = Math.max(1, maxEnd - minStart);
 
-    // 横軸は実際の勉強時間に合わせつつ、前後に少し余白を持たせる。
-    // 短時間の記録でもバーが潰れないよう、最低20分の表示幅を確保する。
-    const axisPadding = Math.max(5 * 60 * 1000, Math.min(15 * 60 * 1000, studiedSpan * 0.12));
-    const minAxisSpan = 20 * 60 * 1000;
-    let axisStart = minStart - axisPadding;
-    let axisEnd = maxEnd + axisPadding;
+    // 実績の前後に余白を持たせ、時刻目盛りは 5/10/30/60分単位のキリの良い時刻に揃える。
+    const rawPadding = Math.max(5 * minute, Math.min(15 * minute, studiedSpan * 0.15));
+    const minAxisSpan = 20 * minute;
+    let rawStart = minStart - rawPadding;
+    let rawEnd = maxEnd + rawPadding;
 
-    if (axisEnd - axisStart < minAxisSpan) {
+    if (rawEnd - rawStart < minAxisSpan) {
       const center = (minStart + maxEnd) / 2;
-      axisStart = center - minAxisSpan / 2;
-      axisEnd = center + minAxisSpan / 2;
+      rawStart = center - minAxisSpan / 2;
+      rawEnd = center + minAxisSpan / 2;
     }
+
+    let step = pickStep(rawEnd - rawStart);
+    let axisStart = floorToStep(rawStart, step);
+    let axisEnd = ceilToStep(rawEnd, step);
+
+    // 丸めた結果で目盛りが多すぎる場合は、もう一段粗い刻みにする。
+    step = pickStep(axisEnd - axisStart);
+    axisStart = floorToStep(rawStart, step);
+    axisEnd = ceilToStep(rawEnd, step);
 
     const dayStart = new Date(minStart);
     dayStart.setHours(0, 0, 0, 0);
@@ -1820,38 +1849,24 @@ const TodayStudyTimeline = ({ tasks }: { tasks: Task[] }) => {
     axisEnd = Math.min(dayEnd.getTime(), axisEnd);
 
     if (axisEnd - axisStart < minAxisSpan) {
-      axisEnd = Math.min(dayEnd.getTime(), axisStart + minAxisSpan);
-      axisStart = Math.max(dayStart.getTime(), axisEnd - minAxisSpan);
+      axisEnd = Math.min(dayEnd.getTime(), ceilToStep(axisStart + minAxisSpan, step));
+      axisStart = Math.max(dayStart.getTime(), floorToStep(axisEnd - minAxisSpan, step));
     }
 
-    return { start: axisStart, end: axisEnd };
+    return { start: axisStart, end: axisEnd, step };
   }, [displaySessions]);
 
   const axisLabels = useMemo(() => {
-    const span = Math.max(1, range.end - range.start);
-    const minute = 60 * 1000;
-    const niceSteps = [5, 10, 15, 30, 60, 120, 180].map((m) => m * minute);
-    const targetTickCount = 5;
-    const step =
-      niceSteps.find((candidate) => span / candidate <= targetTickCount) ||
-      niceSteps[niceSteps.length - 1];
-
     const labels: number[] = [];
-    const firstTick = Math.ceil(range.start / step) * step;
-
-    labels.push(range.start);
-    for (let t = firstTick; t < range.end; t += step) {
-      if (t - labels[labels.length - 1] >= 3 * minute) {
-        labels.push(t);
-      }
+    for (let t = range.start; t <= range.end; t += range.step) {
+      labels.push(t);
     }
-    if (range.end - labels[labels.length - 1] >= 3 * minute) {
+    if (labels.length === 0 || labels[labels.length - 1] !== range.end) {
       labels.push(range.end);
-    } else {
-      labels[labels.length - 1] = range.end;
     }
-
-    return labels;
+    return labels.filter(
+      (time, index, arr) => index === 0 || time - arr[index - 1] >= 60 * 1000,
+    );
   }, [range]);
 
   const formatClock = (time: number) => {
@@ -1910,27 +1925,6 @@ const TodayStudyTimeline = ({ tasks }: { tasks: Task[] }) => {
         </div>
       ) : (
         <div className="min-w-0">
-          <div className="ml-8 md:ml-12 relative h-8 border-b border-slate-200 min-w-0">
-            {axisLabels.map((t, idx) => {
-              const left = getLeftPercent(t);
-              const alignClass =
-                idx === 0
-                  ? "translate-x-0 text-left"
-                  : idx === axisLabels.length - 1
-                    ? "-translate-x-full text-right"
-                    : "-translate-x-1/2 text-center";
-              return (
-                <div
-                  key={`${t}-${idx}`}
-                  className={`absolute top-0 text-[9px] md:text-xs font-bold text-slate-400 whitespace-nowrap ${alignClass}`}
-                  style={{ left: `${left}%` }}
-                >
-                  {formatClock(t)}
-                </div>
-              );
-            })}
-          </div>
-
           <div className="space-y-2.5 md:space-y-3 mt-3 min-w-0">
             {groupedSessions.map(({ subject, sessions: subjectSessions }) => {
               const conf = SUBJECT_CONFIG[subject];
@@ -1983,6 +1977,27 @@ const TodayStudyTimeline = ({ tasks }: { tasks: Task[] }) => {
                       );
                     })}
                   </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="ml-8 md:ml-12 relative h-7 border-t border-slate-200 mt-3 min-w-0">
+            {axisLabels.map((t, idx) => {
+              const left = getLeftPercent(t);
+              const alignClass =
+                idx === 0
+                  ? "translate-x-0 text-left"
+                  : idx === axisLabels.length - 1
+                    ? "-translate-x-full text-right"
+                    : "-translate-x-1/2 text-center";
+              return (
+                <div
+                  key={`${t}-${idx}-bottom`}
+                  className={`absolute top-1.5 text-[9px] md:text-xs font-bold text-slate-400 whitespace-nowrap ${alignClass}`}
+                  style={{ left: `${left}%` }}
+                >
+                  {formatClock(t)}
                 </div>
               );
             })}
