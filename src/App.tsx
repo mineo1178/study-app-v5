@@ -95,6 +95,7 @@ const getTestDoc = (database: any, id: string) =>
 // Cache Keys
 const CACHE_KEY_TASKS = `study-app-v5-${FAMILY_ID}-tasks`;
 const CACHE_KEY_TESTS = `study-app-v5-${FAMILY_ID}-tests`;
+const IDLE_LIMIT_MS = 5 * 60 * 1000;
 
 type Subject = 'math' | 'japanese' | 'science' | 'social';
 
@@ -413,6 +414,7 @@ const StrictTimer = React.memo(({
       isRunning: false, 
       currentDuration: accurateSecs,
       sessionStartTime: null,
+      lastActivityAt: now,
       lastUpdatedAt: now
     });
     
@@ -420,6 +422,7 @@ const StrictTimer = React.memo(({
       isRunning: false,
       currentDuration: accurateSecs,
       sessionStartTime: null,
+      lastActivityAt: now,
       lastUpdatedAt: now
     });
   };
@@ -428,8 +431,8 @@ const StrictTimer = React.memo(({
     const finalDuration = getAccurateSeconds(); // 古いlocalSecondsではなく正確な時間を再計算
     const now = Date.now();
     
-    updateLocalTask(task.id, { isRunning: false, currentDuration: finalDuration, sessionStartTime: null, lastUpdatedAt: now });
-    syncTaskToCloud(task.id, { isRunning: false, currentDuration: finalDuration, sessionStartTime: null, lastUpdatedAt: now });
+    updateLocalTask(task.id, { isRunning: false, currentDuration: finalDuration, sessionStartTime: null, lastActivityAt: now, lastUpdatedAt: now });
+    syncTaskToCloud(task.id, { isRunning: false, currentDuration: finalDuration, sessionStartTime: null, lastActivityAt: now, lastUpdatedAt: now });
     
     setTimeout(() => {
       onSaveRecord({ 
@@ -928,7 +931,9 @@ type TodayTimelineSession = {
 
 
 const ActiveStudyTimerPanel = ({ tasks }: { tasks: Task[] }) => {
-  const runningTask = tasks.find((task: Task) => task.isRunning && task.sessionStartTime);
+  const runningTask = [...tasks]
+    .filter((task: Task) => task.isRunning && task.sessionStartTime)
+    .sort((a: Task, b: Task) => (b.lastUpdatedAt || b.sessionStartTime || 0) - (a.lastUpdatedAt || a.sessionStartTime || 0))[0];
   const [now, setNow] = useState(Date.now());
   const [lastVisibleActivityAt, setLastVisibleActivityAt] = useState(Date.now());
 
@@ -961,7 +966,7 @@ const ActiveStudyTimerPanel = ({ tasks }: { tasks: Task[] }) => {
   const currentSeconds = runningTask.currentDuration + Math.floor((now - runningTask.sessionStartTime) / 1000);
   const historyTotalSeconds = runningTask.history.reduce((sum, h) => sum + h.duration, 0);
   const cumulativeSeconds = historyTotalSeconds + currentSeconds;
-  const remainingSeconds = Math.max(0, 5 * 60 - Math.floor((now - lastVisibleActivityAt) / 1000));
+  const remainingSeconds = Math.max(0, Math.floor((IDLE_LIMIT_MS - (now - lastVisibleActivityAt)) / 1000));
   const remainingLabel = `${String(Math.floor(remainingSeconds / 60)).padStart(2, '0')}:${String(remainingSeconds % 60).padStart(2, '0')}`;
 
   return (
@@ -1695,6 +1700,14 @@ export default function App() {
   
   const [confirmModalData, setConfirmModalData] = useState<{title: string, message: string, onConfirm: () => void} | null>(null);
 
+  const tasksRef = useRef<Task[]>([]);
+  const globalLastActivityAtRef = useRef(Date.now());
+  const lastActivityLocalUpdateAtRef = useRef(0);
+
+  useEffect(() => {
+    tasksRef.current = tasks;
+  }, [tasks]);
+
   // Authentication & Initialization
   useEffect(() => {
     if (!auth) {
@@ -1822,11 +1835,11 @@ export default function App() {
   // Cloud Sync Optimizations
   // ==========================================
   
-  const updateLocalTask = (id: string, updates: Partial<Task>) => {
+  const updateLocalTask = useCallback((id: string, updates: Partial<Task>) => {
     setTasks(prev => prev.map(t => t.id === id ? { ...t, ...updates } : t));
-  };
+  }, []);
 
-  const syncTaskToCloud = async (id: string, cloudUpdates: any) => {
+  const syncTaskToCloud = useCallback(async (id: string, cloudUpdates: any) => {
     const dbInstance = getSafeDb();
     if (!dbInstance || !auth?.currentUser || isSampleMode) return;
     try {
@@ -1837,7 +1850,93 @@ export default function App() {
     } catch (e) {
       setSyncState('offline');
     }
-  };
+  }, [isSampleMode]);
+
+  // グローバル操作監視：詳細モーダルを閉じていても、操作があれば稼働中タイマーの無操作判定をリセットする
+  useEffect(() => {
+    const handleGlobalActivity = () => {
+      const now = Date.now();
+      globalLastActivityAtRef.current = now;
+
+      // マウス移動等で過剰に再描画しないよう、ローカル更新は1秒に1回まで
+      if (now - lastActivityLocalUpdateAtRef.current < 1000) return;
+      lastActivityLocalUpdateAtRef.current = now;
+
+      setTasks(prev => {
+        let changed = false;
+        const next = prev.map(t => {
+          if (t.isRunning && t.sessionStartTime) {
+            changed = true;
+            return { ...t, lastActivityAt: now };
+          }
+          return t;
+        });
+        return changed ? next : prev;
+      });
+    };
+
+    window.addEventListener('mousemove', handleGlobalActivity);
+    window.addEventListener('keydown', handleGlobalActivity);
+    window.addEventListener('touchstart', handleGlobalActivity);
+    window.addEventListener('scroll', handleGlobalActivity);
+    return () => {
+      window.removeEventListener('mousemove', handleGlobalActivity);
+      window.removeEventListener('keydown', handleGlobalActivity);
+      window.removeEventListener('touchstart', handleGlobalActivity);
+      window.removeEventListener('scroll', handleGlobalActivity);
+    };
+  }, []);
+
+  // グローバルタイマー制御：
+  // 1) 稼働中タイマーは常に最新1件だけに補正
+  // 2) 詳細画面を閉じていても、5分無操作で自動停止
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const now = Date.now();
+      const currentTasks = tasksRef.current;
+      const runningTasks = currentTasks.filter(t => t.isRunning && t.sessionStartTime);
+      if (runningTasks.length === 0) return;
+
+      const latestRunningTask = [...runningTasks].sort(
+        (a, b) => (b.lastUpdatedAt || b.sessionStartTime || 0) - (a.lastUpdatedAt || a.sessionStartTime || 0)
+      )[0];
+
+      const updatesToSync: { id: string; updates: Partial<Task> }[] = [];
+
+      runningTasks.forEach(t => {
+        const idleBase = t.lastActivityAt || globalLastActivityAtRef.current || t.sessionStartTime || now;
+        const shouldForceStopBecauseDuplicated = t.id !== latestRunningTask.id;
+        const shouldStopBecauseIdle = !document.hidden && t.id === latestRunningTask.id && now - idleBase >= IDLE_LIMIT_MS;
+
+        if (shouldForceStopBecauseDuplicated || shouldStopBecauseIdle) {
+          const elapsed = t.sessionStartTime ? Math.max(0, Math.floor((now - t.sessionStartTime) / 1000)) : 0;
+          updatesToSync.push({
+            id: t.id,
+            updates: {
+              isRunning: false,
+              currentDuration: t.currentDuration + elapsed,
+              sessionStartTime: null,
+              lastActivityAt: now,
+              lastUpdatedAt: now,
+            }
+          });
+        }
+      });
+
+      if (updatesToSync.length === 0) return;
+
+      setTasks(prev => prev.map(t => {
+        const hit = updatesToSync.find(u => u.id === t.id);
+        return hit ? { ...t, ...hit.updates } : t;
+      }));
+
+      updatesToSync.forEach(({ id, updates }) => {
+        syncTaskToCloud(id, updates);
+      });
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [syncTaskToCloud]);
 
   const saveTestToCloud = async (testResult: TestResult) => {
     setTests(prev => {
@@ -1909,6 +2008,7 @@ export default function App() {
       currentMemo: '', 
       isRunning: false,
       sessionStartTime: null,
+      lastActivityAt: Date.now(),
       lastUpdatedAt: Date.now(),
       status: task.status === 'not_started' ? 'in_progress' : task.status
     };
@@ -1941,6 +2041,7 @@ export default function App() {
             isRunning: false,
             currentDuration: t.currentDuration + elapsed,
             sessionStartTime: null,
+            lastActivityAt: now,
             lastUpdatedAt: now
           };
         }
@@ -1959,6 +2060,7 @@ export default function App() {
               isRunning: false,
               currentDuration: t.currentDuration + elapsed,
               sessionStartTime: null,
+              lastActivityAt: now,
               lastUpdatedAt: now
             });
           });
