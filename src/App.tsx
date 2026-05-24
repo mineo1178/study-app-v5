@@ -113,9 +113,10 @@ interface Task {
   currentDuration: number;
   sessionStartTime: number | null; 
   isRunning: boolean;
+  lastActivityAt?: number;
   lastUpdatedAt: number; 
   currentMemo: string;
-  history: { id: string; date: string; duration: number; memo: string }[];
+  history: { id: string; date: string; duration: number; memo: string; startAt?: number; endAt?: number }[];
   createdAt: string;
 }
 
@@ -210,11 +211,15 @@ const generateDummyTasks = (): Task[] => {
               const date = new Date(today);
               date.setDate(today.getDate() - daysAgo);
               const duration = (Math.floor(Math.random() * 40) + 10) * 60;
+              const startAt = new Date(date).setHours(8 + Math.floor(Math.random() * 10), Math.floor(Math.random() * 4) * 15, 0, 0);
+              const endAt = startAt + duration * 1000;
               history.push({
                 id: Math.random().toString(36).substr(2, 9),
                 date: `${date.getMonth() + 1}/${date.getDate()}`,
                 duration,
-                memo: Math.random() > 0.7 ? '難しかった' : ''
+                memo: Math.random() > 0.7 ? '難しかった' : '',
+                startAt,
+                endAt
               });
             }
             history.sort((a, b) => {
@@ -305,7 +310,13 @@ const StrictTimer = React.memo(({
   }, [task.currentDuration, isRunning, getAccurateSeconds]);
 
   useEffect(() => {
-    const handleActivity = () => { lastActive.current = Date.now(); };
+    const handleActivity = () => {
+      const now = Date.now();
+      lastActive.current = now;
+      if (task.isRunning && now - (task.lastActivityAt || 0) > 1000) {
+        updateLocalTask(task.id, { lastActivityAt: now });
+      }
+    };
     window.addEventListener('mousemove', handleActivity);
     window.addEventListener('keydown', handleActivity);
     window.addEventListener('touchstart', handleActivity);
@@ -316,7 +327,7 @@ const StrictTimer = React.memo(({
       window.removeEventListener('touchstart', handleActivity);
       window.removeEventListener('scroll', handleActivity);
     };
-  }, []);
+  }, [task.id, task.isRunning, task.lastActivityAt, updateLocalTask]);
 
   // Timer Loop & Idle Check
   useEffect(() => {
@@ -380,6 +391,7 @@ const StrictTimer = React.memo(({
     updateLocalTask(task.id, { 
       isRunning: true, 
       sessionStartTime: startTime,
+      lastActivityAt: startTime,
       lastUpdatedAt: startTime,
       status: task.status === 'not_started' ? 'in_progress' : task.status
     });
@@ -387,6 +399,7 @@ const StrictTimer = React.memo(({
     syncTaskToCloud(task.id, {
       isRunning: true,
       sessionStartTime: startTime,
+      lastActivityAt: startTime,
       lastUpdatedAt: startTime,
       status: task.status === 'not_started' ? 'in_progress' : task.status
     });
@@ -900,6 +913,288 @@ const SubjectSection = ({ unit, subject, tasks, cycleStatus, setDetailTaskId, on
   );
 };
 
+
+type TodayTimelineSession = {
+  id: string;
+  subject: Subject;
+  title: string;
+  unit: string;
+  category: string;
+  duration: number;
+  startAt: number;
+  endAt: number;
+  isRunning?: boolean;
+};
+
+
+const ActiveStudyTimerPanel = ({ tasks }: { tasks: Task[] }) => {
+  const runningTask = tasks.find((task: Task) => task.isRunning && task.sessionStartTime);
+  const [now, setNow] = useState(Date.now());
+  const [lastVisibleActivityAt, setLastVisibleActivityAt] = useState(Date.now());
+
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    if (!runningTask) return;
+    const initialActivityAt = runningTask.lastActivityAt || Date.now();
+    setLastVisibleActivityAt(initialActivityAt);
+
+    const handleActivity = () => setLastVisibleActivityAt(Date.now());
+    window.addEventListener('mousemove', handleActivity);
+    window.addEventListener('keydown', handleActivity);
+    window.addEventListener('touchstart', handleActivity);
+    window.addEventListener('scroll', handleActivity);
+    return () => {
+      window.removeEventListener('mousemove', handleActivity);
+      window.removeEventListener('keydown', handleActivity);
+      window.removeEventListener('touchstart', handleActivity);
+      window.removeEventListener('scroll', handleActivity);
+    };
+  }, [runningTask?.id, runningTask?.lastActivityAt]);
+
+  if (!runningTask || !runningTask.sessionStartTime) return null;
+
+  const conf = SUBJECT_CONFIG[runningTask.subject];
+  const currentSeconds = runningTask.currentDuration + Math.floor((now - runningTask.sessionStartTime) / 1000);
+  const historyTotalSeconds = runningTask.history.reduce((sum, h) => sum + h.duration, 0);
+  const cumulativeSeconds = historyTotalSeconds + currentSeconds;
+  const remainingSeconds = Math.max(0, 5 * 60 - Math.floor((now - lastVisibleActivityAt) / 1000));
+  const remainingLabel = `${String(Math.floor(remainingSeconds / 60)).padStart(2, '0')}:${String(remainingSeconds % 60).padStart(2, '0')}`;
+
+  return (
+    <div className="bg-white rounded-3xl p-5 md:p-7 lg:p-8 shadow-md border border-blue-100 ring-1 ring-blue-50">
+      <div className="flex items-start gap-3 mb-4 md:mb-5">
+        <div className={`w-2.5 h-2.5 rounded-full mt-2 ${conf.bg} animate-pulse`} />
+        <div className="min-w-0">
+          <div className="text-[10px] md:text-xs font-bold text-slate-400 mb-0.5">現在学習中</div>
+          <h2 className="text-lg md:text-2xl lg:text-3xl font-black text-slate-900 leading-tight truncate">
+            {runningTask.title}
+          </h2>
+          <div className="mt-1 flex flex-wrap items-center gap-2 text-[10px] md:text-xs font-bold text-slate-400">
+            <span className={`${conf.lightBg} ${conf.color} border ${conf.border} rounded-full px-2 py-0.5`}>{conf.label}</span>
+            <span>{runningTask.unit}</span>
+            <span>{runningTask.category}</span>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 md:gap-4">
+        <div className="rounded-2xl bg-blue-50 border border-blue-100 p-4 md:p-5 text-center">
+          <div className="text-[10px] md:text-xs font-black text-blue-400 mb-2">現在</div>
+          <div className="text-2xl md:text-3xl lg:text-4xl font-black text-blue-600 font-mono tracking-tight">
+            {formatTime(currentSeconds)}
+          </div>
+        </div>
+        <div className="rounded-2xl bg-slate-50 border border-slate-100 p-4 md:p-5 text-center">
+          <div className="text-[10px] md:text-xs font-black text-slate-400 mb-2">停止まで</div>
+          <div className="text-2xl md:text-3xl lg:text-4xl font-black text-slate-800 font-mono tracking-tight">
+            {remainingLabel}
+          </div>
+        </div>
+        <div className="rounded-2xl bg-slate-50 border border-slate-100 p-4 md:p-5 text-center">
+          <div className="text-[10px] md:text-xs font-black text-slate-400 mb-2">累計</div>
+          <div className="text-2xl md:text-3xl lg:text-4xl font-black text-slate-900 font-mono tracking-tight">
+            {formatTime(cumulativeSeconds)}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const TodayStudyTimeline = ({ tasks }: { tasks: Task[] }) => {
+  const now = Date.now();
+  const todayLabel = new Date().toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric' });
+  const todayAltLabel = `${new Date().getMonth() + 1}/${new Date().getDate()}`;
+
+  const sessions = useMemo<TodayTimelineSession[]>(() => {
+    const list: TodayTimelineSession[] = [];
+
+    tasks.forEach((task: Task) => {
+      task.history.forEach((h) => {
+        const isToday = h.date === todayLabel || h.date === todayAltLabel || h.date.endsWith(`/${todayAltLabel}`);
+        if (!isToday || !h.duration) return;
+
+        const endAt = h.endAt || Date.now();
+        const startAt = h.startAt || (endAt - h.duration * 1000);
+
+        list.push({
+          id: `${task.id}-${h.id}`,
+          subject: task.subject,
+          title: task.title,
+          unit: task.unit,
+          category: task.category,
+          duration: h.duration,
+          startAt,
+          endAt,
+        });
+      });
+
+      if (task.isRunning && task.sessionStartTime) {
+        const runningDuration = task.currentDuration + Math.floor((Date.now() - task.sessionStartTime) / 1000);
+        list.push({
+          id: `${task.id}-running`,
+          subject: task.subject,
+          title: task.title,
+          unit: task.unit,
+          category: task.category,
+          duration: runningDuration,
+          startAt: task.sessionStartTime,
+          endAt: Date.now(),
+          isRunning: true,
+        });
+      }
+    });
+
+    return list.sort((a, b) => a.startAt - b.startAt);
+  }, [tasks, todayLabel, todayAltLabel, now]);
+
+  const totalSeconds = sessions.reduce((sum, s) => sum + s.duration, 0);
+
+  const range = useMemo(() => {
+    if (sessions.length === 0) {
+      const base = new Date();
+      base.setHours(6, 0, 0, 0);
+      const end = new Date(base);
+      end.setHours(22, 0, 0, 0);
+      return { start: base.getTime(), end: end.getTime() };
+    }
+
+    const minStart = Math.min(...sessions.map(s => s.startAt));
+    const maxEnd = Math.max(...sessions.map(s => s.endAt));
+    const startDate = new Date(minStart - 30 * 60 * 1000);
+    startDate.setMinutes(0, 0, 0);
+    const endDate = new Date(maxEnd + 30 * 60 * 1000);
+    endDate.setMinutes(0, 0, 0);
+    endDate.setHours(endDate.getHours() + 1);
+
+    if (endDate.getTime() - startDate.getTime() < 60 * 60 * 1000) {
+      endDate.setHours(startDate.getHours() + 1);
+    }
+
+    return { start: startDate.getTime(), end: endDate.getTime() };
+  }, [sessions]);
+
+  const hourLabels = useMemo(() => {
+    const labels: number[] = [];
+    const startHour = new Date(range.start);
+    startHour.setMinutes(0, 0, 0);
+    for (let t = startHour.getTime(); t <= range.end; t += 60 * 60 * 1000) {
+      labels.push(t);
+    }
+    return labels;
+  }, [range]);
+
+  const formatClock = (time: number) => {
+    const d = new Date(time);
+    return `${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`;
+  };
+
+  const groupedSessions = (Object.keys(SUBJECT_CONFIG) as Subject[]).map(subject => ({
+    subject,
+    sessions: sessions.filter(s => s.subject === subject),
+  }));
+
+  return (
+    <div className="bg-white rounded-3xl p-5 md:p-7 lg:p-8 shadow-md border border-slate-200">
+      <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-3 md:gap-4 mb-5 md:mb-6">
+        <div>
+          <h2 className="text-sm md:text-base lg:text-lg font-black text-slate-800 flex items-center gap-1.5 md:gap-2">
+            <Clock className="text-blue-500 w-4 h-4 md:w-5 md:h-5 lg:w-6 lg:h-6" />
+            今日の学習タイムライン
+          </h2>
+          <p className="text-[10px] md:text-xs lg:text-sm font-bold text-slate-400 mt-1">
+            何時にどの教科を勉強したかを表示します
+          </p>
+        </div>
+        <div className="bg-blue-50 border border-blue-100 rounded-2xl px-4 py-3 text-right">
+          <div className="text-[10px] md:text-xs font-bold text-blue-400 mb-0.5">本日の総勉強時間</div>
+          <div className="text-2xl md:text-3xl lg:text-4xl font-black text-blue-600 font-mono">
+            {Math.floor(totalSeconds / 3600)}<span className="text-xs md:text-sm text-blue-300 mx-0.5">h</span>
+            {Math.floor((totalSeconds % 3600) / 60)}<span className="text-xs md:text-sm text-blue-300 ml-0.5">m</span>
+          </div>
+        </div>
+      </div>
+
+      {sessions.length === 0 ? (
+        <div className="text-center py-8 md:py-10 bg-slate-50 rounded-2xl border border-dashed border-slate-200">
+          <div className="text-sm md:text-base font-bold text-slate-400">本日の学習記録はまだありません</div>
+          <div className="text-[10px] md:text-xs text-slate-300 mt-1">タイマーで記録を保存すると、ここに時間帯が表示されます</div>
+        </div>
+      ) : (
+        <div className="overflow-x-auto pb-2">
+          <div className="min-w-[680px]">
+            <div className="ml-12 md:ml-14 relative h-7 border-b border-slate-200">
+              {hourLabels.map((t) => {
+                const left = ((t - range.start) / (range.end - range.start)) * 100;
+                return (
+                  <div key={t} className="absolute top-0 -translate-x-1/2 text-[10px] md:text-xs font-bold text-slate-400" style={{ left: `${left}%` }}>
+                    {new Date(t).getHours()}時
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="space-y-3 mt-3">
+              {groupedSessions.map(({ subject, sessions: subjectSessions }) => {
+                const conf = SUBJECT_CONFIG[subject];
+                return (
+                  <div key={subject} className="flex items-center gap-3">
+                    <div className={`w-9 md:w-11 text-xs md:text-sm font-black text-center ${conf.color}`}>{conf.short}</div>
+                    <div className="relative flex-1 h-10 md:h-12 bg-slate-50 rounded-xl border border-slate-100 overflow-hidden">
+                      {hourLabels.map((t) => {
+                        const left = ((t - range.start) / (range.end - range.start)) * 100;
+                        return <div key={t} className="absolute top-0 bottom-0 w-px bg-slate-200/70" style={{ left: `${left}%` }} />;
+                      })}
+                      {subjectSessions.map((s) => {
+                        const left = Math.max(0, ((s.startAt - range.start) / (range.end - range.start)) * 100);
+                        const width = Math.max(2.5, ((s.endAt - s.startAt) / (range.end - range.start)) * 100);
+                        return (
+                          <div
+                            key={s.id}
+                            className={`absolute top-1.5 bottom-1.5 ${conf.bg} text-white rounded-lg shadow-sm px-2 flex items-center overflow-hidden ${s.isRunning ? 'animate-pulse ring-2 ring-blue-200' : ''}`}
+                            style={{ left: `${left}%`, width: `${Math.min(width, 100 - left)}%` }}
+                            title={`${conf.label} ${s.unit} ${s.title} ${formatClock(s.startAt)}-${formatClock(s.endAt)} ${formatTime(s.duration)}`}
+                          >
+                            <span className="text-[10px] md:text-xs font-black truncate">
+                              {formatClock(s.startAt)} {s.title} {s.isRunning ? '計測中' : ''}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-2">
+              {sessions.map((s) => {
+                const conf = SUBJECT_CONFIG[s.subject];
+                return (
+                  <div key={`detail-${s.id}`} className="flex items-center justify-between gap-3 bg-slate-50 rounded-xl px-3 py-2 border border-slate-100">
+                    <div className="min-w-0 flex items-center gap-2">
+                      <span className={`shrink-0 text-[10px] font-black text-white ${conf.bg} rounded px-1.5 py-0.5`}>{conf.short}</span>
+                      <span className="truncate text-xs md:text-sm font-bold text-slate-700">{s.unit} / {s.title}</span>
+                    </div>
+                    <div className="shrink-0 text-[10px] md:text-xs font-mono font-bold text-slate-500">
+                      {formatClock(s.startAt)}-{formatClock(s.endAt)} / {formatTime(s.duration)}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+
 const DailyView = ({ 
   tasks, cycleStatus, deleteUnitTasks,
   setAddModalOpen, selectedUnit, setSelectedUnit, unitsWithTasks, onAddCustomTask, setDetailTaskId, setDeleteConfirmation
@@ -1014,6 +1309,10 @@ const DailyView = ({
                     })}
                  </div>
               </div>
+
+              <ActiveStudyTimerPanel tasks={tasks} />
+
+              <TodayStudyTimeline tasks={tasks} />
 
               <h3 className="font-bold text-slate-500 text-xs md:text-sm lg:text-base pl-1 md:pl-2">学習回ごとの詳細</h3>
 
@@ -1593,11 +1892,15 @@ export default function App() {
 
   const saveHistoryRecord = async (task: Task) => {
     if (task.currentDuration === 0) return;
+    const endAt = Date.now();
+    const startAt = task.sessionStartTime || (endAt - task.currentDuration * 1000);
     const newHistory = {
-      id: Date.now().toString(),
+      id: endAt.toString(),
       date: new Date().toLocaleDateString('ja-JP', { month: 'numeric', day: 'numeric' }),
       duration: task.currentDuration,
-      memo: task.currentMemo 
+      memo: task.currentMemo,
+      startAt,
+      endAt
     };
     
     const updates = { 
