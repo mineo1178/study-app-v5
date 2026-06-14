@@ -3233,37 +3233,39 @@ export default function App() {
     }
   }, [tasks, tests, isSampleMode]);
 
+  // タブ切替・スリープ復帰・ブラウザ戻る復帰時の補正。
+  // lastUpdatedAt の古さだけで稼働中タイマーを停止すると、
+  // 画面遷移・別タブ・スリープ中に停止したように見えるため、
+  // 復帰時は「操作が再開された」とみなし、無操作判定の基準だけを更新する。
   useEffect(() => {
-    if (isSampleMode) return;
-    const interval = setInterval(() => {
+    const markVisibleAgain = () => {
+      if (document.hidden) return;
+      const now = Date.now();
+      globalLastActivityAtRef.current = now;
+      lastActivityLocalUpdateAtRef.current = now;
+
       setTasks((prev) => {
         let changed = false;
-        const now = Date.now();
         const next = prev.map((t) => {
-          if (
-            t.isRunning &&
-            t.sessionStartTime &&
-            now - t.lastUpdatedAt > 10 * 60 * 1000
-          ) {
+          if (t.isRunning && t.sessionStartTime) {
             changed = true;
-            const abnormalDuration =
-              t.currentDuration +
-              Math.floor((t.lastUpdatedAt - t.sessionStartTime) / 1000);
-            return {
-              ...t,
-              isRunning: false,
-              sessionStartTime: null,
-              currentDuration: abnormalDuration,
-              lastUpdatedAt: now,
-            };
+            return { ...t, lastActivityAt: now };
           }
           return t;
         });
         return changed ? next : prev;
       });
-    }, 60000);
-    return () => clearInterval(interval);
-  }, [isSampleMode]);
+    };
+
+    document.addEventListener("visibilitychange", markVisibleAgain);
+    window.addEventListener("focus", markVisibleAgain);
+    window.addEventListener("pageshow", markVisibleAgain);
+    return () => {
+      document.removeEventListener("visibilitychange", markVisibleAgain);
+      window.removeEventListener("focus", markVisibleAgain);
+      window.removeEventListener("pageshow", markVisibleAgain);
+    };
+  }, []);
 
   // ==========================================
   // Cloud Sync Optimizations
