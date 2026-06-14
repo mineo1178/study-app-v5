@@ -116,6 +116,7 @@ if (hasFirebaseConfig) {
 // ==========================================
 
 const FAMILY_ID = "oomine-study-2026";
+const APP_VERSION = "v1.62";
 
 // Firestore Path 固定（変更禁止）
 // 実DB構造:
@@ -3014,6 +3015,9 @@ const LoginForm = ({
           <h1 className="text-2xl md:text-3xl lg:text-4xl font-black text-slate-800 tracking-tight">
             Level Up Study
           </h1>
+          <div className="inline-flex items-center rounded-full bg-blue-50 px-3 py-1 mt-3 text-xs md:text-sm font-black text-blue-600 ring-1 ring-blue-100">
+            {APP_VERSION}
+          </div>
           <p className="text-sm md:text-base lg:text-lg text-slate-500 mt-2 md:mt-3 font-bold">
             学習管理へログイン
           </p>
@@ -3699,7 +3703,7 @@ export default function App() {
             <h1 className="font-black text-lg md:text-2xl lg:text-3xl text-slate-800 tracking-tight flex items-center gap-2 md:gap-3">
               Level Up Study
               <span className="bg-blue-100 text-blue-600 px-2 py-0.5 md:px-3 md:py-1 rounded text-[10px] md:text-sm lg:text-base">
-                v5
+                {APP_VERSION}
               </span>
             </h1>
           </div>
