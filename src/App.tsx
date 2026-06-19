@@ -116,7 +116,7 @@ if (hasFirebaseConfig) {
 // ==========================================
 
 const FAMILY_ID = "oomine-study-2026";
-const APP_VERSION = "v1.62";
+const APP_VERSION = "v1.63";
 
 // Firestore Path 固定（変更禁止）
 // 実DB構造:
@@ -149,7 +149,9 @@ const getTestDoc = (database: any, id: string) =>
 // Cache Keys
 const CACHE_KEY_TASKS = `study-app-v5-${FAMILY_ID}-tasks`;
 const CACHE_KEY_TESTS = `study-app-v5-${FAMILY_ID}-tests`;
+const CACHE_KEY_PENDING_TASK_UPDATES = `study-app-v5-${FAMILY_ID}-pending-task-updates`;
 const IDLE_LIMIT_MS = 5 * 60 * 1000;
+const WAKE_GRACE_MS = 5 * 1000;
 
 type Subject = "math" | "japanese" | "science" | "social";
 
@@ -177,6 +179,7 @@ interface Task {
   isRunning: boolean;
   lastActivityAt?: number;
   lastUpdatedAt: number;
+  pendingSync?: boolean;
   currentMemo: string;
   history: {
     id: string;
@@ -344,6 +347,83 @@ const setCache = (key: string, val: any) => {
   } catch {}
 };
 
+const toMillis = (value: any): number => {
+  if (!value) return 0;
+  if (typeof value === "number") return value;
+  if (value instanceof Date) return value.getTime();
+  if (typeof value.toMillis === "function") return value.toMillis();
+  if (typeof value.seconds === "number") {
+    return value.seconds * 1000 + Math.floor((value.nanoseconds || 0) / 1000000);
+  }
+  return 0;
+};
+
+const normalizeTask = (task: Task): Task => ({
+  ...task,
+  currentDuration: Number(task.currentDuration || 0),
+  sessionStartTime: task.sessionStartTime ? toMillis(task.sessionStartTime) : null,
+  lastActivityAt: task.lastActivityAt ? toMillis(task.lastActivityAt) : undefined,
+  lastUpdatedAt: toMillis(task.lastUpdatedAt) || Date.now(),
+  history: Array.isArray(task.history)
+    ? task.history.map((h) => ({
+        ...h,
+        startAt: h.startAt ? toMillis(h.startAt) : undefined,
+        endAt: h.endAt ? toMillis(h.endAt) : undefined,
+      }))
+    : [],
+});
+
+const mergeTasksFromCloud = (localTasks: Task[], cloudTasks: Task[]): Task[] => {
+  const localById = new Map(localTasks.map((t) => [t.id, normalizeTask(t)]));
+  const cloudById = new Map(cloudTasks.map((t) => [t.id, normalizeTask(t)]));
+  const merged: Task[] = [];
+
+  cloudById.forEach((cloudTask, id) => {
+    const localTask = localById.get(id);
+    if (!localTask) {
+      merged.push(cloudTask);
+      return;
+    }
+
+    const localUpdated = toMillis(localTask.lastUpdatedAt);
+    const cloudUpdated = toMillis(cloudTask.lastUpdatedAt);
+    const localHasRunningState =
+      localTask.isRunning &&
+      !!localTask.sessionStartTime &&
+      (!cloudTask.isRunning ||
+        cloudTask.sessionStartTime !== localTask.sessionStartTime);
+    const shouldKeepLocal =
+      !!localTask.pendingSync ||
+      localUpdated > cloudUpdated ||
+      (localHasRunningState && localUpdated >= cloudUpdated - 30000);
+
+    merged.push(shouldKeepLocal ? localTask : cloudTask);
+  });
+
+  localById.forEach((localTask, id) => {
+    if (!cloudById.has(id) && localTask.pendingSync) {
+      merged.push(localTask);
+    }
+  });
+
+  return merged.sort((a, b) => toMillis(b.lastUpdatedAt) - toMillis(a.lastUpdatedAt));
+};
+
+const getPendingTaskUpdates = (): Record<string, any> =>
+  getCache(CACHE_KEY_PENDING_TASK_UPDATES) || {};
+
+const queuePendingTaskUpdate = (id: string, updates: any) => {
+  const pending = getPendingTaskUpdates();
+  pending[id] = { ...(pending[id] || {}), ...updates };
+  setCache(CACHE_KEY_PENDING_TASK_UPDATES, pending);
+};
+
+const clearPendingTaskUpdate = (id: string) => {
+  const pending = getPendingTaskUpdates();
+  delete pending[id];
+  setCache(CACHE_KEY_PENDING_TASK_UPDATES, pending);
+};
+
 // ==========================================
 // Helper: Generate Dummy Data
 // ==========================================
@@ -470,6 +550,7 @@ const StrictTimer = React.memo(
     const [showAutoPauseAlert, setShowAutoPauseAlert] = useState(false);
     const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const lastActive = useRef(Date.now());
+    const lastResumeAt = useRef(Date.now());
     const isRunning = task.isRunning;
 
     // 正確な現在秒数を計算するヘルパー（バックグラウンド等で表示が遅延しても正しい秒数を得る）
@@ -526,12 +607,17 @@ const StrictTimer = React.memo(
           }
 
           // バックグラウンド時（document.hidden === true）は自動停止の判定を行わない
-          if (!document.hidden && now - lastActive.current > 5 * 60 * 1000) {
+          if (
+            !document.hidden &&
+            now - lastResumeAt.current > WAKE_GRACE_MS &&
+            now - lastActive.current > IDLE_LIMIT_MS
+          ) {
             updateLocalTask(task.id, {
               isRunning: false,
               currentDuration: accurateSecs,
               sessionStartTime: null,
               lastUpdatedAt: now,
+              pendingSync: true,
             });
             syncTaskToCloud(task.id, {
               isRunning: false,
@@ -559,7 +645,9 @@ const StrictTimer = React.memo(
     useEffect(() => {
       const handleVis = () => {
         if (!document.hidden && task.isRunning) {
-          lastActive.current = Date.now(); // 復帰時にアクティブ時間を更新し、即座に自動停止するのを防ぐ
+          const now = Date.now();
+          lastActive.current = now; // 復帰時にアクティブ時間を更新し、即座に自動停止するのを防ぐ
+          lastResumeAt.current = now;
           setLocalSeconds(getAccurateSeconds()); // 表示秒数も復帰時に即補正する
         }
       };
@@ -570,6 +658,7 @@ const StrictTimer = React.memo(
     const handlePlay = async (e?: React.MouseEvent) => {
       e?.stopPropagation();
       lastActive.current = Date.now();
+      lastResumeAt.current = Date.now();
 
       // タイマー排他制御：他のタイマーをすべてストップさせる
       await pauseAllOtherTasks(task.id);
@@ -581,7 +670,11 @@ const StrictTimer = React.memo(
         sessionStartTime: startTime,
         lastActivityAt: startTime,
         lastUpdatedAt: startTime,
-        status: task.status === "not_started" ? "in_progress" : task.status,
+        pendingSync: true,
+        status:
+          task.status === "not_started" || task.status === "completed"
+            ? "in_progress"
+            : task.status,
       });
 
       syncTaskToCloud(task.id, {
@@ -589,7 +682,10 @@ const StrictTimer = React.memo(
         sessionStartTime: startTime,
         lastActivityAt: startTime,
         lastUpdatedAt: startTime,
-        status: task.status === "not_started" ? "in_progress" : task.status,
+        status:
+          task.status === "not_started" || task.status === "completed"
+            ? "in_progress"
+            : task.status,
       });
     };
 
@@ -603,6 +699,7 @@ const StrictTimer = React.memo(
         sessionStartTime: null,
         lastActivityAt: now,
         lastUpdatedAt: now,
+        pendingSync: true,
       });
 
       syncTaskToCloud(task.id, {
@@ -624,6 +721,7 @@ const StrictTimer = React.memo(
         sessionStartTime: null,
         lastActivityAt: now,
         lastUpdatedAt: now,
+        pendingSync: true,
       });
       syncTaskToCloud(task.id, {
         isRunning: false,
@@ -1274,9 +1372,15 @@ const TaskDetailModal = ({
                 <button
                   key={s.id}
                   onClick={() => {
+                    const now = Date.now();
                     updateLocalTask(task.id, {
                       status: s.id as any,
-                      lastUpdatedAt: Date.now(),
+                      lastUpdatedAt: now,
+                      pendingSync: true,
+                    });
+                    syncTaskToCloud(task.id, {
+                      status: s.id,
+                      lastUpdatedAt: now,
                     });
                   }}
                   className={`flex-1 py-2.5 md:py-3 lg:py-4 rounded-xl md:rounded-2xl font-bold text-xs md:text-sm lg:text-base flex flex-col items-center justify-center gap-1 md:gap-1.5 border transition-all ${
@@ -1313,8 +1417,19 @@ const TaskDetailModal = ({
             <textarea
               value={task.currentMemo}
               onChange={(e) =>
-                updateLocalTask(task.id, { currentMemo: e.target.value })
+                updateLocalTask(task.id, {
+                  currentMemo: e.target.value,
+                  lastUpdatedAt: Date.now(),
+                  pendingSync: true,
+                })
               }
+              onBlur={(e) => {
+                const now = Date.now();
+                syncTaskToCloud(task.id, {
+                  currentMemo: e.currentTarget.value,
+                  lastUpdatedAt: now,
+                });
+              }}
               placeholder="ここにつまづいた、次はこうする..."
               className="w-full bg-white border border-slate-200 rounded-xl md:rounded-2xl p-3 md:p-4 lg:p-5 text-sm md:text-base font-medium text-slate-700 focus:outline-none focus:border-blue-500 resize-none h-20 md:h-28 lg:h-32 shadow-sm"
             />
@@ -1420,7 +1535,7 @@ const SubjectSection = ({
 
   const conf = SUBJECT_CONFIG[subject as Subject];
   const filteredTasks = subjTasks.filter((t: Task) =>
-    filter === "all" ? true : t.status === filter,
+    filter === "all" ? true : t.status === filter || t.isRunning,
   );
 
   const tasksByCategory: Record<string, Task[]> = {};
@@ -1547,8 +1662,8 @@ const ActiveStudyTimerPanel = ({ tasks }: { tasks: Task[] }) => {
     .filter((task: Task) => task.isRunning && task.sessionStartTime)
     .sort(
       (a: Task, b: Task) =>
-        (b.lastUpdatedAt || b.sessionStartTime || 0) -
-        (a.lastUpdatedAt || a.sessionStartTime || 0),
+        (toMillis(b.lastUpdatedAt) || b.sessionStartTime || 0) -
+        (toMillis(a.lastUpdatedAt) || a.sessionStartTime || 0),
     )[0];
   const [now, setNow] = useState(Date.now());
   const [lastVisibleActivityAt, setLastVisibleActivityAt] = useState(
@@ -1669,8 +1784,8 @@ const TodayStudyTimeline = ({ tasks }: { tasks: Task[] }) => {
       .filter((task: Task) => task.isRunning && task.sessionStartTime)
       .sort(
         (a: Task, b: Task) =>
-          (b.lastUpdatedAt || b.sessionStartTime || 0) -
-          (a.lastUpdatedAt || a.sessionStartTime || 0),
+          (toMillis(b.lastUpdatedAt) || b.sessionStartTime || 0) -
+          (toMillis(a.lastUpdatedAt) || a.sessionStartTime || 0),
       )[0];
   }, [tasks]);
 
@@ -3119,6 +3234,7 @@ export default function App() {
   const tasksRef = useRef<Task[]>([]);
   const globalLastActivityAtRef = useRef(Date.now());
   const lastActivityLocalUpdateAtRef = useRef(0);
+  const lastVisibilityResumeAtRef = useRef(Date.now());
 
   useEffect(() => {
     tasksRef.current = tasks;
@@ -3188,17 +3304,20 @@ export default function App() {
 
         const fetchedTasks = taskSnap.docs.map((doc) => {
           const data = doc.data();
-          return { id: doc.id, ...data } as Task;
+          return { ...normalizeTask({ id: doc.id, ...data } as Task), pendingSync: false };
         });
         const fetchedTests = testSnap.docs.map((doc) => {
           const data = doc.data();
           return { id: doc.id, ...data } as TestResult;
         });
 
-        setTasks(fetchedTasks);
+        setTasks((prev) => {
+          const mergedTasks = mergeTasksFromCloud(prev, fetchedTasks);
+          setCache(CACHE_KEY_TASKS, mergedTasks);
+          return mergedTasks;
+        });
         setTests(fetchedTests);
 
-        setCache(CACHE_KEY_TASKS, fetchedTasks);
         setCache(CACHE_KEY_TESTS, fetchedTests);
 
         setSyncState("synced");
@@ -3213,7 +3332,7 @@ export default function App() {
         setSyncState("offline");
         const ctTasks = getCache(CACHE_KEY_TASKS);
         const ctTests = getCache(CACHE_KEY_TESTS);
-        if (ctTasks) setTasks(ctTasks);
+        if (ctTasks) setTasks(ctTasks.map(normalizeTask));
         if (ctTests) setTests(ctTests);
       }
     },
@@ -3224,7 +3343,7 @@ export default function App() {
     if (user && !isSampleMode) {
       const ctTasks = getCache(CACHE_KEY_TASKS);
       const ctTests = getCache(CACHE_KEY_TESTS);
-      if (ctTasks) setTasks(ctTasks);
+      if (ctTasks) setTasks(ctTasks.map(normalizeTask));
       if (ctTests) setTests(ctTests);
       fetchData();
     }
@@ -3247,13 +3366,14 @@ export default function App() {
       const now = Date.now();
       globalLastActivityAtRef.current = now;
       lastActivityLocalUpdateAtRef.current = now;
+      lastVisibilityResumeAtRef.current = now;
 
       setTasks((prev) => {
         let changed = false;
         const next = prev.map((t) => {
           if (t.isRunning && t.sessionStartTime) {
             changed = true;
-            return { ...t, lastActivityAt: now };
+            return { ...t, lastActivityAt: now, lastUpdatedAt: now };
           }
           return t;
         });
@@ -3268,6 +3388,21 @@ export default function App() {
       document.removeEventListener("visibilitychange", markVisibleAgain);
       window.removeEventListener("focus", markVisibleAgain);
       window.removeEventListener("pageshow", markVisibleAgain);
+    };
+  }, []);
+
+  useEffect(() => {
+    const persistRunningSnapshot = () => {
+      setCache(CACHE_KEY_TASKS, tasksRef.current.map(normalizeTask));
+    };
+
+    document.addEventListener("visibilitychange", persistRunningSnapshot);
+    window.addEventListener("pagehide", persistRunningSnapshot);
+    window.addEventListener("beforeunload", persistRunningSnapshot);
+    return () => {
+      document.removeEventListener("visibilitychange", persistRunningSnapshot);
+      window.removeEventListener("pagehide", persistRunningSnapshot);
+      window.removeEventListener("beforeunload", persistRunningSnapshot);
     };
   }, []);
 
@@ -3287,7 +3422,10 @@ export default function App() {
       if (!dbInstance || !auth?.currentUser || isSampleMode) return;
       try {
         const taskRef = getTaskDoc(dbInstance, id);
-        await updateDoc(taskRef, cloudUpdates);
+        const { pendingSync, ...safeCloudUpdates } = cloudUpdates;
+        await updateDoc(taskRef, safeCloudUpdates);
+        clearPendingTaskUpdate(id);
+        updateLocalTask(id, { pendingSync: false });
         setSyncState("synced");
         setLastSync(
           new Date().toLocaleTimeString("ja-JP", {
@@ -3296,11 +3434,54 @@ export default function App() {
           }),
         );
       } catch (e) {
+        queuePendingTaskUpdate(id, cloudUpdates);
+        updateLocalTask(id, { pendingSync: true });
         setSyncState("offline");
       }
     },
-    [isSampleMode],
+    [isSampleMode, updateLocalTask],
   );
+
+  const flushPendingTaskUpdates = useCallback(async () => {
+    const dbInstance = getSafeDb();
+    if (!dbInstance || !auth?.currentUser || isSampleMode) return;
+
+    const pending = getPendingTaskUpdates();
+    const entries = Object.entries(pending);
+    if (entries.length === 0) return;
+
+    setSyncState("syncing");
+    try {
+      for (const [id, updates] of entries) {
+        const { pendingSync, ...safeCloudUpdates } = updates as any;
+        await updateDoc(getTaskDoc(dbInstance, id), safeCloudUpdates);
+        clearPendingTaskUpdate(id);
+        updateLocalTask(id, { pendingSync: false });
+      }
+      setSyncState("synced");
+      setLastSync(
+        new Date().toLocaleTimeString("ja-JP", {
+          hour: "2-digit",
+          minute: "2-digit",
+        }),
+      );
+    } catch (e) {
+      setSyncState("offline");
+    }
+  }, [isSampleMode, updateLocalTask]);
+
+  useEffect(() => {
+    const retry = () => flushPendingTaskUpdates();
+    window.addEventListener("online", retry);
+    window.addEventListener("focus", retry);
+    window.addEventListener("pageshow", retry);
+    retry();
+    return () => {
+      window.removeEventListener("online", retry);
+      window.removeEventListener("focus", retry);
+      window.removeEventListener("pageshow", retry);
+    };
+  }, [flushPendingTaskUpdates]);
 
   // グローバル操作監視：詳細モーダルを閉じていても、操作があれば稼働中タイマーの無操作判定をリセットする
   useEffect(() => {
@@ -3351,8 +3532,8 @@ export default function App() {
 
       const latestRunningTask = [...runningTasks].sort(
         (a, b) =>
-          (b.lastUpdatedAt || b.sessionStartTime || 0) -
-          (a.lastUpdatedAt || a.sessionStartTime || 0),
+          (toMillis(b.lastUpdatedAt) || b.sessionStartTime || 0) -
+          (toMillis(a.lastUpdatedAt) || a.sessionStartTime || 0),
       )[0];
 
       const updatesToSync: { id: string; updates: Partial<Task> }[] = [];
@@ -3367,6 +3548,7 @@ export default function App() {
         const shouldStopBecauseIdle =
           !document.hidden &&
           t.id === latestRunningTask.id &&
+          now - lastVisibilityResumeAtRef.current > WAKE_GRACE_MS &&
           now - idleBase >= IDLE_LIMIT_MS;
 
         if (shouldForceStopBecauseDuplicated || shouldStopBecauseIdle) {
@@ -3381,6 +3563,7 @@ export default function App() {
               sessionStartTime: null,
               lastActivityAt: now,
               lastUpdatedAt: now,
+              pendingSync: true,
             },
           });
         }
@@ -3465,13 +3648,16 @@ export default function App() {
   // ==========================================
 
   const cycleStatus = (task: Task) => {
+    const now = Date.now();
     const next =
       task.status === "not_started"
         ? "in_progress"
         : task.status === "in_progress"
           ? "completed"
           : "not_started";
-    updateLocalTask(task.id, { status: next, lastUpdatedAt: Date.now() });
+    const updates = { status: next, lastUpdatedAt: now, pendingSync: true };
+    updateLocalTask(task.id, updates as Partial<Task>);
+    syncTaskToCloud(task.id, { status: next, lastUpdatedAt: now });
   };
 
   const saveHistoryRecord = async (task: Task) => {
@@ -3499,11 +3685,12 @@ export default function App() {
       sessionStartTime: null,
       lastActivityAt: Date.now(),
       lastUpdatedAt: Date.now(),
+      pendingSync: true,
       status: task.status === "not_started" ? "in_progress" : task.status,
     };
     const cloudUpdates = {
       ...updates,
-      lastUpdatedAt: serverTimestamp(),
+      pendingSync: false,
     };
 
     updateLocalTask(task.id, updates as Partial<Task>);
@@ -3537,6 +3724,7 @@ export default function App() {
               sessionStartTime: null,
               lastActivityAt: now,
               lastUpdatedAt: now,
+              pendingSync: true,
             };
           }
           return t;
@@ -3561,7 +3749,26 @@ export default function App() {
               });
             });
             await batch.commit();
+            setTasks((prev) =>
+              prev.map((t) =>
+                tasksToPause.some((paused) => paused.id === t.id)
+                  ? { ...t, pendingSync: false }
+                  : t,
+              ),
+            );
           } catch (e) {
+            tasksToPause.forEach((t) => {
+              const elapsed = t.sessionStartTime
+                ? Math.floor((now - t.sessionStartTime) / 1000)
+                : 0;
+              queuePendingTaskUpdate(t.id, {
+                isRunning: false,
+                currentDuration: t.currentDuration + elapsed,
+                sessionStartTime: null,
+                lastActivityAt: now,
+                lastUpdatedAt: now,
+              });
+            });
             console.error("Batch update failed", e);
           }
         }
@@ -3608,7 +3815,7 @@ export default function App() {
     newTasks.forEach((t) =>
       batch.set(getTaskDoc(dbInstance, t.id), {
         ...t,
-        lastUpdatedAt: serverTimestamp(),
+        lastUpdatedAt: Date.now(),
       }),
     );
     await batch.commit();
@@ -3654,7 +3861,7 @@ export default function App() {
     if (!dbInstance || !auth?.currentUser || isSampleMode) return;
     await setDoc(getTaskDoc(dbInstance, newTask.id), {
       ...newTask,
-      lastUpdatedAt: serverTimestamp(),
+      lastUpdatedAt: Date.now(),
     });
   };
 
