@@ -69,6 +69,12 @@ import {
   writeBatch,
   query,
 } from "firebase/firestore";
+import {
+  getElapsedSeconds,
+  getSubjectTaskStats,
+  getTaskStats,
+  removeTasksForUnit,
+} from "./study-utils";
 
 // ==========================================
 // Firebase Initialization (Vite + Vercel)
@@ -150,8 +156,6 @@ const getTestDoc = (database: any, id: string) =>
 const CACHE_KEY_TASKS = `study-app-v5-${FAMILY_ID}-tasks`;
 const CACHE_KEY_TESTS = `study-app-v5-${FAMILY_ID}-tests`;
 const CACHE_KEY_PENDING_TASK_UPDATES = `study-app-v5-${FAMILY_ID}-pending-task-updates`;
-const IDLE_LIMIT_MS = 5 * 60 * 1000;
-const WAKE_GRACE_MS = 5 * 1000;
 
 type Subject = "math" | "japanese" | "science" | "social";
 
@@ -427,7 +431,12 @@ const clearPendingTaskUpdate = (id: string) => {
 // ==========================================
 // Helper: Generate Dummy Data
 // ==========================================
-const generateDummyTasks = (): Task[] => {
+const generateDummyTasks = (seed = 20260905): Task[] => {
+  let randomState = seed >>> 0;
+  const random = () => {
+    randomState = (randomState * 1664525 + 1013904223) >>> 0;
+    return randomState / 0x100000000;
+  };
   const tasks: Task[] = [];
   const subjects: Subject[] = ["math", "japanese", "science", "social"];
   const today = new Date();
@@ -438,28 +447,28 @@ const generateDummyTasks = (): Task[] => {
       const presets = CURRICULUM_PRESETS[subj];
       presets.forEach((cat) => {
         cat.items.forEach((item, idx) => {
-          const hasHistory = Math.random() > 0.3;
+          const hasHistory = random() > 0.3;
           const history = [];
 
           if (hasHistory) {
-            const entries = Math.floor(Math.random() * 3) + 1;
+            const entries = Math.floor(random() * 3) + 1;
             for (let i = 0; i < entries; i++) {
-              const daysAgo = Math.floor(Math.random() * 30);
+              const daysAgo = Math.floor(random() * 30);
               const date = new Date(today);
               date.setDate(today.getDate() - daysAgo);
-              const duration = (Math.floor(Math.random() * 40) + 10) * 60;
+              const duration = (Math.floor(random() * 40) + 10) * 60;
               const startAt = new Date(date).setHours(
-                8 + Math.floor(Math.random() * 10),
-                Math.floor(Math.random() * 4) * 15,
+                8 + Math.floor(random() * 10),
+                Math.floor(random() * 4) * 15,
                 0,
                 0,
               );
               const endAt = startAt + duration * 1000;
               history.push({
-                id: Math.random().toString(36).substr(2, 9),
+                id: random().toString(36).slice(2, 11),
                 date: `${date.getMonth() + 1}/${date.getDate()}`,
                 duration,
-                memo: Math.random() > 0.7 ? "難しかった" : "",
+                memo: random() > 0.7 ? "難しかった" : "",
                 startAt,
                 endAt,
               });
@@ -472,7 +481,7 @@ const generateDummyTasks = (): Task[] => {
           }
 
           tasks.push({
-            id: `${unitNum}-${subj}-${idx}-${Math.random().toString(36).substr(2, 5)}`,
+            id: `${unitNum}-${subj}-${idx}-${random().toString(36).slice(2, 7)}`,
             unit,
             subject: subj,
             category: cat.category,
@@ -530,7 +539,7 @@ const INITIAL_TESTS: TestResult[] = [
 ];
 
 // ==========================================
-// Strict Anti-Cheat Timer Component
+// Study Timer Component
 // ==========================================
 const StrictTimer = React.memo(
   ({
@@ -547,10 +556,7 @@ const StrictTimer = React.memo(
     pauseAllOtherTasks: (id: string) => Promise<void>;
   }) => {
     const [localSeconds, setLocalSeconds] = useState(task.currentDuration);
-    const [showAutoPauseAlert, setShowAutoPauseAlert] = useState(false);
     const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-    const lastActive = useRef(Date.now());
-    const lastResumeAt = useRef(Date.now());
     const isRunning = task.isRunning;
 
     // 正確な現在秒数を計算するヘルパー（バックグラウンド等で表示が遅延しても正しい秒数を得る）
@@ -564,32 +570,7 @@ const StrictTimer = React.memo(
       return task.currentDuration;
     }, [isRunning, task.sessionStartTime, task.currentDuration]);
 
-    useEffect(() => {
-      if (!isRunning) setLocalSeconds(task.currentDuration);
-      else setLocalSeconds(getAccurateSeconds());
-    }, [task.currentDuration, isRunning, getAccurateSeconds]);
-
-    useEffect(() => {
-      const handleActivity = () => {
-        const now = Date.now();
-        lastActive.current = now;
-        if (task.isRunning && now - (task.lastActivityAt || 0) > 1000) {
-          updateLocalTask(task.id, { lastActivityAt: now });
-        }
-      };
-      window.addEventListener("mousemove", handleActivity);
-      window.addEventListener("keydown", handleActivity);
-      window.addEventListener("touchstart", handleActivity);
-      window.addEventListener("scroll", handleActivity);
-      return () => {
-        window.removeEventListener("mousemove", handleActivity);
-        window.removeEventListener("keydown", handleActivity);
-        window.removeEventListener("touchstart", handleActivity);
-        window.removeEventListener("scroll", handleActivity);
-      };
-    }, [task.id, task.isRunning, task.lastActivityAt, updateLocalTask]);
-
-    // Timer Loop & Idle Check
+    // タイマーは紙の教材に集中している間も継続する。無操作による停止はしない。
     useEffect(() => {
       if (isRunning) {
         const startTime = task.sessionStartTime || Date.now();
@@ -606,27 +587,6 @@ const StrictTimer = React.memo(
             updateLocalTask(task.id, { lastUpdatedAt: now });
           }
 
-          // バックグラウンド時（document.hidden === true）は自動停止の判定を行わない
-          if (
-            !document.hidden &&
-            now - lastResumeAt.current > WAKE_GRACE_MS &&
-            now - lastActive.current > IDLE_LIMIT_MS
-          ) {
-            updateLocalTask(task.id, {
-              isRunning: false,
-              currentDuration: accurateSecs,
-              sessionStartTime: null,
-              lastUpdatedAt: now,
-              pendingSync: true,
-            });
-            syncTaskToCloud(task.id, {
-              isRunning: false,
-              currentDuration: accurateSecs,
-              sessionStartTime: null,
-              lastUpdatedAt: now,
-            });
-            setShowAutoPauseAlert(true);
-          }
         }, 1000);
       }
       return () => {
@@ -641,13 +601,10 @@ const StrictTimer = React.memo(
       syncTaskToCloud,
     ]);
 
-    // バックグラウンド・スリープから復帰した時の処理
+    // バックグラウンド・スリープから復帰した時は表示秒数を補正する。
     useEffect(() => {
       const handleVis = () => {
         if (!document.hidden && task.isRunning) {
-          const now = Date.now();
-          lastActive.current = now; // 復帰時にアクティブ時間を更新し、即座に自動停止するのを防ぐ
-          lastResumeAt.current = now;
           setLocalSeconds(getAccurateSeconds()); // 表示秒数も復帰時に即補正する
         }
       };
@@ -657,9 +614,6 @@ const StrictTimer = React.memo(
 
     const handlePlay = async (e?: React.MouseEvent) => {
       e?.stopPropagation();
-      lastActive.current = Date.now();
-      lastResumeAt.current = Date.now();
-
       // タイマー排他制御：他のタイマーをすべてストップさせる
       await pauseAllOtherTasks(task.id);
 
@@ -752,14 +706,17 @@ const StrictTimer = React.memo(
             </span>
             {isRunning && (
               <div className="text-[9px] md:text-[10px] lg:text-xs text-blue-500 font-bold mt-1 md:mt-2 animate-pulse">
-                計測中 (サボり検知ON)
+                計測中
               </div>
             )}
           </div>
           <div className="flex items-center gap-2 md:gap-3 lg:gap-4 pr-2 md:pr-3">
             {!isRunning ? (
               <button
+                type="button"
                 onClick={handlePlay}
+                aria-label="学習タイマーを開始"
+                title="学習タイマーを開始"
                 className="w-12 h-12 md:w-14 md:h-14 lg:w-16 lg:h-16 flex items-center justify-center rounded-full bg-blue-600 text-white shadow-lg active:scale-95 hover:bg-blue-700 transition-all"
               >
                 <Play
@@ -769,7 +726,10 @@ const StrictTimer = React.memo(
               </button>
             ) : (
               <button
+                type="button"
                 onClick={handlePauseClick}
+                aria-label="学習タイマーを一時停止"
+                title="学習タイマーを一時停止"
                 className="w-12 h-12 md:w-14 md:h-14 lg:w-16 lg:h-16 flex items-center justify-center rounded-full bg-amber-500 text-white shadow-lg active:scale-95 hover:bg-amber-600 transition-all"
               >
                 <Pause
@@ -781,28 +741,8 @@ const StrictTimer = React.memo(
           </div>
         </div>
 
-        {showAutoPauseAlert && (
-          <div className="absolute inset-0 z-10 flex items-center justify-center bg-white/95 backdrop-blur-sm rounded-2xl md:rounded-3xl p-4 md:p-5 shadow-lg border border-amber-200 animate-in fade-in zoom-in-95">
-            <div className="text-center">
-              <div className="w-10 h-10 md:w-12 md:h-12 lg:w-14 lg:h-14 bg-amber-100 text-amber-500 rounded-full flex items-center justify-center mx-auto mb-2 md:mb-3">
-                <AlertTriangle className="w-5 h-5 md:w-6 md:h-6 lg:w-8 lg:h-8" />
-              </div>
-              <p className="text-xs md:text-sm lg:text-base font-bold text-slate-700 mb-3 md:mb-4">
-                5分以上操作がなかったため
-                <br />
-                自動的に一時停止しました
-              </p>
-              <button
-                onClick={() => setShowAutoPauseAlert(false)}
-                className="bg-amber-500 text-white px-5 py-2 md:px-6 md:py-2.5 lg:px-8 lg:py-3 rounded-xl md:rounded-2xl text-sm md:text-base lg:text-lg font-bold shadow-md active:scale-95 w-full"
-              >
-                確認
-              </button>
-            </div>
-          </div>
-        )}
-
         <button
+          type="button"
           onClick={handleStopAndSave}
           disabled={localSeconds === 0}
           className="w-full bg-slate-800 text-white font-bold py-3.5 md:py-4 lg:py-5 text-base md:text-lg lg:text-xl rounded-2xl md:rounded-3xl shadow-lg active:scale-95 transition-all flex items-center justify-center gap-2 md:gap-2.5 disabled:opacity-50 mt-2 md:mt-3"
@@ -837,12 +777,14 @@ const ConfirmModal = ({ isOpen, onClose, onConfirm, title, message }: any) => {
         </div>
         <div className="flex gap-3 md:gap-4">
           <button
+            type="button"
             onClick={onClose}
             className="flex-1 py-3 md:py-3.5 lg:py-4 rounded-xl md:rounded-2xl text-sm md:text-base lg:text-lg font-bold text-slate-500 bg-slate-100 hover:bg-slate-200 transition-colors"
           >
             キャンセル
           </button>
           <button
+            type="button"
             onClick={() => {
               onConfirm();
               onClose();
@@ -877,7 +819,7 @@ const CreateUnitOverlay = ({
             <Layers className="mr-2 md:mr-3 w-5 h-5 md:w-6 md:h-6 lg:w-7 lg:h-7 text-blue-600" />{" "}
             新しい回を追加
           </h3>
-          <button onClick={onClose}>
+          <button type="button" onClick={onClose} aria-label="新しい回の追加を閉じる" title="閉じる">
             <X className="w-5 h-5 md:w-6 md:h-6 lg:w-7 lg:h-7 text-slate-400 hover:text-slate-600" />
           </button>
         </div>
@@ -903,6 +845,7 @@ const CreateUnitOverlay = ({
           </div>
         </div>
         <button
+          type="button"
           onClick={() => {
             if (parseInt(unitNumber) > 0) {
               onCreate(parseInt(unitNumber));
@@ -936,7 +879,7 @@ const AddCustomTaskModal = ({ isOpen, onClose, onAdd }: any) => {
           <h3 className="text-lg md:text-2xl lg:text-3xl font-black text-slate-800">
             タスクを追加
           </h3>
-          <button onClick={onClose}>
+          <button type="button" onClick={onClose} aria-label="タスク追加を閉じる" title="閉じる">
             <X className="w-5 h-5 md:w-6 md:h-6 lg:w-7 lg:h-7 text-slate-400 hover:text-slate-600" />
           </button>
         </div>
@@ -973,6 +916,7 @@ const AddCustomTaskModal = ({ isOpen, onClose, onAdd }: any) => {
             />
           </div>
           <button
+            type="button"
             onClick={() => {
               if (title) {
                 onAdd(title, category);
@@ -1245,6 +1189,9 @@ const TaskCard = ({ task, cycleStatus, setDetailTaskId }: any) => {
       )}
       <div className="flex items-start gap-2 md:gap-3 relative z-10">
         <button
+          type="button"
+          aria-label={`タスク「${task.title}」の状態を変更`}
+          title="状態を変更"
           onClick={(e) => {
             e.stopPropagation();
             cycleStatus(task);
@@ -1336,7 +1283,10 @@ const TaskDetailModal = ({
             </h3>
           </div>
           <button
+            type="button"
             onClick={onClose}
+            aria-label="タスク詳細を閉じる"
+            title="閉じる"
             className="p-1.5 md:p-2 bg-slate-100 rounded-full text-slate-400 active:scale-95"
           >
             <X className="w-[18px] h-[18px] md:w-5 md:h-5 lg:w-6 lg:h-6" />
@@ -1483,12 +1433,14 @@ const TaskDetailModal = ({
 
         <div className="p-4 md:p-5 lg:p-6 border-t border-slate-200 bg-white sm:rounded-b-3xl md:rounded-b-[2rem] shrink-0 flex gap-3 md:gap-4 pb-safe-bottom">
           <button
+            type="button"
             onClick={onDelete}
             className="text-red-500 bg-red-50 hover:bg-red-100 p-3 md:p-3.5 lg:p-4 rounded-xl md:rounded-2xl font-bold text-xs md:text-sm lg:text-base flex items-center justify-center gap-1.5 md:gap-2 transition-colors"
           >
             <Trash2 className="w-3.5 h-3.5 md:w-4 md:h-4 lg:w-5 lg:h-5" /> 削除
           </button>
           <button
+            type="button"
             onClick={onClose}
             className="bg-slate-800 text-white font-bold py-3 md:py-3.5 lg:py-4 rounded-xl md:rounded-2xl text-sm md:text-base lg:text-lg flex-1 shadow-lg active:scale-95 transition-transform"
           >
@@ -1666,49 +1618,21 @@ const ActiveStudyTimerPanel = ({ tasks }: { tasks: Task[] }) => {
         (toMillis(a.lastUpdatedAt) || a.sessionStartTime || 0),
     )[0];
   const [now, setNow] = useState(Date.now());
-  const [lastVisibleActivityAt, setLastVisibleActivityAt] = useState(
-    Date.now(),
-  );
 
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
   }, []);
 
-  useEffect(() => {
-    if (!runningTask) return;
-    const initialActivityAt = runningTask.lastActivityAt || Date.now();
-    setLastVisibleActivityAt(initialActivityAt);
-
-    const handleActivity = () => setLastVisibleActivityAt(Date.now());
-    window.addEventListener("mousemove", handleActivity);
-    window.addEventListener("keydown", handleActivity);
-    window.addEventListener("touchstart", handleActivity);
-    window.addEventListener("scroll", handleActivity);
-    return () => {
-      window.removeEventListener("mousemove", handleActivity);
-      window.removeEventListener("keydown", handleActivity);
-      window.removeEventListener("touchstart", handleActivity);
-      window.removeEventListener("scroll", handleActivity);
-    };
-  }, [runningTask?.id, runningTask?.lastActivityAt]);
-
   if (!runningTask || !runningTask.sessionStartTime) return null;
 
   const conf = SUBJECT_CONFIG[runningTask.subject];
-  const currentSeconds =
-    runningTask.currentDuration +
-    Math.floor((now - runningTask.sessionStartTime) / 1000);
+  const currentSeconds = getElapsedSeconds(runningTask, now);
   const historyTotalSeconds = runningTask.history.reduce(
     (sum, h) => sum + h.duration,
     0,
   );
   const cumulativeSeconds = historyTotalSeconds + currentSeconds;
-  const remainingSeconds = Math.max(
-    0,
-    Math.floor((IDLE_LIMIT_MS - (now - lastVisibleActivityAt)) / 1000),
-  );
-  const remainingLabel = `${String(Math.floor(remainingSeconds / 60)).padStart(2, "0")}:${String(remainingSeconds % 60).padStart(2, "0")}`;
 
   return (
     <div className="bg-white rounded-3xl p-5 md:p-7 lg:p-8 shadow-md border border-blue-100 ring-1 ring-blue-50">
@@ -1735,21 +1659,13 @@ const ActiveStudyTimerPanel = ({ tasks }: { tasks: Task[] }) => {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 md:gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4">
         <div className="rounded-2xl bg-blue-50 border border-blue-100 p-4 md:p-5 text-center">
           <div className="text-[10px] md:text-xs font-black text-blue-400 mb-2">
             現在
           </div>
           <div className="text-2xl md:text-3xl lg:text-4xl font-black text-blue-600 font-mono tracking-tight">
             {formatTime(currentSeconds)}
-          </div>
-        </div>
-        <div className="rounded-2xl bg-slate-50 border border-slate-100 p-4 md:p-5 text-center">
-          <div className="text-[10px] md:text-xs font-black text-slate-400 mb-2">
-            停止まで
-          </div>
-          <div className="text-2xl md:text-3xl lg:text-4xl font-black text-slate-800 font-mono tracking-tight">
-            {remainingLabel}
           </div>
         </div>
         <div className="rounded-2xl bg-slate-50 border border-slate-100 p-4 md:p-5 text-center">
@@ -2180,27 +2096,13 @@ const DailyView = ({
   setDetailTaskId,
   setDeleteConfirmation,
 }: any) => {
-  const getStats = (targetTasks: Task[]) => {
-    if (targetTasks.length === 0) return { progress: 0, totalTime: 0 };
-    const completed = targetTasks.filter(
-      (t) => t.status === "completed",
-    ).length;
-    const progress = Math.round((completed / targetTasks.length) * 100);
-    const totalTime = targetTasks.reduce(
-      (acc, curr) =>
-        acc +
-        curr.history.reduce((hAcc, h) => hAcc + h.duration, 0) +
-        curr.currentDuration,
-      0,
-    );
-    return { progress, totalTime };
-  };
+  const getStats = getTaskStats;
 
   const allStats = useMemo(() => {
     const total = getStats(tasks);
     const subjects = (Object.keys(SUBJECT_CONFIG) as Subject[]).map((subj) => ({
       id: subj,
-      ...getStats(tasks.filter((t: Task) => t.subject === subj)),
+      ...getSubjectTaskStats(tasks, subj),
     }));
     return { total, subjects };
   }, [tasks]);
@@ -2397,6 +2299,7 @@ const DailyView = ({
                     className="bg-white rounded-2xl md:rounded-3xl p-4 md:p-5 lg:p-6 shadow-sm border border-slate-200 active:scale-[0.98] transition-all cursor-pointer relative"
                   >
                     <button
+                      type="button"
                       onClick={(e) => {
                         e.stopPropagation();
                         setDeleteConfirmation({
@@ -2405,7 +2308,9 @@ const DailyView = ({
                           onConfirm: () => deleteUnitTasks(unit),
                         });
                       }}
-                      className="absolute top-3 md:top-4 right-3 md:right-4 p-1.5 md:p-1.5 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors z-10"
+                      aria-label={`「${unit}」と登録済みの学習記録を削除`}
+                      title={`「${unit}」を削除`}
+                      className="absolute top-2 md:top-3 right-2 md:right-3 min-w-10 min-h-10 flex items-center justify-center text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors z-10"
                     >
                       <Trash2 className="w-[14px] h-[14px] md:w-4 md:h-4 lg:w-5 lg:h-5" />
                     </button>
@@ -2524,10 +2429,13 @@ const TestsView = ({ tests, onSaveTest, onDeleteTest }: any) => {
             ))}
           </div>
           <button
+            type="button"
             onClick={() => {
               setEditingTest(null);
               setModalOpen(true);
             }}
+            aria-label="テスト記録を追加"
+            title="テスト記録を追加"
             className="bg-blue-50 text-blue-600 p-1.5 md:p-2 lg:p-2.5 rounded-lg active:scale-95"
           >
             <Plus className="w-[18px] h-[18px] md:w-4 md:h-4 lg:w-5 lg:h-5" />
@@ -2693,16 +2601,22 @@ const TestsView = ({ tests, onSaveTest, onDeleteTest }: any) => {
                   <td className="py-2 md:py-3 lg:py-4 pr-2 md:pr-3">
                     <div className="flex flex-col md:flex-row gap-1 md:gap-1.5 items-end md:items-center justify-end opacity-100">
                       <button
+                        type="button"
                         onClick={() => {
                           setEditingTest(t);
                           setModalOpen(true);
                         }}
+                        aria-label={`「${t.name}」を編集`}
+                        title="テスト記録を編集"
                         className="p-1 md:p-1.5 text-slate-400 hover:text-blue-500 bg-white rounded md:rounded-md shadow-sm border border-slate-200"
                       >
                         <Edit2 className="w-2.5 h-2.5 md:w-3.5 md:h-3.5 lg:w-4 lg:h-4" />
                       </button>
                       <button
+                        type="button"
                         onClick={() => onDeleteTest(t.id)}
+                        aria-label={`「${t.name}」を削除`}
+                        title="テスト記録を削除"
                         className="p-1 md:p-1.5 text-slate-400 hover:text-red-500 bg-white rounded md:rounded-md shadow-sm border border-slate-200"
                       >
                         <Trash2 className="w-2.5 h-2.5 md:w-3.5 md:h-3.5 lg:w-4 lg:h-4" />
@@ -3232,9 +3146,6 @@ export default function App() {
   } | null>(null);
 
   const tasksRef = useRef<Task[]>([]);
-  const globalLastActivityAtRef = useRef(Date.now());
-  const lastActivityLocalUpdateAtRef = useRef(0);
-  const lastVisibilityResumeAtRef = useRef(Date.now());
 
   useEffect(() => {
     tasksRef.current = tasks;
@@ -3356,41 +3267,6 @@ export default function App() {
     }
   }, [tasks, tests, isSampleMode]);
 
-  // タブ切替・スリープ復帰・ブラウザ戻る復帰時の補正。
-  // lastUpdatedAt の古さだけで稼働中タイマーを停止すると、
-  // 画面遷移・別タブ・スリープ中に停止したように見えるため、
-  // 復帰時は「操作が再開された」とみなし、無操作判定の基準だけを更新する。
-  useEffect(() => {
-    const markVisibleAgain = () => {
-      if (document.hidden) return;
-      const now = Date.now();
-      globalLastActivityAtRef.current = now;
-      lastActivityLocalUpdateAtRef.current = now;
-      lastVisibilityResumeAtRef.current = now;
-
-      setTasks((prev) => {
-        let changed = false;
-        const next = prev.map((t) => {
-          if (t.isRunning && t.sessionStartTime) {
-            changed = true;
-            return { ...t, lastActivityAt: now, lastUpdatedAt: now };
-          }
-          return t;
-        });
-        return changed ? next : prev;
-      });
-    };
-
-    document.addEventListener("visibilitychange", markVisibleAgain);
-    window.addEventListener("focus", markVisibleAgain);
-    window.addEventListener("pageshow", markVisibleAgain);
-    return () => {
-      document.removeEventListener("visibilitychange", markVisibleAgain);
-      window.removeEventListener("focus", markVisibleAgain);
-      window.removeEventListener("pageshow", markVisibleAgain);
-    };
-  }, []);
-
   useEffect(() => {
     const persistRunningSnapshot = () => {
       setCache(CACHE_KEY_TASKS, tasksRef.current.map(normalizeTask));
@@ -3483,44 +3359,7 @@ export default function App() {
     };
   }, [flushPendingTaskUpdates]);
 
-  // グローバル操作監視：詳細モーダルを閉じていても、操作があれば稼働中タイマーの無操作判定をリセットする
-  useEffect(() => {
-    const handleGlobalActivity = () => {
-      const now = Date.now();
-      globalLastActivityAtRef.current = now;
-
-      // マウス移動等で過剰に再描画しないよう、ローカル更新は1秒に1回まで
-      if (now - lastActivityLocalUpdateAtRef.current < 1000) return;
-      lastActivityLocalUpdateAtRef.current = now;
-
-      setTasks((prev) => {
-        let changed = false;
-        const next = prev.map((t) => {
-          if (t.isRunning && t.sessionStartTime) {
-            changed = true;
-            return { ...t, lastActivityAt: now };
-          }
-          return t;
-        });
-        return changed ? next : prev;
-      });
-    };
-
-    window.addEventListener("mousemove", handleGlobalActivity);
-    window.addEventListener("keydown", handleGlobalActivity);
-    window.addEventListener("touchstart", handleGlobalActivity);
-    window.addEventListener("scroll", handleGlobalActivity);
-    return () => {
-      window.removeEventListener("mousemove", handleGlobalActivity);
-      window.removeEventListener("keydown", handleGlobalActivity);
-      window.removeEventListener("touchstart", handleGlobalActivity);
-      window.removeEventListener("scroll", handleGlobalActivity);
-    };
-  }, []);
-
-  // グローバルタイマー制御：
-  // 1) 稼働中タイマーは常に最新1件だけに補正
-  // 2) 詳細画面を閉じていても、5分無操作で自動停止
+  // グローバルタイマー制御：稼働中タイマーは常に最新1件だけに補正する。
   useEffect(() => {
     const interval = setInterval(() => {
       const now = Date.now();
@@ -3539,19 +3378,9 @@ export default function App() {
       const updatesToSync: { id: string; updates: Partial<Task> }[] = [];
 
       runningTasks.forEach((t) => {
-        const idleBase =
-          t.lastActivityAt ||
-          globalLastActivityAtRef.current ||
-          t.sessionStartTime ||
-          now;
         const shouldForceStopBecauseDuplicated = t.id !== latestRunningTask.id;
-        const shouldStopBecauseIdle =
-          !document.hidden &&
-          t.id === latestRunningTask.id &&
-          now - lastVisibilityResumeAtRef.current > WAKE_GRACE_MS &&
-          now - idleBase >= IDLE_LIMIT_MS;
 
-        if (shouldForceStopBecauseDuplicated || shouldStopBecauseIdle) {
+        if (shouldForceStopBecauseDuplicated) {
           const elapsed = t.sessionStartTime
             ? Math.max(0, Math.floor((now - t.sessionStartTime) / 1000))
             : 0;
@@ -3823,7 +3652,7 @@ export default function App() {
 
   const deleteUnitTasks = async (unit: string) => {
     const toDelete = tasks.filter((t) => t.unit === unit);
-    setTasks((prev) => prev.filter((t) => t.unit !== unit));
+    setTasks((prev) => removeTasksForUnit(prev, unit));
     if (selectedUnit === unit) setSelectedUnit(null);
 
     const dbInstance = getSafeDb();
@@ -3929,6 +3758,7 @@ export default function App() {
                     {lastSync} 同期
                   </div>
                   <button
+                    type="button"
                     onClick={() => fetchData(false)}
                     className="text-[10px] md:text-xs lg:text-sm bg-slate-100 hover:bg-slate-200 text-slate-600 px-2 py-1 md:px-3 md:py-1.5 rounded font-bold transition-colors flex items-center gap-1 active:scale-95"
                   >
@@ -3936,7 +3766,9 @@ export default function App() {
                   </button>
                 </div>
                 <button
+                  type="button"
                   onClick={handleLogout}
+                  aria-label="ログアウト"
                   className="text-slate-400 hover:text-slate-600 p-1 md:p-2"
                   title="ログアウト"
                 >
@@ -3945,6 +3777,7 @@ export default function App() {
               </div>
             ) : (
               <button
+                type="button"
                 onClick={() => {
                   setIsSampleMode(false);
                   fetchData(true);
@@ -3955,6 +3788,7 @@ export default function App() {
               </button>
             )}
             <button
+              type="button"
               onClick={() => {
                 if (!isSampleMode) {
                   setIsSampleMode(true);
@@ -3967,6 +3801,7 @@ export default function App() {
               }}
               className={`text-[10px] md:text-xs lg:text-sm px-2 py-2 md:px-3 md:py-2.5 rounded-lg font-bold transition-colors flex items-center gap-1 md:gap-2 active:scale-95 ${isSampleMode ? "bg-amber-500 text-white" : "bg-slate-100 text-slate-500 hover:bg-slate-200"}`}
               title="サンプル表示"
+              aria-label={isSampleMode ? "サンプルモードを終了" : "サンプルモードを表示"}
             >
               <FlaskConical className="w-3.5 h-3.5 md:w-4 md:h-4 lg:w-5 lg:h-5" />
             </button>
