@@ -78,20 +78,6 @@ import {
   getSubjectTaskStats,
   getTaskStats,
   removeTasksForUnit,
-  AVATAR_ITEMS,
-  GAME_START_DATE,
-  canEquipItem,
-  getCollectionProgress,
-  getDailyMissions,
-  getNextRewards,
-  getRewardTotals,
-  getSetCompletion,
-  getStarReward,
-  getUnlockedItems,
-  getWeeklyProgress,
-  type AvatarEquipment,
-  type AvatarItem,
-  type AvatarItemCategory,
 } from "./study-utils";
 
 // ==========================================
@@ -140,7 +126,7 @@ if (hasFirebaseConfig) {
 // ==========================================
 
 const FAMILY_ID = "oomine-study-2026";
-const APP_VERSION = "v1.65";
+const APP_VERSION = "v1.66";
 
 // Firestore Path 固定（変更禁止）
 // 実DB構造:
@@ -174,7 +160,6 @@ const getTestDoc = (database: any, id: string) =>
 const CACHE_KEY_TASKS = `study-app-v5-${FAMILY_ID}-tasks`;
 const CACHE_KEY_TESTS = `study-app-v5-${FAMILY_ID}-tests`;
 const CACHE_KEY_PENDING_TASK_UPDATES = `study-app-v5-${FAMILY_ID}-pending-task-updates`;
-const AVATAR_EQUIPMENT_KEY = "studyAppAvatarEquipment";
 
 type Subject = "math" | "japanese" | "science" | "social";
 
@@ -2130,423 +2115,6 @@ const TodayStudyTimeline = ({ tasks }: { tasks: Task[] }) => {
   );
 };
 
-const AVATAR_CATEGORY_LABELS: Record<AvatarItemCategory, string> = {
-  nail: "ネイル",
-  accessory: "アクセ",
-  clothes: "服",
-  background: "背景",
-};
-const REWARD_SUBJECT_LABELS: Record<string, string> = {
-  math: "算数",
-  japanese: "国語",
-  science: "理科",
-  social: "社会",
-};
-
-const getItemById = (id?: string) =>
-  id ? AVATAR_ITEMS.find((item) => item.id === id) : undefined;
-
-const getItemVisualClass = (item?: AvatarItem) => {
-  if (!item) return "from-slate-100 to-white border-slate-200 text-slate-400";
-  if (item.theme.includes("宇宙")) return "from-indigo-100 to-blue-50 border-indigo-200 text-indigo-600";
-  if (item.theme.includes("花") || item.name.includes("さくら")) return "from-pink-100 to-rose-50 border-pink-200 text-rose-600";
-  if (item.theme.includes("海")) return "from-cyan-100 to-blue-50 border-cyan-200 text-cyan-600";
-  if (item.theme.includes("社会") || item.name.includes("旅行")) return "from-amber-100 to-orange-50 border-amber-200 text-amber-700";
-  if (item.theme.includes("カフェ")) return "from-orange-100 to-pink-50 border-orange-200 text-orange-700";
-  return "from-rose-100 to-pink-50 border-rose-200 text-rose-600";
-};
-
-const AvatarPreview = ({ equipment }: { equipment: AvatarEquipment }) => {
-  const nail = getItemById(equipment.nail);
-  const accessory = getItemById(equipment.accessory);
-  const clothes = getItemById(equipment.clothes);
-  const background = getItemById(equipment.background);
-
-  return (
-    <div
-      className={`relative min-h-[220px] rounded-3xl border bg-gradient-to-br ${getItemVisualClass(background)} overflow-hidden p-5 flex items-center justify-center`}
-    >
-      <div className="absolute inset-x-8 top-8 h-16 rounded-full bg-white/40 blur-xl" />
-      <div className="relative flex flex-col items-center">
-        <div className="relative w-24 h-24 rounded-full bg-pink-50 border-4 border-white shadow-md flex items-center justify-center">
-          <div className="absolute top-8 left-7 w-2 h-2 rounded-full bg-slate-700" />
-          <div className="absolute top-8 right-7 w-2 h-2 rounded-full bg-slate-700" />
-          <div className="absolute bottom-7 w-8 h-3 border-b-2 border-rose-300 rounded-full" />
-          {accessory && (
-            <div className={`absolute -right-5 top-7 text-[10px] font-black px-2 py-1 rounded-full border bg-white shadow-sm ${getItemVisualClass(accessory)}`}>
-              {accessory.name}
-            </div>
-          )}
-        </div>
-        <div className={`mt-[-6px] w-32 h-28 rounded-t-[3rem] rounded-b-3xl border-4 border-white shadow-md bg-gradient-to-br ${getItemVisualClass(clothes)} flex items-center justify-center text-xs font-black text-center px-3`}>
-          {clothes ? clothes.name : "ベーシックワンピ"}
-        </div>
-        <div className="mt-3 flex gap-1.5">
-          {[0, 1, 2, 3, 4].map((finger) => (
-            <span
-              key={finger}
-              className={`w-4 h-6 rounded-full border bg-gradient-to-br ${getItemVisualClass(nail)}`}
-              title={nail ? nail.name : "ネイル未装備"}
-            />
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-};
-
-const AvatarRoomCard = ({
-  tasks,
-  equipment,
-  setEquipment,
-}: {
-  tasks: Task[];
-  equipment: AvatarEquipment;
-  setEquipment: React.Dispatch<React.SetStateAction<AvatarEquipment>>;
-}) => {
-  const [isOpen, setIsOpen] = useState(false);
-  const totals = useMemo(() => getRewardTotals(tasks), [tasks]);
-  const unlockedItems = useMemo(() => getUnlockedItems(tasks), [tasks]);
-  const nextRewards = useMemo(() => getNextRewards(tasks, 3), [tasks]);
-  const collection = useMemo(() => getCollectionProgress(unlockedItems), [unlockedItems]);
-  const dailyMissions = useMemo(() => getDailyMissions(tasks), [tasks]);
-  const weekly = useMemo(() => getWeeklyProgress(tasks), [tasks]);
-  const sets = useMemo(() => getSetCompletion(unlockedItems), [unlockedItems]);
-  const unlockedIds = new Set(unlockedItems.map((item) => item.id));
-  const visibleEquipment = useMemo(
-    () =>
-      (Object.entries(equipment) as [AvatarItemCategory, string | undefined][]).reduce(
-        (result, [category, itemId]) => {
-          if (itemId && canEquipItem(itemId, unlockedItems)) result[category] = itemId;
-          return result;
-        },
-        {} as AvatarEquipment,
-      ),
-    [equipment, unlockedItems],
-  );
-
-  const equipItem = (item: AvatarItem) => {
-    if (!canEquipItem(item.id, unlockedItems)) return;
-    setEquipment((prev) => ({ ...prev, [item.category]: item.id }));
-  };
-
-  const unequip = (category: AvatarItemCategory) => {
-    setEquipment((prev) => {
-      const next = { ...prev };
-      delete next[category];
-      return next;
-    });
-  };
-
-  return (
-    <>
-      <div className="bg-white rounded-3xl p-5 md:p-7 lg:p-8 shadow-md border border-pink-100 overflow-hidden">
-        <div className="flex flex-col lg:flex-row gap-5 lg:gap-7">
-          <div className="lg:w-64 xl:w-72 shrink-0">
-            <AvatarPreview equipment={visibleEquipment} />
-          </div>
-          <div className="flex-1 min-w-0">
-            <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 mb-4">
-              <div>
-                <div className="text-[10px] md:text-xs font-black text-pink-400 mb-1">
-                  My Avatar / おしゃれルーム
-                </div>
-                <h2 className="text-lg md:text-2xl lg:text-3xl font-black text-slate-800">
-                  勉強スターで着せ替え
-                </h2>
-                <p className="text-[10px] md:text-xs font-bold text-slate-400 mt-1">
-                  ごほうび対象: {GAME_START_DATE}以降の正常な記録
-                </p>
-              </div>
-              <div className="bg-yellow-50 border border-yellow-100 rounded-2xl px-4 py-3 text-right shrink-0">
-                <div className="text-[10px] md:text-xs font-black text-yellow-500">
-                  スター
-                </div>
-                <div className="text-2xl md:text-3xl font-black text-yellow-600">
-                  {totals.stars}
-                </div>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-2 md:gap-3 mb-4">
-              {collection.map((entry) => (
-                <div key={entry.category} className="rounded-2xl bg-slate-50 border border-slate-100 px-3 py-2">
-                  <div className="text-[10px] md:text-xs font-black text-slate-400">
-                    {AVATAR_CATEGORY_LABELS[entry.category]}
-                  </div>
-                  <div className="text-base md:text-lg font-black text-slate-700">
-                    {entry.unlocked} / {entry.total}
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            <div className="rounded-2xl bg-pink-50 border border-pink-100 p-4 mb-4">
-              <div className="text-[10px] md:text-xs font-black text-pink-500 mb-2">
-                次のごほうび
-              </div>
-              <div className="space-y-1.5">
-                {nextRewards.length === 0 ? (
-                  <div className="text-xs md:text-sm font-bold text-pink-500">
-                    すべてのアイテムを解放済みです
-                  </div>
-                ) : (
-                  nextRewards.map((reward) => (
-                    <div key={reward.item.id} className="text-xs md:text-sm font-bold text-slate-700">
-                      {reward.item.unlock.type === "subject_minutes"
-                        ? `${REWARD_SUBJECT_LABELS[reward.item.unlock.subject]}を`
-                        : ""}
-                      あと{reward.remaining}{reward.unit}で「{reward.item.name}」GET
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <div className="rounded-2xl bg-white border border-slate-100 p-4">
-                <div className="text-[10px] md:text-xs font-black text-slate-400 mb-2">
-                  今日のミッション
-                </div>
-                <div className="space-y-2">
-                  {dailyMissions.map((mission) => (
-                    <div key={mission.id} className="flex items-center justify-between gap-3 text-xs md:text-sm font-bold">
-                      <span className={mission.completed ? "text-green-600" : "text-slate-600"}>
-                        {mission.label}
-                      </span>
-                      <span className="text-slate-400">
-                        {mission.current}/{mission.target}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-              <div className="rounded-2xl bg-white border border-slate-100 p-4">
-                <div className="text-[10px] md:text-xs font-black text-slate-400 mb-2">
-                  週間ミッション
-                </div>
-                <div className="text-xs md:text-sm font-bold text-slate-700">
-                  今週の学習日数 {weekly.days} / {weekly.targetDays}
-                </div>
-                <div className="text-[10px] md:text-xs font-bold text-slate-400 mt-1">
-                  あと{weekly.remainingDays}日で「魔法のお部屋」
-                </div>
-              </div>
-            </div>
-
-            <div className="mt-4 flex justify-end">
-              <button
-                type="button"
-                onClick={() => setIsOpen(true)}
-                aria-label="コレクション図鑑と着せ替えを開く"
-                title="コレクション図鑑と着せ替え"
-                className="rounded-2xl bg-slate-800 text-white px-4 py-3 text-xs md:text-sm font-black shadow-lg active:scale-95"
-              >
-                図鑑・着せ替え
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {isOpen && (
-        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center">
-          <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm" onClick={() => setIsOpen(false)} />
-          <div className="relative bg-slate-50 w-full max-w-5xl h-[90vh] sm:h-[82vh] sm:rounded-3xl rounded-t-3xl shadow-2xl flex flex-col overflow-hidden">
-            <div className="bg-white px-5 py-4 md:px-7 md:py-5 border-b border-slate-200 flex items-center justify-between">
-              <div>
-                <div className="text-[10px] md:text-xs font-black text-pink-400">
-                  Collection
-                </div>
-                <h3 className="text-lg md:text-2xl font-black text-slate-800">
-                  コレクション図鑑
-                </h3>
-              </div>
-              <button
-                type="button"
-                onClick={() => setIsOpen(false)}
-                aria-label="コレクション図鑑を閉じる"
-                title="閉じる"
-                className="p-2 bg-slate-100 rounded-full text-slate-400 active:scale-95"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-            <div className="flex-1 overflow-y-auto p-5 md:p-7 space-y-6">
-              <div className="grid grid-cols-1 lg:grid-cols-[18rem_1fr] gap-5">
-                <div className="space-y-4">
-                  <AvatarPreview equipment={visibleEquipment} />
-                  <div className="rounded-2xl bg-white border border-slate-200 p-4">
-                    <div className="text-[10px] md:text-xs font-black text-slate-400 mb-3">
-                      現在装備
-                    </div>
-                    <div className="space-y-2">
-                      {(["nail", "accessory", "clothes", "background"] as AvatarItemCategory[]).map((category) => {
-                        const item = getItemById(visibleEquipment[category]);
-                        return (
-                          <div key={category} className="flex items-center justify-between gap-3 text-xs md:text-sm font-bold">
-                            <span className="text-slate-400">{AVATAR_CATEGORY_LABELS[category]}</span>
-                            <span className="text-slate-700 truncate">{item?.name || "未装備"}</span>
-                            {item && (
-                              <button
-                                type="button"
-                                onClick={() => unequip(category)}
-                                aria-label={`${AVATAR_CATEGORY_LABELS[category]}を装備解除`}
-                                title="装備解除"
-                                className="text-[10px] text-slate-400 bg-slate-100 rounded-lg px-2 py-1"
-                              >
-                                解除
-                              </button>
-                            )}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="space-y-6">
-                  {(["nail", "accessory", "clothes", "background"] as AvatarItemCategory[]).map((category) => (
-                    <section key={category}>
-                      <h4 className="text-sm md:text-base font-black text-slate-700 mb-3">
-                        {AVATAR_CATEGORY_LABELS[category]}
-                      </h4>
-                      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3">
-                        {AVATAR_ITEMS.filter((item) => item.category === category).map((item) => {
-                          const unlocked = unlockedIds.has(item.id);
-                          const equipped = visibleEquipment[category] === item.id;
-                          return (
-                            <button
-                              key={item.id}
-                              type="button"
-                              onClick={() => equipItem(item)}
-                              disabled={!unlocked}
-                              aria-label={unlocked ? `${item.name}を装備` : `${item.name}は未取得`}
-                              title={unlocked ? `${item.name}を装備` : "未取得アイテム"}
-                              className={`min-h-28 rounded-2xl border p-3 text-left transition-all active:scale-95 disabled:active:scale-100 ${unlocked ? `bg-gradient-to-br ${getItemVisualClass(item)} shadow-sm` : "bg-slate-100 border-slate-200 text-slate-400 opacity-70"} ${equipped ? "ring-2 ring-pink-400" : ""}`}
-                            >
-                              <div className="text-[10px] font-black mb-1">
-                                {unlocked ? item.rarity : "???"}
-                              </div>
-                              <div className="text-sm font-black leading-tight">
-                                {unlocked ? item.name : "???"}
-                              </div>
-                              <div className="text-[10px] font-bold mt-2 opacity-80">
-                                {unlocked ? item.theme : "まだ持っていないアイテム"}
-                              </div>
-                              {equipped && (
-                                <div className="text-[10px] font-black mt-2 text-pink-600">
-                                  装備中
-                                </div>
-                              )}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </section>
-                  ))}
-                  <section>
-                    <h4 className="text-sm md:text-base font-black text-slate-700 mb-3">
-                      セットコレクション
-                    </h4>
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                      {sets.map((set) => (
-                        <div key={set.id} className="rounded-2xl bg-white border border-slate-200 p-4">
-                          <div className="text-[10px] font-black text-pink-400 mb-1">
-                            {set.completed ? "SPECIAL 解放" : "SET"}
-                          </div>
-                          <div className="text-sm font-black text-slate-800">
-                            {set.name}
-                          </div>
-                          <div className="text-xs font-bold text-slate-400 mt-1">
-                            {set.ownedCount} / {set.totalCount}
-                          </div>
-                          <div className="text-xs font-bold text-slate-600 mt-2">
-                            {set.completed ? set.rewardName : `あと${set.totalCount - set.ownedCount}個`}
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </section>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-    </>
-  );
-};
-
-const StudyRewardModal = ({
-  reward,
-  onClose,
-}: {
-  reward: {
-    minutes: number;
-    stars: number;
-    newItems: AvatarItem[];
-    completedSets: ReturnType<typeof getSetCompletion>;
-    hasCredit: boolean;
-  } | null;
-  onClose: () => void;
-}) => {
-  if (!reward) return null;
-  return (
-    <div className="fixed inset-0 bg-slate-900/50 z-50 flex items-center justify-center p-6 backdrop-blur-sm animate-in fade-in">
-      <div className="bg-white w-full max-w-sm md:max-w-md rounded-3xl p-6 md:p-8 shadow-2xl text-center">
-        <div className="text-[10px] md:text-xs font-black text-pink-400 mb-2">
-          STUDY COMPLETE!
-        </div>
-        <h3 className="text-2xl md:text-3xl font-black text-slate-800 mb-3">
-          学習記録を保存しました
-        </h3>
-        <div className="rounded-2xl bg-yellow-50 border border-yellow-100 px-4 py-4 mb-4">
-          <div className="text-sm md:text-base font-bold text-slate-600">
-            {reward.minutes}分勉強
-          </div>
-          <div className="text-3xl md:text-4xl font-black text-yellow-600 mt-1">
-            スター +{reward.stars}
-          </div>
-          {!reward.hasCredit && (
-            <div className="text-xs font-bold text-slate-400 mt-2">
-              今日の記録として保存しました
-            </div>
-          )}
-        </div>
-        {reward.newItems.length > 0 && (
-          <div className="rounded-2xl bg-pink-50 border border-pink-100 p-4 mb-4">
-            <div className="text-[10px] font-black text-pink-500 mb-2">
-              NEW ITEM!
-            </div>
-            <div className="space-y-1">
-              {reward.newItems.map((item) => (
-                <div key={item.id} className="text-sm font-black text-slate-800">
-                  {item.name}
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-        {reward.completedSets.filter((set) => set.completed).length > 0 && (
-          <div className="text-xs md:text-sm font-black text-pink-600 mb-4">
-            SET COMPLETE!
-          </div>
-        )}
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="ごほうび結果を閉じる"
-          title="閉じる"
-          className="w-full bg-slate-800 text-white font-bold py-3 rounded-2xl active:scale-95"
-        >
-          OK
-        </button>
-      </div>
-    </div>
-  );
-};
-
 const DailyView = ({
   tasks,
   cycleStatus,
@@ -2558,8 +2126,6 @@ const DailyView = ({
   onAddCustomTask,
   setDetailTaskId,
   setDeleteConfirmation,
-  avatarEquipment,
-  setAvatarEquipment,
 }: any) => {
   const getStats = getTaskStats;
 
@@ -2735,12 +2301,6 @@ const DailyView = ({
                 })}
               </div>
             </div>
-
-            <AvatarRoomCard
-              tasks={tasks}
-              equipment={avatarEquipment}
-              setEquipment={setAvatarEquipment}
-            />
 
             <ActiveStudyTimerPanel tasks={tasks} />
 
@@ -3609,17 +3169,6 @@ export default function App() {
   const [isAddModalOpen, setAddModalOpen] = useState(false);
   const [selectedUnit, setSelectedUnit] = useState<string | null>(null);
   const [detailTaskId, setDetailTaskId] = useState<string | null>(null);
-  const [avatarEquipment, setAvatarEquipment] = useState<AvatarEquipment>(() => {
-    const saved = getCache(AVATAR_EQUIPMENT_KEY);
-    return saved && typeof saved === "object" ? saved : {};
-  });
-  const [studyReward, setStudyReward] = useState<{
-    minutes: number;
-    stars: number;
-    newItems: AvatarItem[];
-    completedSets: ReturnType<typeof getSetCompletion>;
-    hasCredit: boolean;
-  } | null>(null);
 
   const [confirmModalData, setConfirmModalData] = useState<{
     title: string;
@@ -3632,10 +3181,6 @@ export default function App() {
   useEffect(() => {
     tasksRef.current = tasks;
   }, [tasks]);
-
-  useEffect(() => {
-    setCache(AVATAR_EQUIPMENT_KEY, avatarEquipment);
-  }, [avatarEquipment]);
 
   // Authentication & Initialization
   useEffect(() => {
@@ -3977,12 +3522,6 @@ export default function App() {
 
   const saveHistoryRecord = async (task: Task) => {
     if (task.currentDuration === 0) return;
-    const beforeUnlocked = getUnlockedItems(tasksRef.current);
-    const beforeUnlockedIds = new Set(beforeUnlocked.map((item) => item.id));
-    const beforeSets = getSetCompletion(beforeUnlocked);
-    const beforeCompletedSetIds = new Set(
-      beforeSets.filter((set) => set.completed).map((set) => set.id),
-    );
     const endAt = Date.now();
     const startAt =
       task.sessionStartTime || endAt - task.currentDuration * 1000;
@@ -4024,22 +3563,6 @@ export default function App() {
     };
 
     updateLocalTask(task.id, updates as Partial<Task>);
-    const afterTasks = tasksRef.current.map((currentTask) =>
-      currentTask.id === task.id
-        ? ({ ...currentTask, ...updates } as Task)
-        : currentTask,
-    );
-    const afterUnlocked = getUnlockedItems(afterTasks);
-    const completedSets = getSetCompletion(afterUnlocked).filter(
-      (set) => set.completed && !beforeCompletedSetIds.has(set.id),
-    );
-    setStudyReward({
-      minutes: Math.floor(task.currentDuration / 60),
-      stars: getStarReward(Math.floor(creditedDuration / 60)),
-      newItems: afterUnlocked.filter((item) => !beforeUnlockedIds.has(item.id)),
-      completedSets,
-      hasCredit: creditedDuration > 0 && reviewFlags.length === 0,
-    });
     if (!isSampleMode) {
       await syncTaskToCloud(task.id, cloudUpdates);
     }
@@ -4355,8 +3878,6 @@ export default function App() {
             setDetailTaskId={setDetailTaskId}
             setDeleteConfirmation={setConfirmModalData}
             pauseAllOtherTasks={pauseAllOtherTasks}
-            avatarEquipment={avatarEquipment}
-            setAvatarEquipment={setAvatarEquipment}
           />
         ) : activeTab === "tests" ? (
           <TestsView
@@ -4461,10 +3982,6 @@ export default function App() {
         message={confirmModalData?.message}
       />
 
-      <StudyRewardModal
-        reward={studyReward}
-        onClose={() => setStudyReward(null)}
-      />
     </div>
   );
 }
