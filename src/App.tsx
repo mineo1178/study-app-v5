@@ -88,8 +88,11 @@ import { claimRewards, getSessionActivityPoints, getUnclaimedRewards, joinNextMe
 import type { ProducerGameState } from "./game/types";
 import { getNextBonusGap, getTestBoost, type TestKind } from "./game/test-bonus";
 import { calculateBoostedPoints, getHighestBoost } from "./game/test-bonus";
-import { createWeeklyResult, getWeekBoundsJst, isFinalizableWeek } from "./game/weekly";
+import { createWeeklyResult, getUnfinalizedWeeks } from "./game/weekly";
 import type { WeeklyResult } from "./game/types";
+import type { Performance } from "./game/types";
+import { LIVE_COST } from "./game/config";
+import { calculateAudience, calculateFanGain, canPerformLive, createSong, getCurrentVenue, getLiveRating } from "./game/song-live";
 
 // ==========================================
 // Firebase Initialization (Vite + Vercel)
@@ -137,7 +140,7 @@ if (hasFirebaseConfig) {
 // ==========================================
 
 const FAMILY_ID = "oomine-study-2026";
-const APP_VERSION = "v1.68";
+const APP_VERSION = "v1.69";
 
 // Firestore Path 固定（変更禁止）
 // 実DB構造:
@@ -170,6 +173,8 @@ const getGameDoc = (database: any) => doc(database, ...FIRESTORE_ROOT, "game", "
 const getRewardLedgerDoc = (database: any, sessionId: string) => doc(database, ...FIRESTORE_ROOT, "rewardLedger", sessionId);
 const getWeeksCol = (database: ReturnType<typeof getFirestore>) => collection(database, ...FIRESTORE_ROOT, "game", "idol-produce", "weeks");
 const getWeekDoc = (database: ReturnType<typeof getFirestore>, weekId: string) => doc(database, ...FIRESTORE_ROOT, "game", "idol-produce", "weeks", weekId);
+const getPerformancesCol = (database: ReturnType<typeof getFirestore>) => collection(database, ...FIRESTORE_ROOT, "game", "idol-produce", "performances");
+const getPerformanceDoc = (database: ReturnType<typeof getFirestore>, id: string) => doc(database, ...FIRESTORE_ROOT, "game", "idol-produce", "performances", id);
 
 // Cache Keys
 const CACHE_KEY_TASKS = `study-app-v5-${FAMILY_ID}-tasks`;
@@ -3194,6 +3199,7 @@ export default function App() {
   const [tests, setTests] = useState<TestResult[]>([]);
   const [game, setGame] = useState<ProducerGameState>(createInitialGameState);
   const [weeklyResults, setWeeklyResults] = useState<WeeklyResult[]>([]);
+  const [performances, setPerformances] = useState<Performance[]>([]);
 
   const [isAddModalOpen, setAddModalOpen] = useState(false);
   const [selectedUnit, setSelectedUnit] = useState<string | null>(null);
@@ -3330,9 +3336,11 @@ export default function App() {
       if (!dbInstance) return;
       try {
         const snapshot = await getDoc(getGameDoc(dbInstance));
-        if (snapshot.exists()) setGame(snapshot.data() as ProducerGameState);
+        if (snapshot.exists()) { const initial = createInitialGameState(); const saved = snapshot.data() as Partial<ProducerGameState>; setGame({ ...initial, ...saved, songs: saved.songs || initial.songs, boostRemainder: saved.boostRemainder || 0 }); }
         const weeks = await getDocs(getWeeksCol(dbInstance));
-        setWeeklyResults(weeks.docs.map((week) => week.data() as WeeklyResult).sort((a, b) => b.startAt - a.startAt).slice(0, 4));
+        setWeeklyResults(weeks.docs.map((week) => week.data() as WeeklyResult).sort((a, b) => b.startAt - a.startAt));
+        const performanceSnap = await getDocs(getPerformancesCol(dbInstance));
+        setPerformances(performanceSnap.docs.map((item) => item.data() as Performance).sort((a, b) => b.performedAt - a.performedAt).slice(0, 5));
       } catch { setSyncState("offline"); }
     };
     loadGame();
@@ -3664,27 +3672,38 @@ export default function App() {
   };
 
   const finalizePreviousWeek = useCallback(async () => {
-    const previousMonday = new Date(getWeekBoundsJst(new Date()).startAt - 1);
-    if (!isFinalizableWeek(previousMonday) || allStudyEntries.length === 0) return;
-    const proposed = createWeeklyResult(game, allStudyEntries, previousMonday);
-    if (weeklyResults.some((result) => result.weekId === proposed.weekId)) return;
+    const dates = getUnfinalizedWeeks(weeklyResults.map((result) => result.weekId));
+    if (dates.length === 0) return;
     if (isSampleMode || !auth?.currentUser || !getSafeDb()) {
-      setGame((current) => ({ ...current, fans: proposed.fanAfter }));
-      setWeeklyResults((current) => [proposed, ...current].slice(0, 4));
+      let nextGame = game;
+      const finalized = dates.map((date) => {
+        const result = createWeeklyResult(nextGame, allStudyEntries, date);
+        nextGame = { ...nextGame, fans: result.fanAfter };
+        return result;
+      });
+      setGame(nextGame);
+      setWeeklyResults((current) => [...finalized, ...current].sort((a, b) => b.startAt - a.startAt));
       return;
     }
     const dbInstance = getSafeDb()!;
     try {
-      const result = await runTransaction(dbInstance, async (transaction) => {
-        const weekRef = getWeekDoc(dbInstance, proposed.weekId); const existing = await transaction.get(weekRef);
-        if (existing.exists()) return existing.data() as WeeklyResult;
-        const gameRef = getGameDoc(dbInstance); const gameSnapshot = await transaction.get(gameRef);
-        const current = gameSnapshot.exists() ? gameSnapshot.data() as ProducerGameState : createInitialGameState();
-        const finalized = createWeeklyResult(current, allStudyEntries, previousMonday);
-        transaction.set(weekRef, finalized); transaction.set(gameRef, { ...current, fans: finalized.fanAfter });
-        return finalized;
-      });
-      setGame((current) => ({ ...current, fans: result.fanAfter })); setWeeklyResults((current) => [result, ...current.filter((week) => week.weekId !== result.weekId)].slice(0, 4));
+      const finalized: WeeklyResult[] = [];
+      for (const date of dates) {
+        const weekId = createWeeklyResult(game, allStudyEntries, date).weekId;
+        const result = await runTransaction(dbInstance, async (transaction) => {
+          const weekRef = getWeekDoc(dbInstance, weekId); const existing = await transaction.get(weekRef);
+          if (existing.exists()) return existing.data() as WeeklyResult;
+          const gameRef = getGameDoc(dbInstance); const gameSnapshot = await transaction.get(gameRef);
+          const current = gameSnapshot.exists() ? gameSnapshot.data() as ProducerGameState : createInitialGameState();
+          const week = createWeeklyResult(current, allStudyEntries, date);
+          transaction.set(weekRef, week); transaction.set(gameRef, { ...current, fans: week.fanAfter });
+          return week;
+        });
+        finalized.push(result);
+      }
+      const latest = finalized[finalized.length - 1];
+      setGame((current) => ({ ...current, fans: latest.fanAfter }));
+      setWeeklyResults((current) => [...finalized, ...current.filter((week) => !finalized.some((item) => item.weekId === week.weekId))].sort((a, b) => b.startAt - a.startAt));
     } catch { setSyncState("offline"); }
   }, [allStudyEntries, game, isSampleMode, weeklyResults]);
 
@@ -3710,6 +3729,29 @@ export default function App() {
     if (!isSampleMode && dbInstance && auth?.currentUser) {
       try { await setDoc(getGameDoc(dbInstance), next); } catch { setSyncState("offline"); }
     }
+  };
+
+  const createFirstSong = async () => {
+    const next = createSong(game);
+    if (next === game) return;
+    setGame(next);
+    const dbInstance = getSafeDb();
+    if (!isSampleMode && dbInstance && auth?.currentUser) {
+      try { await setDoc(getGameDoc(dbInstance), next); } catch { setSyncState("offline"); }
+    }
+  };
+
+  const performFirstLive = async () => {
+    const song = game.songs[0];
+    if (!canPerformLive(game, song)) return;
+    const venue = getCurrentVenue(game, performances);
+    const performanceId = `performance-${crypto.randomUUID?.() || Date.now()}`;
+    const audience = calculateAudience(game, song, venue.id); const rating = getLiveRating(calculateAudience(game, song, venue.id)); const fanGain = calculateFanGain(audience, rating, song);
+    const apply = (current: ProducerGameState) => ({ ...current, activityPoints: current.activityPoints - LIVE_COST, fans: current.fans + fanGain, songs: current.songs.map((item) => item.id === song.id ? { ...item, performanceCount: item.performanceCount + 1 } : item) });
+    const performance: Performance = { performanceId, songId: song.id, venueId: venue.id, performedAt: Date.now(), audience, capacity: venue.capacity, rating, fanGain, fanBefore: game.fans, fanAfter: game.fans + fanGain, version: "v1.69" };
+    if (isSampleMode || !auth?.currentUser || !getSafeDb()) { setGame(apply); setPerformances((current) => [performance, ...current].slice(0, 5)); return; }
+    const dbInstance = getSafeDb()!;
+    try { const result = await runTransaction(dbInstance, async (transaction) => { const performanceRef = getPerformanceDoc(dbInstance, performanceId); const existing = await transaction.get(performanceRef); if (existing.exists()) return null; const gameRef = getGameDoc(dbInstance); const gameSnap = await transaction.get(gameRef); const current = gameSnap.exists() ? gameSnap.data() as ProducerGameState : createInitialGameState(); const currentSong = current.songs[0]; if (!canPerformLive(current, currentSong)) throw new Error("LIVE_NOT_AVAILABLE"); const next = apply(current); const saved = { ...performance, fanBefore: current.fans, fanAfter: next.fans }; transaction.set(performanceRef, saved); transaction.set(gameRef, next); return { next, saved }; }); if (result) { setGame(result.next); setPerformances((current) => [result.saved, ...current].slice(0, 5)); } } catch { setSyncState("offline"); }
   };
 
   // タイマー排他制御：指定したタスク以外の稼働中タスクをすべてストップさせる
@@ -4040,6 +4082,9 @@ export default function App() {
             onJoin={joinMember}
             boostPercent={currentBoostPercent}
             weeklyResults={weeklyResults}
+            performances={performances}
+            onCreateSong={createFirstSong}
+            onPerform={performFirstLive}
           />
         ) : (
           <AchievementsView tasks={tasks} />

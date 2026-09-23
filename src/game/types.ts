@@ -18,7 +18,10 @@ export type ProducerGameState = {
   rivalEventsCompleted: number;
   producerStars: number;
   boostRemainder: number;
+  songs: OriginalSong[];
 };
+export type OriginalSong = { id: string; title: string; status: "locked" | "available" | "in_progress" | "completed"; createdAt?: number; completedAt?: number; level: number; performanceCount: number; requiredActivityPoints: number; requiredMembers: number; songStats: { vocal: number; lyrics: number; composition: number; dance: number }; fanBonus: number; };
+export type Performance = { performanceId: string; songId: string; venueId: string; performedAt: number; audience: number; capacity: number; rating: "GOOD" | "GREAT" | "PERFECT"; fanGain: number; fanBefore: number; fanAfter: number; version: string; };
 
 export type WeeklyResult = {
   weekId: string;

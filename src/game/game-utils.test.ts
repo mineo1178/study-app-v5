@@ -3,7 +3,8 @@ import { createInitialGameState } from "./config";
 import { applyFanChange, getMonthlyGoalHours, getMonthlyGoalMinutes, getRivalBattle, getTokyoDomeMissions, getWeeklyGoalMinutes } from "./progression";
 import { claimRewards, getSessionActivityPoints, joinNextMember, lessonMember } from "./rewards";
 import { calculateBoostedPoints, getHighestBoost, getNextBonusGap, getTestBoost, testImportance } from "./test-bonus";
-import { createWeeklyResult, getWeekBoundsJst, getWeekIdJst, isFinalizableWeek } from "./weekly";
+import { createWeeklyResult, getUnfinalizedWeeks, getWeekBoundsJst, getWeekIdJst, isFinalizableWeek } from "./weekly";
+import { canCreateSong, calculateAudience, calculateFanGain, createSong, getLiveRating, getNextGoal, isVenueUnlocked } from "./song-live";
 
 describe("producer game", () => {
   it("turns credited study time into activity points and never claims a session twice", () => {
@@ -36,8 +37,19 @@ describe("producer game", () => {
     const game = createInitialGameState(); const result = createWeeklyResult(game, [{ duration: 20 * 60, endAt: new Date("2026-10-05T01:00:00+09:00").getTime() }], new Date("2026-10-06"));
     expect(result.fanAfter).toBeGreaterThanOrEqual(0); expect(game.members[0].abilities.vocal).toBe(14);
   });
+  it("lists missed completed weeks in chronological order and skips existing results", () => {
+    const now = new Date("2026-10-20T12:00:00+09:00"); const missed = getUnfinalizedWeeks([], now);
+    expect(missed.length).toBeGreaterThan(1); expect(missed.every((week, index) => index === 0 || week.getTime() > missed[index - 1].getTime())).toBe(true);
+    const skipped = getUnfinalizedWeeks([getWeekIdJst(missed[0])], now); expect(skipped.map(getWeekIdJst)).not.toContain(getWeekIdJst(missed[0]));
+  });
   it("applies only the highest boost and carries integer remainders", () => {
     expect(getHighestBoost([3, 15, 10])).toBe(15);
     expect(calculateBoostedPoints(2, 5, 90)).toEqual({ basePoints: 2, boostPercent: 5, bonusPoints: 1, totalPoints: 3, remainder: 0 });
   });
+  it("creates a song from a two-member snapshot and unlocks the live loop", () => {
+    const game = { ...createInitialGameState(), activityPoints: 40, members: createInitialGameState().members.map((member, index) => ({ ...member, joined: index < 2 })) }; expect(canCreateSong(game)).toBe(true);
+    const songGame = createSong(game, "beginning-stage", 1); expect(songGame.activityPoints).toBe(20); expect(songGame.songs[0].status).toBe("completed"); expect(songGame.songs[0].songStats.vocal).toBeGreaterThan(0);
+    expect(calculateAudience(songGame, songGame.songs[0])).toBeLessThanOrEqual(30); expect(calculateFanGain(20, getLiveRating(50), songGame.songs[0])).toBeGreaterThanOrEqual(0);
+  });
+  it("keeps venue locked until the first live even when fans are high", () => { const game = { ...createInitialGameState(), fans: 100, activityPoints: 40, members: createInitialGameState().members.map((member, index) => ({ ...member, joined: index < 2 })) }; const completed = createSong(game); expect(isVenueUnlocked(completed, [], "mini-live-house")).toBe(false); expect(getNextGoal(completed, [])).toBe("初ライブをしよう"); });
 });
