@@ -6,3 +6,9 @@ export const getNextBonusGap = (improvement: number) => {
   const next = [2, 4, 6].find((threshold) => threshold > improvement);
   return next === undefined ? 0 : next - improvement;
 };
+export const getHighestBoost = (boosts: number[]) => Math.max(0, ...boosts);
+export const calculateBoostedPoints = (basePoints: number, boostPercent: number, remainder = 0) => {
+  const numerator = basePoints * boostPercent + remainder;
+  const bonusPoints = Math.floor(numerator / 100);
+  return { basePoints, boostPercent, bonusPoints, totalPoints: basePoints + bonusPoints, remainder: numerator % 100 };
+};

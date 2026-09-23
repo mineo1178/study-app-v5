@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import { createInitialGameState } from "./config";
 import { applyFanChange, getMonthlyGoalHours, getMonthlyGoalMinutes, getRivalBattle, getTokyoDomeMissions, getWeeklyGoalMinutes } from "./progression";
 import { claimRewards, getSessionActivityPoints, joinNextMember, lessonMember } from "./rewards";
-import { getNextBonusGap, getTestBoost, testImportance } from "./test-bonus";
+import { calculateBoostedPoints, getHighestBoost, getNextBonusGap, getTestBoost, testImportance } from "./test-bonus";
+import { createWeeklyResult, getWeekBoundsJst, getWeekIdJst, isFinalizableWeek } from "./weekly";
 
 describe("producer game", () => {
   it("turns credited study time into activity points and never claims a session twice", () => {
@@ -24,5 +25,19 @@ describe("producer game", () => {
     expect(getTestBoost("判定", -3)).toBe(0);
     expect(getTestBoost("組分け", 4)).toBe(10);
     expect(getNextBonusGap(2.7)).toBeCloseTo(1.3);
+  });
+  it("uses stable JST Monday weeks and excludes pre-game weeks", () => {
+    expect(getWeekIdJst(new Date("2026-09-27T14:59:00Z"))).toBe("2026-W39");
+    expect(getWeekIdJst(new Date("2026-09-27T15:00:00Z"))).toBe("2026-W40");
+    expect(getWeekBoundsJst(new Date("2026-09-28")).startAt).toBeLessThan(getWeekBoundsJst(new Date("2026-09-28")).endAt);
+    expect(isFinalizableWeek(new Date("2026-09-20"), new Date("2026-10-01"))).toBe(false);
+  });
+  it("records a weekly fan result without touching permanent growth", () => {
+    const game = createInitialGameState(); const result = createWeeklyResult(game, [{ duration: 20 * 60, endAt: new Date("2026-10-05T01:00:00+09:00").getTime() }], new Date("2026-10-06"));
+    expect(result.fanAfter).toBeGreaterThanOrEqual(0); expect(game.members[0].abilities.vocal).toBe(14);
+  });
+  it("applies only the highest boost and carries integer remainders", () => {
+    expect(getHighestBoost([3, 15, 10])).toBe(15);
+    expect(calculateBoostedPoints(2, 5, 90)).toEqual({ basePoints: 2, boostPercent: 5, bonusPoints: 1, totalPoints: 3, remainder: 0 });
   });
 });

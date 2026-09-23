@@ -17,6 +17,23 @@ export type ProducerGameState = {
   songsCompleted: number;
   rivalEventsCompleted: number;
   producerStars: number;
+  boostRemainder: number;
+};
+
+export type WeeklyResult = {
+  weekId: string;
+  startAt: number;
+  endAt: number;
+  targetMinutes: number;
+  actualMinutes: number;
+  achievementRate: number;
+  battleResult: string;
+  rivalId: string;
+  fanBefore: number;
+  fanDelta: number;
+  fanAfter: number;
+  finalizedAt: number;
+  version: string;
 };
 
 export type StudyHistoryLike = {

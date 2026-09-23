@@ -33,5 +33,5 @@ export const INITIAL_MEMBERS: IdolMember[] = [
 
 export const createInitialGameState = (): ProducerGameState => ({
   activityPoints: 0, fans: 120, members: INITIAL_MEMBERS.map((member) => ({ ...member, abilities: { ...member.abilities } })),
-  claimedSessionIds: [], lessonsCompleted: 0, songsCompleted: 0, rivalEventsCompleted: 0, producerStars: 0,
+  claimedSessionIds: [], lessonsCompleted: 0, songsCompleted: 0, rivalEventsCompleted: 0, producerStars: 0, boostRemainder: 0,
 });

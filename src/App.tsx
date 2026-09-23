@@ -84,9 +84,12 @@ import {
 import { ProducerHome } from "./components/game/ProducerHome";
 import { createInitialGameState } from "./game/config";
 import { getWeeklyGoalMinutes, getWeekStudyMinutes } from "./game/progression";
-import { claimRewards, getUnclaimedRewards, joinNextMember, lessonMember } from "./game/rewards";
+import { claimRewards, getSessionActivityPoints, getUnclaimedRewards, joinNextMember, lessonMember } from "./game/rewards";
 import type { ProducerGameState } from "./game/types";
 import { getNextBonusGap, getTestBoost, type TestKind } from "./game/test-bonus";
+import { calculateBoostedPoints, getHighestBoost } from "./game/test-bonus";
+import { createWeeklyResult, getWeekBoundsJst, isFinalizableWeek } from "./game/weekly";
+import type { WeeklyResult } from "./game/types";
 
 // ==========================================
 // Firebase Initialization (Vite + Vercel)
@@ -134,7 +137,7 @@ if (hasFirebaseConfig) {
 // ==========================================
 
 const FAMILY_ID = "oomine-study-2026";
-const APP_VERSION = "v1.67";
+const APP_VERSION = "v1.68";
 
 // Firestore Path 固定（変更禁止）
 // 実DB構造:
@@ -165,6 +168,8 @@ const getTestDoc = (database: any, id: string) =>
   doc(database, ...FIRESTORE_ROOT, "tests", id);
 const getGameDoc = (database: any) => doc(database, ...FIRESTORE_ROOT, "game", "idol-produce");
 const getRewardLedgerDoc = (database: any, sessionId: string) => doc(database, ...FIRESTORE_ROOT, "rewardLedger", sessionId);
+const getWeeksCol = (database: ReturnType<typeof getFirestore>) => collection(database, ...FIRESTORE_ROOT, "game", "idol-produce", "weeks");
+const getWeekDoc = (database: ReturnType<typeof getFirestore>, weekId: string) => doc(database, ...FIRESTORE_ROOT, "game", "idol-produce", "weeks", weekId);
 
 // Cache Keys
 const CACHE_KEY_TASKS = `study-app-v5-${FAMILY_ID}-tasks`;
@@ -3188,6 +3193,7 @@ export default function App() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [tests, setTests] = useState<TestResult[]>([]);
   const [game, setGame] = useState<ProducerGameState>(createInitialGameState);
+  const [weeklyResults, setWeeklyResults] = useState<WeeklyResult[]>([]);
 
   const [isAddModalOpen, setAddModalOpen] = useState(false);
   const [selectedUnit, setSelectedUnit] = useState<string | null>(null);
@@ -3325,6 +3331,8 @@ export default function App() {
       try {
         const snapshot = await getDoc(getGameDoc(dbInstance));
         if (snapshot.exists()) setGame(snapshot.data() as ProducerGameState);
+        const weeks = await getDocs(getWeeksCol(dbInstance));
+        setWeeklyResults(weeks.docs.map((week) => week.data() as WeeklyResult).sort((a, b) => b.startAt - a.startAt).slice(0, 4));
       } catch { setSyncState("offline"); }
     };
     loadGame();
@@ -3616,12 +3624,20 @@ export default function App() {
     () => tasks.flatMap((task) => task.history.map((entry) => ({ ...entry, id: entry.id || `${task.id}-${entry.endAt || entry.date}` }))),
     [tasks],
   );
+  const currentBoostPercent = useMemo(() => {
+    const kinds: Record<string, TestKind> = { curriculum: "カリテ", kumiwake: "組分け", hantei: "判定" };
+    const boosts = Object.entries(kinds).map(([type, kind]) => {
+      const sameType = tests.filter((test) => test.type === type).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      return sameType.length > 1 ? getTestBoost(kind, sameType[0].total4.dev - sameType[1].total4.dev) : 0;
+    });
+    return getHighestBoost(boosts);
+  }, [tests]);
 
   const claimStudyRewards = async () => {
     const entries = allStudyEntries.filter((entry) => !game.claimedSessionIds.includes(entry.id));
     if (entries.length === 0) return;
     if (isSampleMode || !auth?.currentUser || !getSafeDb()) {
-      setGame((current) => claimRewards(current, entries));
+      setGame((current) => claimRewards(current, entries, currentBoostPercent));
       return;
     }
     const dbInstance = getSafeDb()!;
@@ -3632,17 +3648,49 @@ export default function App() {
         const current = gameSnapshot.exists() ? gameSnapshot.data() as ProducerGameState : createInitialGameState();
         const ledgerSnapshots = await Promise.all(entries.map((entry) => transaction.get(getRewardLedgerDoc(dbInstance, entry.id))));
         const unclaimed = entries.filter((_, index) => !ledgerSnapshots[index].exists());
-        for (const entry of unclaimed) {
+        const basePoints = unclaimed.reduce((total, entry) => total + getSessionActivityPoints(entry), 0);
+        const boosted = calculateBoostedPoints(basePoints, currentBoostPercent, current.boostRemainder || 0);
+        for (const [index, entry] of unclaimed.entries()) {
           const ledgerRef = getRewardLedgerDoc(dbInstance, entry.id);
-          transaction.set(ledgerRef, { sessionId: entry.id, creditedDuration: entry.creditedDuration ?? entry.duration, createdAt: Date.now() });
+          const entryBase = getSessionActivityPoints(entry);
+          transaction.set(ledgerRef, { sessionId: entry.id, creditedDuration: entry.creditedDuration ?? entry.duration, basePoints: entryBase, boostPercent: currentBoostPercent, boostType: currentBoostPercent ? "test" : null, bonusPoints: index === 0 ? boosted.bonusPoints : 0, totalPoints: entryBase + (index === 0 ? boosted.bonusPoints : 0), createdAt: Date.now() });
         }
-        const next = claimRewards({ ...current, claimedSessionIds: current.claimedSessionIds || [] }, unclaimed);
+        const next = claimRewards({ ...current, claimedSessionIds: current.claimedSessionIds || [], boostRemainder: current.boostRemainder || 0 }, unclaimed, currentBoostPercent);
         transaction.set(gameRef, next);
         return next;
       });
       setGame(result);
     } catch (error) { console.error("reward claim failed", error); setSyncState("offline"); }
   };
+
+  const finalizePreviousWeek = useCallback(async () => {
+    const previousMonday = new Date(getWeekBoundsJst(new Date()).startAt - 1);
+    if (!isFinalizableWeek(previousMonday) || allStudyEntries.length === 0) return;
+    const proposed = createWeeklyResult(game, allStudyEntries, previousMonday);
+    if (weeklyResults.some((result) => result.weekId === proposed.weekId)) return;
+    if (isSampleMode || !auth?.currentUser || !getSafeDb()) {
+      setGame((current) => ({ ...current, fans: proposed.fanAfter }));
+      setWeeklyResults((current) => [proposed, ...current].slice(0, 4));
+      return;
+    }
+    const dbInstance = getSafeDb()!;
+    try {
+      const result = await runTransaction(dbInstance, async (transaction) => {
+        const weekRef = getWeekDoc(dbInstance, proposed.weekId); const existing = await transaction.get(weekRef);
+        if (existing.exists()) return existing.data() as WeeklyResult;
+        const gameRef = getGameDoc(dbInstance); const gameSnapshot = await transaction.get(gameRef);
+        const current = gameSnapshot.exists() ? gameSnapshot.data() as ProducerGameState : createInitialGameState();
+        const finalized = createWeeklyResult(current, allStudyEntries, previousMonday);
+        transaction.set(weekRef, finalized); transaction.set(gameRef, { ...current, fans: finalized.fanAfter });
+        return finalized;
+      });
+      setGame((current) => ({ ...current, fans: result.fanAfter })); setWeeklyResults((current) => [result, ...current.filter((week) => week.weekId !== result.weekId)].slice(0, 4));
+    } catch { setSyncState("offline"); }
+  }, [allStudyEntries, game, isSampleMode, weeklyResults]);
+
+  useEffect(() => {
+    void Promise.resolve().then(finalizePreviousWeek);
+  }, [finalizePreviousWeek]);
 
   const runLesson = async (memberId: string) => {
     const next = lessonMember(game, memberId, "vocal");
@@ -3985,10 +4033,13 @@ export default function App() {
             game={game}
             weeklyMinutes={getWeekStudyMinutes(allStudyEntries)}
             weeklyGoalMinutes={getWeeklyGoalMinutes()}
-            claimablePoints={getUnclaimedRewards(allStudyEntries, game.claimedSessionIds)}
+            claimableBasePoints={getUnclaimedRewards(allStudyEntries, game.claimedSessionIds)}
+            claimablePoints={calculateBoostedPoints(getUnclaimedRewards(allStudyEntries, game.claimedSessionIds), currentBoostPercent, game.boostRemainder || 0).totalPoints}
             onClaim={claimStudyRewards}
             onLesson={runLesson}
             onJoin={joinMember}
+            boostPercent={currentBoostPercent}
+            weeklyResults={weeklyResults}
           />
         ) : (
           <AchievementsView tasks={tasks} />
