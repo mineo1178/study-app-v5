@@ -84,8 +84,9 @@ import {
 import { ProducerHome } from "./components/game/ProducerHome";
 import { createInitialGameState } from "./game/config";
 import { getWeeklyGoalMinutes, getWeekStudyMinutes } from "./game/progression";
-import { claimRewards, getUnclaimedRewards, lessonMember } from "./game/rewards";
+import { claimRewards, getUnclaimedRewards, joinNextMember, lessonMember } from "./game/rewards";
 import type { ProducerGameState } from "./game/types";
+import { getNextBonusGap, getTestBoost, type TestKind } from "./game/test-bonus";
 
 // ==========================================
 // Firebase Initialization (Vite + Vercel)
@@ -2447,6 +2448,16 @@ const TestsView = ({ tests, onSaveTest, onDeleteTest }: any) => {
   const tableData = [...tests].sort(
     (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime(),
   );
+  const producerBonus = useMemo(() => {
+    const latest = [...tests].sort((a: TestResult, b: TestResult) => new Date(b.date).getTime() - new Date(a.date).getTime())[0] as TestResult | undefined;
+    if (!latest) return null;
+    const kindByType: Record<string, TestKind> = { curriculum: "カリテ", kumiwake: "組分け", hantei: "判定" };
+    const kind = kindByType[latest.type];
+    if (!kind) return null;
+    const previous = [...tests].filter((test: TestResult) => test.type === latest.type && test.id !== latest.id).sort((a: TestResult, b: TestResult) => new Date(b.date).getTime() - new Date(a.date).getTime())[0] as TestResult | undefined;
+    const improvement = previous ? latest.total4.dev - previous.total4.dev : 0;
+    return { kind, previous: previous?.total4.dev, current: latest.total4.dev, improvement, boost: getTestBoost(kind, improvement), gap: getNextBonusGap(improvement) };
+  }, [tests]);
 
   return (
     <div className="flex flex-col h-full bg-slate-50">
@@ -2502,6 +2513,7 @@ const TestsView = ({ tests, onSaveTest, onDeleteTest }: any) => {
       </div>
 
       <div className="flex-1 overflow-y-auto px-3 py-4 md:px-6 md:py-6 lg:px-8 lg:py-8 space-y-5 md:space-y-6 lg:space-y-8 pb-20 md:pb-32">
+        {producerBonus && <div className="rounded-2xl bg-violet-50 border border-violet-200 p-4"><p className="font-black text-violet-800">プロデューサーブースト（{producerBonus.kind}）</p><p className="mt-1 text-sm text-violet-700">{producerBonus.previous === undefined ? "次回の同じテストから上昇ボーナスを判定します" : `${producerBonus.previous.toFixed(1)} → ${producerBonus.current.toFixed(1)}（${producerBonus.improvement >= 0 ? "+" : ""}${producerBonus.improvement.toFixed(1)}）`}</p><p className="mt-2 font-bold text-violet-900">現在のブースト：+{producerBonus.boost}% {producerBonus.gap > 0 && `／次のBONUSまであと偏差値 +${producerBonus.gap.toFixed(1)}`}</p></div>}
         <div className="bg-white p-3 md:p-5 lg:p-6 rounded-2xl md:rounded-3xl shadow-sm border border-slate-200 h-56 md:h-80 lg:h-[28rem] shrink-0">
           <ResponsiveContainer width="100%" height="100%">
             <LineChart
@@ -3642,6 +3654,16 @@ export default function App() {
     }
   };
 
+  const joinMember = async () => {
+    const next = joinNextMember(game);
+    if (next === game) return;
+    setGame(next);
+    const dbInstance = getSafeDb();
+    if (!isSampleMode && dbInstance && auth?.currentUser) {
+      try { await setDoc(getGameDoc(dbInstance), next); } catch { setSyncState("offline"); }
+    }
+  };
+
   // タイマー排他制御：指定したタスク以外の稼働中タスクをすべてストップさせる
   const pauseAllOtherTasks = useCallback(
     async (currentTaskId: string) => {
@@ -3966,6 +3988,7 @@ export default function App() {
             claimablePoints={getUnclaimedRewards(allStudyEntries, game.claimedSessionIds)}
             onClaim={claimStudyRewards}
             onLesson={runLesson}
+            onJoin={joinMember}
           />
         ) : (
           <AchievementsView tasks={tasks} />

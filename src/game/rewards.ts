@@ -1,4 +1,4 @@
-import { ACTIVITY_POINT_MINUTES, LESSON_COST, LESSON_GAIN } from "./config";
+import { ACTIVITY_POINT_MINUTES, LESSON_COST, LESSON_GAIN, MEMBER_JOIN_COST } from "./config";
 import type { ProducerGameState, StudyHistoryLike } from "./types";
 
 export const getSessionActivityPoints = (entry: StudyHistoryLike) => Math.floor((entry.creditedDuration ?? entry.duration) / 60 / ACTIVITY_POINT_MINUTES);
@@ -11,4 +11,10 @@ export const canLesson = (game: ProducerGameState) => game.activityPoints >= LES
 export const lessonMember = (game: ProducerGameState, memberId: string, ability: keyof ProducerGameState["members"][number]["abilities"]) => {
   if (!canLesson(game)) return game;
   return { ...game, activityPoints: game.activityPoints - LESSON_COST, lessonsCompleted: game.lessonsCompleted + 1, members: game.members.map((member) => member.id === memberId ? { ...member, abilities: { ...member.abilities, [ability]: member.abilities[ability] + LESSON_GAIN } } : member) };
+};
+export const canJoinMember = (game: ProducerGameState) => game.activityPoints >= MEMBER_JOIN_COST && game.members.some((member) => !member.joined);
+export const joinNextMember = (game: ProducerGameState) => {
+  if (!canJoinMember(game)) return game;
+  const next = game.members.find((member) => !member.joined)!;
+  return { ...game, activityPoints: game.activityPoints - MEMBER_JOIN_COST, members: game.members.map((member) => member.id === next.id ? { ...member, joined: true } : member) };
 };

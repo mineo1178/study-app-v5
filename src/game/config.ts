@@ -6,6 +6,8 @@ export const LESSON_COST = 6;
 export const LESSON_GAIN = 2;
 export const RIVAL_NAME = "Sparkle";
 export const RIVAL_WEEKLY_HOURS = 12;
+export const MEMBER_JOIN_COST = 18;
+export const RIVAL_FAN_CHANGES = { win: 120, close: 20, rivalWin: -20, lose: -40 } as const;
 
 export const MONTHLY_STUDY_GOALS: Record<string, number> = {
   "2026-09": 43, "2026-10": 46, "2026-11": 48, "2026-12": 50,
