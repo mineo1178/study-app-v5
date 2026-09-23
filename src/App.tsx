@@ -68,6 +68,8 @@ import {
   serverTimestamp,
   writeBatch,
   query,
+  getDoc,
+  runTransaction,
 } from "firebase/firestore";
 import {
   getElapsedSeconds,
@@ -79,6 +81,11 @@ import {
   getTaskStats,
   removeTasksForUnit,
 } from "./study-utils";
+import { ProducerHome } from "./components/game/ProducerHome";
+import { createInitialGameState } from "./game/config";
+import { getWeeklyGoalMinutes, getWeekStudyMinutes } from "./game/progression";
+import { claimRewards, getUnclaimedRewards, lessonMember } from "./game/rewards";
+import type { ProducerGameState } from "./game/types";
 
 // ==========================================
 // Firebase Initialization (Vite + Vercel)
@@ -126,7 +133,7 @@ if (hasFirebaseConfig) {
 // ==========================================
 
 const FAMILY_ID = "oomine-study-2026";
-const APP_VERSION = "v1.66";
+const APP_VERSION = "v1.67";
 
 // Firestore Path 固定（変更禁止）
 // 実DB構造:
@@ -155,11 +162,14 @@ const getTaskDoc = (database: any, id: string) =>
 
 const getTestDoc = (database: any, id: string) =>
   doc(database, ...FIRESTORE_ROOT, "tests", id);
+const getGameDoc = (database: any) => doc(database, ...FIRESTORE_ROOT, "game", "idol-produce");
+const getRewardLedgerDoc = (database: any, sessionId: string) => doc(database, ...FIRESTORE_ROOT, "rewardLedger", sessionId);
 
 // Cache Keys
 const CACHE_KEY_TASKS = `study-app-v5-${FAMILY_ID}-tasks`;
 const CACHE_KEY_TESTS = `study-app-v5-${FAMILY_ID}-tests`;
 const CACHE_KEY_PENDING_TASK_UPDATES = `study-app-v5-${FAMILY_ID}-pending-task-updates`;
+const CACHE_KEY_GAME = `study-app-v5-${FAMILY_ID}-idol-game`;
 
 type Subject = "math" | "japanese" | "science" | "social";
 
@@ -3165,6 +3175,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState("daily");
   const [tasks, setTasks] = useState<Task[]>([]);
   const [tests, setTests] = useState<TestResult[]>([]);
+  const [game, setGame] = useState<ProducerGameState>(createInitialGameState);
 
   const [isAddModalOpen, setAddModalOpen] = useState(false);
   const [selectedUnit, setSelectedUnit] = useState<string | null>(null);
@@ -3188,6 +3199,7 @@ export default function App() {
       setIsSampleMode(true);
       setTasks(INITIAL_TASKS);
       setTests(INITIAL_TESTS);
+      setGame(createInitialGameState());
       setIsAuthChecking(false);
       return;
     }
@@ -3290,6 +3302,25 @@ export default function App() {
       fetchData();
     }
   }, [user, fetchData, isSampleMode]);
+
+  useEffect(() => {
+    const loadGame = async () => {
+      if (isSampleMode || !auth?.currentUser) return;
+      const cached = getCache(CACHE_KEY_GAME);
+      if (cached) setGame(cached as ProducerGameState);
+      const dbInstance = getSafeDb();
+      if (!dbInstance) return;
+      try {
+        const snapshot = await getDoc(getGameDoc(dbInstance));
+        if (snapshot.exists()) setGame(snapshot.data() as ProducerGameState);
+      } catch { setSyncState("offline"); }
+    };
+    loadGame();
+  }, [user, isSampleMode]);
+
+  useEffect(() => {
+    setCache(CACHE_KEY_GAME, game);
+  }, [game]);
 
   useEffect(() => {
     if (!isSampleMode && tasks.length > 0) {
@@ -3567,6 +3598,48 @@ export default function App() {
       await syncTaskToCloud(task.id, cloudUpdates);
     }
     setDetailTaskId(null);
+  };
+
+  const allStudyEntries = useMemo(
+    () => tasks.flatMap((task) => task.history.map((entry) => ({ ...entry, id: entry.id || `${task.id}-${entry.endAt || entry.date}` }))),
+    [tasks],
+  );
+
+  const claimStudyRewards = async () => {
+    const entries = allStudyEntries.filter((entry) => !game.claimedSessionIds.includes(entry.id));
+    if (entries.length === 0) return;
+    if (isSampleMode || !auth?.currentUser || !getSafeDb()) {
+      setGame((current) => claimRewards(current, entries));
+      return;
+    }
+    const dbInstance = getSafeDb()!;
+    try {
+      const result = await runTransaction(dbInstance, async (transaction) => {
+        const gameRef = getGameDoc(dbInstance);
+        const gameSnapshot = await transaction.get(gameRef);
+        const current = gameSnapshot.exists() ? gameSnapshot.data() as ProducerGameState : createInitialGameState();
+        const ledgerSnapshots = await Promise.all(entries.map((entry) => transaction.get(getRewardLedgerDoc(dbInstance, entry.id))));
+        const unclaimed = entries.filter((_, index) => !ledgerSnapshots[index].exists());
+        for (const entry of unclaimed) {
+          const ledgerRef = getRewardLedgerDoc(dbInstance, entry.id);
+          transaction.set(ledgerRef, { sessionId: entry.id, creditedDuration: entry.creditedDuration ?? entry.duration, createdAt: Date.now() });
+        }
+        const next = claimRewards({ ...current, claimedSessionIds: current.claimedSessionIds || [] }, unclaimed);
+        transaction.set(gameRef, next);
+        return next;
+      });
+      setGame(result);
+    } catch (error) { console.error("reward claim failed", error); setSyncState("offline"); }
+  };
+
+  const runLesson = async (memberId: string) => {
+    const next = lessonMember(game, memberId, "vocal");
+    if (next === game) return;
+    setGame(next);
+    const dbInstance = getSafeDb();
+    if (!isSampleMode && dbInstance && auth?.currentUser) {
+      try { await setDoc(getGameDoc(dbInstance), next); } catch { setSyncState("offline"); }
+    }
   };
 
   // タイマー排他制御：指定したタスク以外の稼働中タスクをすべてストップさせる
@@ -3885,6 +3958,15 @@ export default function App() {
             onSaveTest={saveTestToCloud}
             onDeleteTest={deleteTestFromCloud}
           />
+        ) : activeTab === "produce" ? (
+          <ProducerHome
+            game={game}
+            weeklyMinutes={getWeekStudyMinutes(allStudyEntries)}
+            weeklyGoalMinutes={getWeeklyGoalMinutes()}
+            claimablePoints={getUnclaimedRewards(allStudyEntries, game.claimedSessionIds)}
+            onClaim={claimStudyRewards}
+            onLesson={runLesson}
+          />
         ) : (
           <AchievementsView tasks={tasks} />
         )}
@@ -3940,6 +4022,15 @@ export default function App() {
             <span className="text-[10px] md:text-sm lg:text-base font-bold">
               成績
             </span>
+          </button>
+          <button
+            onClick={() => setActiveTab("produce")}
+            className={`flex-1 flex flex-col items-center justify-center h-full space-y-1 md:space-y-2 transition-all duration-300 ${activeTab === "produce" ? "text-violet-600 -translate-y-1 md:-translate-y-2" : "text-slate-400 hover:text-slate-500"}`}
+          >
+            <div className={`p-1.5 md:p-3 rounded-xl md:rounded-2xl ${activeTab === "produce" ? "bg-violet-50" : ""}`}>
+              <Zap className="w-[22px] h-[22px] md:w-6 md:h-6 lg:w-7 lg:h-7" strokeWidth={activeTab === "produce" ? 2.5 : 2} />
+            </div>
+            <span className="text-[10px] md:text-sm lg:text-base font-bold">プロデュース</span>
           </button>
         </div>
       </nav>

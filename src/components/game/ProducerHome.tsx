@@ -1,0 +1,28 @@
+import { Music, Sparkles, Trophy, Users } from "lucide-react";
+import { LESSON_COST, RIVAL_NAME } from "../../game/config";
+import { getRivalBattle, getTokyoDomeMissions } from "../../game/progression";
+import { canLesson } from "../../game/rewards";
+import type { ProducerGameState } from "../../game/types";
+
+const time = (minutes: number) => `${Math.floor(minutes / 60)}時間${minutes % 60}分`;
+
+export function ProducerHome({ game, weeklyMinutes, weeklyGoalMinutes, onClaim, claimablePoints, onLesson }: { game: ProducerGameState; weeklyMinutes: number; weeklyGoalMinutes: number; claimablePoints: number; onClaim: () => void; onLesson: (memberId: string) => void }) {
+  const battle = getRivalBattle(weeklyMinutes, weeklyGoalMinutes);
+  const missions = getTokyoDomeMissions(game, weeklyMinutes / weeklyGoalMinutes);
+  const member = game.members.find((m) => m.joined)!;
+  return <div className="w-full max-w-5xl mx-auto px-4 md:px-8 py-5 space-y-5 text-slate-800">
+    <section className="rounded-3xl bg-gradient-to-br from-fuchsia-500 via-violet-500 to-indigo-600 text-white p-6 shadow-lg">
+      <div className="flex items-center gap-2 text-fuchsia-100 font-bold"><Sparkles className="w-5 h-5" />アイドルプロデュース</div>
+      <h2 className="text-2xl font-black mt-2">きみは4人組アイドルのプロデューサー！</h2>
+      <p className="mt-2 text-sm text-indigo-100">勉強して活動ポイントを集め、いつか東京ドームを満員にしよう。</p>
+    </section>
+    <section className="grid md:grid-cols-3 gap-4">
+      <div className="rounded-2xl bg-amber-50 border border-amber-200 p-5"><div className="flex gap-2 font-bold text-amber-800"><Sparkles />活動ポイント</div><p className="text-3xl font-black mt-2">{game.activityPoints} P</p>{claimablePoints > 0 ? <button onClick={onClaim} className="mt-3 rounded-xl bg-amber-500 text-white px-4 py-2 font-bold">学習分 +{claimablePoints}P を受け取る</button> : <p className="mt-3 text-sm text-amber-700">あと10分の学習で1P！</p>}</div>
+      <div className="rounded-2xl bg-pink-50 border border-pink-200 p-5"><div className="flex gap-2 font-bold text-pink-800"><Users />ファン</div><p className="text-3xl font-black mt-2">{game.fans.toLocaleString()} 人</p><p className="mt-3 text-sm text-pink-700">次のライブ会場まであと {Math.max(0, 500 - game.fans).toLocaleString()} 人</p></div>
+      <div className="rounded-2xl bg-sky-50 border border-sky-200 p-5"><div className="flex gap-2 font-bold text-sky-800"><Trophy />東京ドーム</div><p className="text-3xl font-black mt-2">{missions.filter((m) => m.done).length}/7</p><p className="mt-3 text-sm text-sky-700">7つの夢ミッションを進めよう</p></div>
+    </section>
+    <section className="rounded-2xl bg-white border border-slate-200 p-5 shadow-sm"><h3 className="font-black text-lg">今週のプロデュースバトル</h3><div className="grid sm:grid-cols-3 gap-3 mt-3"><div><p className="text-xs text-slate-500">MY IDOL</p><p className="font-black text-xl">{time(weeklyMinutes)}</p></div><div><p className="text-xs text-slate-500">今週の目標</p><p className="font-black text-xl">{time(weeklyGoalMinutes)}</p></div><div><p className="text-xs text-slate-500">{RIVAL_NAME}に勝つには</p><p className="font-black text-xl text-violet-600">あと{time(battle.remaining)}！</p></div></div><p className="mt-4 font-bold text-sm">{battle.status}：{battle.message}（勝てばファン +120人）</p></section>
+    <section className="rounded-2xl bg-white border border-slate-200 p-5 shadow-sm"><div className="flex items-center gap-2"><Music className="text-violet-600" /><h3 className="font-black text-lg">{member.name}のレッスン</h3></div><p className="text-sm text-slate-500 mt-1">得意：{member.specialty}</p><div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-4">{Object.entries(member.abilities).slice(0, 4).map(([ability, value]) => <div key={ability} className="bg-slate-50 rounded-xl p-3 text-center"><p className="text-xs text-slate-500">{({ vocal: "歌唱", harmony: "ハモリ", dance: "ダンス", character: "キャラ" } as Record<string,string>)[ability] ?? ability}</p><p className="font-black text-xl">{value}</p></div>)}</div><button disabled={!canLesson(game)} onClick={() => onLesson(member.id)} className="mt-4 rounded-xl bg-violet-600 disabled:bg-slate-300 text-white px-5 py-3 font-bold">歌唱レッスン（{LESSON_COST}P）</button><p className="mt-2 text-xs text-slate-500">レッスンで歌唱力 +2。能力は下がりません。</p></section>
+    <section className="rounded-2xl bg-white border border-slate-200 p-5 shadow-sm"><h3 className="font-black text-lg">東京ドームへの7つの夢ミッション</h3><div className="mt-3 grid md:grid-cols-2 gap-2">{missions.map((mission, index) => <div key={mission.label} className={`rounded-xl px-3 py-2 text-sm font-bold ${mission.done ? "bg-emerald-50 text-emerald-700" : "bg-slate-50 text-slate-600"}`}>{mission.done ? "✓" : "○"} {index + 1}. {mission.label}</div>)}</div></section>
+  </div>;
+}
