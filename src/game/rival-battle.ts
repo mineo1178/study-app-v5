@@ -1,0 +1,15 @@
+import { SPARKLE_STAGES } from "./config";
+import { getCurrentVenue } from "./song-live";
+import type { BattleCategory, OriginalSong, Performance, ProducerGameState, RivalBattleRecord } from "./types";
+
+const categories: BattleCategory[] = ["vocal", "dance", "song", "character"];
+export const calculateBattleStats = (game: ProducerGameState, song: OriginalSong) => {
+  const members = game.members.filter((member) => member.joined);
+  const average = (keys: ("vocal" | "harmony" | "dance" | "character" | "lyrics" | "composition" | "choreography")[]) => Math.round(members.reduce((total, member) => total + keys.reduce((sum, key) => sum + member.abilities[key], 0), 0) / Math.max(1, members.length));
+  return { vocal: average(["vocal", "harmony"]) + Math.round((song.songStats.vocal + song.songStats.harmony) / 2), dance: average(["dance", "choreography"]) + Math.round((song.songStats.dance + song.songStats.choreography) / 2), song: average(["lyrics", "composition"]) + Math.round((song.songStats.lyrics + song.songStats.composition) / 2), character: average(["character"]) + song.songStats.character };
+};
+export const compareBattleCategory = (player: number, rival: number) => player > rival ? "WIN" : player < rival ? "LOSE" : "DRAW";
+export const calculateRivalBattleResult = (player: Record<BattleCategory, number>) => { const rival = SPARKLE_STAGES[0].stats; const categoryResults = Object.fromEntries(categories.map((category) => [category, compareBattleCategory(player[category], rival[category])])) as RivalBattleRecord["categoryResults"]; const wins = categories.filter((category) => categoryResults[category] === "WIN").length; return { categoryResults, overallResult: wins === 4 ? "PERFECT WIN" as const : wins === 3 ? "WIN" as const : wins === 2 ? "DRAW" as const : "Sparkle WIN" as const }; };
+export const getBattleImprovementHint = (player: Record<BattleCategory, number>) => { const rival = SPARKLE_STAGES[0].stats; const weakest = categories.filter((category) => player[category] < rival[category]).sort((a, b) => (rival[b] - player[b]) - (rival[a] - player[a]))[0]; if (!weakest) return "Sparkleをリードしているよ！"; const labels = { vocal: "歌唱", dance: "ダンス", song: "楽曲", character: "キャラ" }; return `あと${rival[weakest] - player[weakest] + 1}でSparkleを逆転！ ${labels[weakest]}が得意なリナをレッスンしよう`; };
+export const canStartRivalBattle = (game: ProducerGameState, performances: Performance[]) => game.members.filter((member) => member.joined).length >= SPARKLE_STAGES[0].requiredMembers && game.songs.filter((song) => song.status === "completed").length >= SPARKLE_STAGES[0].requiredSongs && getCurrentVenue(game, performances).id === SPARKLE_STAGES[0].requiredVenueId;
+export const getRivalBattleRewards = (overallResult: RivalBattleRecord["overallResult"], alreadyClaimed: boolean) => { const reward = SPARKLE_STAGES[0].rewards; if (alreadyClaimed) return { fans: 0, points: 0, event: 0 }; return overallResult === "PERFECT WIN" || overallResult === "WIN" ? { fans: reward.winFans, points: reward.winPoints, event: 1 } : { fans: reward.participationFans, points: reward.participationPoints, event: 0 }; };

@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
+import type { Performance } from "./types";
 import { createInitialGameState } from "./config";
 import { applyFanChange, getMonthlyGoalHours, getMonthlyGoalMinutes, getRivalBattle, getTokyoDomeMissions, getWeeklyGoalMinutes } from "./progression";
-import { claimRewards, getSessionActivityPoints, joinNextMember, lessonMember } from "./rewards";
+import { canRecruitThirdMember, claimRewards, getSessionActivityPoints, joinNextMember, lessonMember, recruitThirdMember } from "./rewards";
 import { calculateBoostedPoints, getHighestBoost, getNextBonusGap, getTestBoost, testImportance } from "./test-bonus";
 import { createWeeklyResult, getUnfinalizedWeeks, getWeekBoundsJst, getWeekIdJst, isFinalizableWeek } from "./weekly";
-import { canCreateSong, calculateAudience, calculateFanGain, createSong, getLiveRating, getNextGoal, isVenueUnlocked } from "./song-live";
+import { canCreateSong, calculateAudience, calculateFanGain, createSong, getLiveRating, getNextGoal, isVenueSoldOut, isVenueUnlocked } from "./song-live";
+import { calculateBattleStats, calculateRivalBattleResult, canStartRivalBattle, getBattleImprovementHint, getRivalBattleRewards } from "./rival-battle";
 
 describe("producer game", () => {
   it("turns credited study time into activity points and never claims a session twice", () => {
@@ -52,4 +54,8 @@ describe("producer game", () => {
     expect(calculateAudience(songGame, songGame.songs[0])).toBeLessThanOrEqual(30); expect(calculateFanGain(20, getLiveRating(50), songGame.songs[0])).toBeGreaterThanOrEqual(0);
   });
   it("keeps venue locked until the first live even when fans are high", () => { const game = { ...createInitialGameState(), fans: 100, activityPoints: 40, members: createInitialGameState().members.map((member, index) => ({ ...member, joined: index < 2 })) }; const completed = createSong(game); expect(isVenueUnlocked(completed, [], "mini-live-house")).toBe(false); expect(getNextGoal(completed, [])).toBe("初ライブをしよう"); });
+  it("requires first live, two members, and points before recruiting the science member", () => { const base = createInitialGameState(); const two = { ...base, activityPoints: 30, members: base.members.map((member, index) => ({ ...member, joined: index < 2 })), songs: [{ ...base.songs[0], status: "completed" as const }, ...base.songs.slice(1)] }; expect(canRecruitThirdMember(two, false)).toBe(false); expect(canRecruitThirdMember({ ...two, activityPoints: 29 }, true)).toBe(false); const next = recruitThirdMember(two, true); expect(next.members[2].joined).toBe(true); expect(next.activityPoints).toBe(0); expect(recruitThirdMember(next, true)).toBe(next); });
+  it("creates the dance song only after the third member and snapshots all seven abilities", () => { const base = createInitialGameState(); const ready = { ...base, activityPoints: 80, members: base.members.map((member, index) => ({ ...member, joined: index < 3 })), songs: [{ ...base.songs[0], status: "completed" as const }, { ...base.songs[1], status: "available" as const }] }; expect(canCreateSong({ ...ready, members: ready.members.map((member, index) => ({ ...member, joined: index < 2 })) }, ready.songs[1], [{} as Performance])).toBe(false); const created = createSong(ready, "kirameki-step", 1, [{} as Performance]); expect(created.songs[1].status).toBe("completed"); expect(created.activityPoints).toBe(45); expect(created.songs[1].songStats.choreography).toBeGreaterThan(0); });
+  it("compares Sparkle by four categories and keeps a loss constructive", () => { const base = createInitialGameState(); const ready = { ...base, songsCompleted: 2, fans: 100, activityPoints: 80, members: base.members.map((member, index) => ({ ...member, joined: index < 3 })), songs: base.songs.map((song) => ({ ...song, status: "completed" as const, songStats: { vocal: 20, harmony: 20, dance: 20, character: 20, lyrics: 20, composition: 20, choreography: 20 } })) }; const stats = calculateBattleStats(ready, ready.songs[1]); const result = calculateRivalBattleResult(stats); expect(Object.keys(result.categoryResults)).toHaveLength(4); expect(getBattleImprovementHint(stats)).toContain("あと"); expect(canStartRivalBattle(ready, [{} as Performance])).toBe(true); expect(getRivalBattleRewards("WIN", false).fans).toBe(300); expect(getRivalBattleRewards("WIN", true).fans).toBe(0); });
+  it("records the mini live house sold-out boundary only at 100 seats", () => { expect(isVenueSoldOut({ venueId: "mini-live-house", capacity: 100, audience: 99 } as Performance)).toBe(false); expect(isVenueSoldOut({ venueId: "mini-live-house", capacity: 100, audience: 100 } as Performance)).toBe(true); });
 });

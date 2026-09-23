@@ -82,17 +82,18 @@ import {
   removeTasksForUnit,
 } from "./study-utils";
 import { ProducerHome } from "./components/game/ProducerHome";
-import { createInitialGameState } from "./game/config";
+import { createInitialGameState, normalizeGameState } from "./game/config";
 import { getWeeklyGoalMinutes, getWeekStudyMinutes } from "./game/progression";
-import { claimRewards, getSessionActivityPoints, getUnclaimedRewards, joinNextMember, lessonMember } from "./game/rewards";
+import { canRecruitThirdMember, claimRewards, getSessionActivityPoints, getUnclaimedRewards, joinNextMember, lessonMember, recruitThirdMember } from "./game/rewards";
 import type { ProducerGameState } from "./game/types";
 import { getNextBonusGap, getTestBoost, type TestKind } from "./game/test-bonus";
 import { calculateBoostedPoints, getHighestBoost } from "./game/test-bonus";
 import { createWeeklyResult, getUnfinalizedWeeks } from "./game/weekly";
 import type { WeeklyResult } from "./game/types";
-import type { Performance } from "./game/types";
+import type { Performance, RivalBattleRecord } from "./game/types";
 import { LIVE_COST } from "./game/config";
-import { calculateAudience, calculateFanGain, canPerformLive, createSong, getCurrentVenue, getLiveRating } from "./game/song-live";
+import { calculateAudience, calculateFanGain, canPerformLive, createSong, getCurrentVenue, getLiveRating, isVenueSoldOut } from "./game/song-live";
+import { calculateBattleStats, calculateRivalBattleResult, canStartRivalBattle, getRivalBattleRewards } from "./game/rival-battle";
 
 // ==========================================
 // Firebase Initialization (Vite + Vercel)
@@ -140,7 +141,7 @@ if (hasFirebaseConfig) {
 // ==========================================
 
 const FAMILY_ID = "oomine-study-2026";
-const APP_VERSION = "v1.69";
+const APP_VERSION = "v1.70";
 
 // Firestore Path 固定（変更禁止）
 // 実DB構造:
@@ -175,6 +176,8 @@ const getWeeksCol = (database: ReturnType<typeof getFirestore>) => collection(da
 const getWeekDoc = (database: ReturnType<typeof getFirestore>, weekId: string) => doc(database, ...FIRESTORE_ROOT, "game", "idol-produce", "weeks", weekId);
 const getPerformancesCol = (database: ReturnType<typeof getFirestore>) => collection(database, ...FIRESTORE_ROOT, "game", "idol-produce", "performances");
 const getPerformanceDoc = (database: ReturnType<typeof getFirestore>, id: string) => doc(database, ...FIRESTORE_ROOT, "game", "idol-produce", "performances", id);
+const getRivalBattlesCol = (database: ReturnType<typeof getFirestore>) => collection(database, ...FIRESTORE_ROOT, "game", "idol-produce", "rivalBattles");
+const getRivalBattleDoc = (database: ReturnType<typeof getFirestore>, id: string) => doc(database, ...FIRESTORE_ROOT, "game", "idol-produce", "rivalBattles", id);
 
 // Cache Keys
 const CACHE_KEY_TASKS = `study-app-v5-${FAMILY_ID}-tasks`;
@@ -3200,6 +3203,7 @@ export default function App() {
   const [game, setGame] = useState<ProducerGameState>(createInitialGameState);
   const [weeklyResults, setWeeklyResults] = useState<WeeklyResult[]>([]);
   const [performances, setPerformances] = useState<Performance[]>([]);
+  const [rivalBattles, setRivalBattles] = useState<RivalBattleRecord[]>([]);
 
   const [isAddModalOpen, setAddModalOpen] = useState(false);
   const [selectedUnit, setSelectedUnit] = useState<string | null>(null);
@@ -3336,11 +3340,13 @@ export default function App() {
       if (!dbInstance) return;
       try {
         const snapshot = await getDoc(getGameDoc(dbInstance));
-        if (snapshot.exists()) { const initial = createInitialGameState(); const saved = snapshot.data() as Partial<ProducerGameState>; setGame({ ...initial, ...saved, songs: saved.songs || initial.songs, boostRemainder: saved.boostRemainder || 0 }); }
+        if (snapshot.exists()) setGame(normalizeGameState(snapshot.data() as Partial<ProducerGameState>));
         const weeks = await getDocs(getWeeksCol(dbInstance));
         setWeeklyResults(weeks.docs.map((week) => week.data() as WeeklyResult).sort((a, b) => b.startAt - a.startAt));
         const performanceSnap = await getDocs(getPerformancesCol(dbInstance));
         setPerformances(performanceSnap.docs.map((item) => item.data() as Performance).sort((a, b) => b.performedAt - a.performedAt).slice(0, 5));
+        const rivalSnap = await getDocs(getRivalBattlesCol(dbInstance));
+        setRivalBattles(rivalSnap.docs.map((item) => item.data() as RivalBattleRecord).sort((a, b) => b.playedAt - a.playedAt));
       } catch { setSyncState("offline"); }
     };
     loadGame();
@@ -3712,7 +3718,8 @@ export default function App() {
   }, [finalizePreviousWeek]);
 
   const runLesson = async (memberId: string) => {
-    const next = lessonMember(game, memberId, "vocal");
+    const focus = memberId === "science" ? "dance" : memberId === "japanese" ? "lyrics" : memberId === "social" ? "character" : "vocal";
+    const next = lessonMember(game, memberId, focus);
     if (next === game) return;
     setGame(next);
     const dbInstance = getSafeDb();
@@ -3722,7 +3729,8 @@ export default function App() {
   };
 
   const joinMember = async () => {
-    const next = joinNextMember(game);
+    const hasFirstLive = performances.length > 0;
+    const next = canRecruitThirdMember(game, hasFirstLive) ? recruitThirdMember(game, hasFirstLive) : joinNextMember(game);
     if (next === game) return;
     setGame(next);
     const dbInstance = getSafeDb();
@@ -3731,8 +3739,8 @@ export default function App() {
     }
   };
 
-  const createFirstSong = async () => {
-    const next = createSong(game);
+  const createSongFor = async (songId: string) => {
+    const next = createSong(game, songId, Date.now(), performances);
     if (next === game) return;
     setGame(next);
     const dbInstance = getSafeDb();
@@ -3747,11 +3755,21 @@ export default function App() {
     const venue = getCurrentVenue(game, performances);
     const performanceId = `performance-${crypto.randomUUID?.() || Date.now()}`;
     const audience = calculateAudience(game, song, venue.id); const rating = getLiveRating(calculateAudience(game, song, venue.id)); const fanGain = calculateFanGain(audience, rating, song);
-    const apply = (current: ProducerGameState) => ({ ...current, activityPoints: current.activityPoints - LIVE_COST, fans: current.fans + fanGain, songs: current.songs.map((item) => item.id === song.id ? { ...item, performanceCount: item.performanceCount + 1 } : item) });
+    const apply = (current: ProducerGameState) => ({ ...current, activityPoints: current.activityPoints - LIVE_COST, fans: current.fans + fanGain, milestones: { ...current.milestones, miniLiveHouseSoldOut: current.milestones?.miniLiveHouseSoldOut || isVenueSoldOut(performance) }, songs: current.songs.map((item) => item.id === song.id ? { ...item, performanceCount: item.performanceCount + 1 } : item) });
     const performance: Performance = { performanceId, songId: song.id, venueId: venue.id, performedAt: Date.now(), audience, capacity: venue.capacity, rating, fanGain, fanBefore: game.fans, fanAfter: game.fans + fanGain, version: "v1.69" };
     if (isSampleMode || !auth?.currentUser || !getSafeDb()) { setGame(apply); setPerformances((current) => [performance, ...current].slice(0, 5)); return; }
     const dbInstance = getSafeDb()!;
     try { const result = await runTransaction(dbInstance, async (transaction) => { const performanceRef = getPerformanceDoc(dbInstance, performanceId); const existing = await transaction.get(performanceRef); if (existing.exists()) return null; const gameRef = getGameDoc(dbInstance); const gameSnap = await transaction.get(gameRef); const current = gameSnap.exists() ? gameSnap.data() as ProducerGameState : createInitialGameState(); const currentSong = current.songs[0]; if (!canPerformLive(current, currentSong)) throw new Error("LIVE_NOT_AVAILABLE"); const next = apply(current); const saved = { ...performance, fanBefore: current.fans, fanAfter: next.fans }; transaction.set(performanceRef, saved); transaction.set(gameRef, next); return { next, saved }; }); if (result) { setGame(result.next); setPerformances((current) => [result.saved, ...current].slice(0, 5)); } } catch { setSyncState("offline"); }
+  };
+
+  const startSparkleBattle = async (songId: string) => {
+    const song = game.songs.find((item) => item.id === songId); if (!song || !canStartRivalBattle(game, performances)) return;
+    const battleId = "sparkle-stage-1"; const player = calculateBattleStats(game, song); const outcome = calculateRivalBattleResult(player); const alreadyClaimed = game.claimedRivalBattleIds?.includes(battleId) ?? false; const reward = getRivalBattleRewards(outcome.overallResult, alreadyClaimed);
+    const record: RivalBattleRecord = { battleId, rivalId: "sparkle", playedAt: Date.now(), songId, categoryResults: outcome.categoryResults, overallResult: outcome.overallResult, fanGain: reward.fans, bonusPoints: reward.points, version: "v1.70" };
+    const apply = (current: ProducerGameState) => ({ ...current, fans: current.fans + reward.fans, activityPoints: current.activityPoints + reward.points, rivalEventsCompleted: current.rivalEventsCompleted + reward.event, claimedRivalBattleIds: alreadyClaimed ? current.claimedRivalBattleIds : [...(current.claimedRivalBattleIds ?? []), battleId] });
+    if (isSampleMode || !auth?.currentUser || !getSafeDb()) { const next = apply(game); setGame(next); setRivalBattles((current) => [record, ...current.filter((item) => item.battleId !== battleId)]); return; }
+    const dbInstance = getSafeDb()!;
+    try { const result = await runTransaction(dbInstance, async (transaction) => { const ref = getRivalBattleDoc(dbInstance, battleId); const previous = await transaction.get(ref); const gameRef = getGameDoc(dbInstance); const snapshot = await transaction.get(gameRef); const current = snapshot.exists() ? normalizeGameState(snapshot.data() as Partial<ProducerGameState>) : createInitialGameState(); if (previous.exists()) return { game: current, record: previous.data() as RivalBattleRecord }; const next = apply(current); transaction.set(ref, record); transaction.set(gameRef, next); return { game: next, record }; }); setGame(result.game); setRivalBattles((current) => [result.record, ...current.filter((item) => item.battleId !== battleId)]); } catch { setSyncState("offline"); }
   };
 
   // タイマー排他制御：指定したタスク以外の稼働中タスクをすべてストップさせる
@@ -4083,8 +4101,10 @@ export default function App() {
             boostPercent={currentBoostPercent}
             weeklyResults={weeklyResults}
             performances={performances}
-            onCreateSong={createFirstSong}
+            rivalBattles={rivalBattles}
+            onCreateSong={createSongFor}
             onPerform={performFirstLive}
+            onRivalBattle={startSparkleBattle}
           />
         ) : (
           <AchievementsView tasks={tasks} />

@@ -1,4 +1,4 @@
-import { ACTIVITY_POINT_MINUTES, LESSON_COST, LESSON_GAIN, MEMBER_JOIN_COST } from "./config";
+import { ACTIVITY_POINT_MINUTES, LESSON_COST, LESSON_GAIN, MEMBER_JOIN_COST, THIRD_MEMBER_JOIN_COST } from "./config";
 import { calculateBoostedPoints } from "./test-bonus";
 import type { ProducerGameState, StudyHistoryLike } from "./types";
 
@@ -20,4 +20,9 @@ export const joinNextMember = (game: ProducerGameState) => {
   if (!canJoinMember(game)) return game;
   const next = game.members.find((member) => !member.joined)!;
   return { ...game, activityPoints: game.activityPoints - MEMBER_JOIN_COST, members: game.members.map((member) => member.id === next.id ? { ...member, joined: true } : member) };
+};
+export const canRecruitThirdMember = (game: ProducerGameState, hasFirstLive: boolean) => game.members.filter((member) => member.joined).length === 2 && game.songs[0]?.status === "completed" && hasFirstLive && game.activityPoints >= THIRD_MEMBER_JOIN_COST;
+export const recruitThirdMember = (game: ProducerGameState, hasFirstLive: boolean) => {
+  if (!canRecruitThirdMember(game, hasFirstLive)) return game;
+  return { ...game, activityPoints: game.activityPoints - THIRD_MEMBER_JOIN_COST, members: game.members.map((member) => member.id === "science" ? { ...member, joined: true } : member) };
 };

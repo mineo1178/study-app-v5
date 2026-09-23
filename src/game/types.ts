@@ -19,9 +19,15 @@ export type ProducerGameState = {
   producerStars: number;
   boostRemainder: number;
   songs: OriginalSong[];
+  milestones?: { miniLiveHouseSoldOut?: boolean };
+  claimedRivalBattleIds?: string[];
 };
-export type OriginalSong = { id: string; title: string; status: "locked" | "available" | "in_progress" | "completed"; createdAt?: number; completedAt?: number; level: number; performanceCount: number; requiredActivityPoints: number; requiredMembers: number; songStats: { vocal: number; lyrics: number; composition: number; dance: number }; fanBonus: number; };
+export type SongType = "VOCAL" | "DANCE" | "MESSAGE" | "BALANCED";
+export type SongStats = Record<IdolAbility, number>;
+export type OriginalSong = { id: string; title: string; status: "locked" | "available" | "in_progress" | "completed"; createdAt?: number; completedAt?: number; level: number; performanceCount: number; requiredActivityPoints: number; requiredMembers: number; requiredMilestones?: readonly string[]; songType: SongType; profile: Partial<Record<IdolAbility, number>>; songStats: SongStats; fanBonus: number; };
 export type Performance = { performanceId: string; songId: string; venueId: string; performedAt: number; audience: number; capacity: number; rating: "GOOD" | "GREAT" | "PERFECT"; fanGain: number; fanBefore: number; fanAfter: number; version: string; };
+export type BattleCategory = "vocal" | "dance" | "song" | "character";
+export type RivalBattleRecord = { battleId: string; rivalId: string; playedAt: number; songId: string; categoryResults: Record<BattleCategory, "WIN" | "LOSE" | "DRAW">; overallResult: "PERFECT WIN" | "WIN" | "DRAW" | "Sparkle WIN"; fanGain: number; bonusPoints: number; version: string; };
 
 export type WeeklyResult = {
   weekId: string;
