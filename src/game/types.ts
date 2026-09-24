@@ -21,6 +21,7 @@ export type ProducerGameState = {
   songs: OriginalSong[];
   milestones?: { miniLiveHouseSoldOut?: boolean };
   claimedRivalBattleIds?: string[];
+  wonRivalBattleIds?: string[];
 };
 export type SongType = "VOCAL" | "DANCE" | "MESSAGE" | "BALANCED";
 export type SongStats = Record<IdolAbility, number>;
