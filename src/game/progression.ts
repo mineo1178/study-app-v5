@@ -10,9 +10,9 @@ export const getMonthlyGoalMinutes = (date: Date) => {
 };
 export const getWeeklyGoalMinutes = (date = new Date()) => Math.round(getMonthlyGoalMinutes(date) / 4.35);
 export const startOfWeek = (date = new Date()) => { const d = new Date(date); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return d; };
-export const getWeekStudyMinutes = (entries: { duration: number; endAt?: number }[], now = new Date()) => {
+export const getWeekStudyMinutes = (entries: { duration: number; creditedDuration?: number; endAt?: number }[], now = new Date()) => {
   const start = startOfWeek(now).getTime();
-  return entries.filter((entry) => (entry.endAt ?? 0) >= start).reduce((sum, entry) => sum + Math.floor(entry.duration / 60), 0);
+  return entries.filter((entry) => (entry.endAt ?? 0) >= start).reduce((sum, entry) => sum + Math.floor((entry.creditedDuration ?? entry.duration) / 60), 0);
 };
 export const getRivalBattle = (minutes: number, goalMinutes: number) => {
   const rate = goalMinutes ? minutes / goalMinutes : 0;
@@ -24,7 +24,7 @@ export const getRivalBattle = (minutes: number, goalMinutes: number) => {
 };
 export const applyFanChange = (fans: number, change: number) => Math.max(0, fans + change);
 export const getTokyoDomeMissions = (game: ProducerGameState, recentWeekRate = 0) => [
-  { label: "4人のメンバーをそろえる", done: game.members.every((m) => m.joined) },
+  { label: "4人のメンバーをそろえる", done: ["math", "japanese", "science", "yuna"].every((id) => game.members.some((member) => member.id === id && member.joined)) },
   { label: "メンバー育成ミッションを達成", done: game.lessonsCompleted >= 20 },
   { label: "オリジナル曲を5曲完成", done: game.songsCompleted >= 5 },
   { label: "ファン45,000人", done: game.fans >= 45000 },

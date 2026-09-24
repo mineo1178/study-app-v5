@@ -9,6 +9,9 @@ import { canCreateSong, calculateAudience, calculateFanGain, createSong, getLive
 import { calculateBattleStats, calculateRivalBattleResult, canStartRivalBattle, getBattleImprovementHint, getRivalBattleRewards } from "./rival-battle";
 import { applyLeaderSkillToBattleStats, applyLeaderSkillToLiveFanGain, getFormationSnapshot, setLeader } from "./leader-skills";
 import { getActiveMembers } from "./formation";
+import { applyGachaPity, applyTrainingItem, calculateDuplicateFragments, calculateWeeklyGachaReward, getNextTicketThreshold, grantWeeklyGachaReward, normalizeGachaState, resolveGachaDraw, resolveGachaRarity, validateRateTables } from "./gacha/logic";
+import { GACHA_FEATURE_START_DATE, GACHA_MEMBER_DEFINITIONS, TRAINING_ITEMS } from "./gacha/config";
+import { normalizeFormation, validateFormation } from "./formation";
 
 describe("producer game", () => {
   it("turns credited study time into activity points and never claims a session twice", () => {
@@ -79,5 +82,29 @@ describe("producer game", () => {
     const base = createInitialGameState(); const withLegacyMember = { ...base, members: base.members.map((member) => ({ ...member, joined: true })), activeMemberIds: ["math", "japanese", "science", "yuna"] };
     expect(getActiveMembers(withLegacyMember).map((member) => member.id)).toEqual(["math", "japanese", "science", "yuna"]);
     expect(calculateBattleStats(withLegacyMember, withLegacyMember.songs[0]).character).toBeLessThan(20);
+  });
+  it("maps each completed weekly achievement band to one capped ticket reward", () => {
+    const end = GACHA_FEATURE_START_DATE; expect([.49, .5, .69, .7, .89, .9, .99, 1, 1.19, 1.2, 1.5].map((rate) => calculateWeeklyGachaReward(rate, end))).toEqual([null, { ticketType: "normal", quantity: 1 }, { ticketType: "normal", quantity: 1 }, { ticketType: "normal", quantity: 2 }, { ticketType: "normal", quantity: 2 }, { ticketType: "silver", quantity: 1 }, { ticketType: "silver", quantity: 1 }, { ticketType: "gold", quantity: 1 }, { ticketType: "gold", quantity: 1 }, { ticketType: "premium", quantity: 1 }, { ticketType: "premium", quantity: 1 }]); expect(calculateWeeklyGachaReward(2, GACHA_FEATURE_START_DATE - 1)).toBeNull(); expect(getNextTicketThreshold(120, 100).nextPercent).toBeNull();
+  });
+  it("keeps rate tables at 100 percent and resolves ticket rarity boundaries without Math.random", () => {
+    expect(validateRateTables()).toBe(true); expect(resolveGachaRarity("normal", { drawsSinceSrPlus: 0, drawsSinceSsr: 0 }, .749).rarity).toBe("N"); expect(resolveGachaRarity("normal", { drawsSinceSrPlus: 0, drawsSinceSsr: 0 }, .75).rarity).toBe("R"); expect(resolveGachaRarity("normal", { drawsSinceSrPlus: 0, drawsSinceSsr: 0 }, .999).rarity).toBe("SR"); expect(resolveGachaRarity("premium", { drawsSinceSrPlus: 0, drawsSinceSsr: 0 }, 0).rarity).toBe("R");
+  });
+  it("applies SR and SSR pity with SSR priority and resets counters correctly", () => {
+    expect(resolveGachaRarity("normal", { drawsSinceSrPlus: 9, drawsSinceSsr: 19 }, 0).rarity).toBe("SSR"); expect(resolveGachaRarity("normal", { drawsSinceSrPlus: 9, drawsSinceSsr: 0 }, 0).rarity).toBe("SR"); const base = normalizeGachaState(); expect(applyGachaPity({ ...base, drawsSinceSrPlus: 9, drawsSinceSsr: 19 }, "SSR")).toMatchObject({ drawsSinceSrPlus: 0, drawsSinceSsr: 0 }); expect(applyGachaPity(base, "SR")).toMatchObject({ drawsSinceSrPlus: 0, drawsSinceSsr: 1 }); expect(applyGachaPity(base, "R")).toMatchObject({ drawsSinceSrPlus: 1, drawsSinceSsr: 1 });
+  });
+  it("adds a new member once and changes duplicate draws into fragments", () => {
+    const game = createInitialGameState(); const state = grantWeeklyGachaReward(normalizeGachaState(), { ticketType: "normal", quantity: 2 }); const first = resolveGachaDraw(game, state, "d1", "normal", { rarityRoll: .8, categoryRoll: 0, poolRoll: 0 }, 1)!; expect(first.draw.memberId).toBe("aoi-r"); expect(first.game.members.some((member) => member.id === "aoi-r")).toBe(true); const second = resolveGachaDraw(first.game, first.gacha, "d2", "normal", { rarityRoll: .8, categoryRoll: 0, poolRoll: 0 }, 2)!; expect(second.draw.duplicate).toBe(true); expect(second.gacha.starFragments).toBe(10); expect(second.game.members.filter((member) => member.id === "aoi-r")).toHaveLength(1); expect(calculateDuplicateFragments("SR")).toBe(30); expect(calculateDuplicateFragments("SSR")).toBe(100);
+  });
+  it("uses an item exactly once and preserves other abilities", () => {
+    const game = createInitialGameState(); const state = { ...normalizeGachaState(), itemInventory: { "vocal-n": 1 } }; const result = applyTrainingItem(game, state, "vocal-n", "math", "use-1")!; expect(result.game.members[0].abilities.vocal).toBe(game.members[0].abilities.vocal + 1); expect(result.game.members[0].abilities.dance).toBe(game.members[0].abilities.dance); expect(result.gacha.itemInventory["vocal-n"]).toBe(0); expect(applyTrainingItem(result.game, result.gacha, "vocal-n", "math", "use-1")).toBeNull(); expect(applyTrainingItem(game, state, "vocal-n", "missing")).toBeNull();
+  });
+  it("validates four-member selection and leader fallback while retaining the starter milestone", () => {
+    const base = createInitialGameState(); const members = [...base.members.filter((member) => ["math", "japanese", "science", "yuna"].includes(member.id)).map((member) => ({ ...member, joined: true })), { id: "aoi-r", name: "アオイ", specialty: "", joined: true, abilities: { ...GACHA_MEMBER_DEFINITIONS[0].baseStats } }]; const game = { ...base, members, activeMemberIds: ["math", "japanese", "science", "yuna"], leaderMemberId: "math" }; expect(validateFormation(game, ["math", "japanese", "science", "yuna"])).toBe(true); expect(validateFormation(game, ["math", "japanese", "science", "yuna", "aoi-r"])).toBe(false); expect(validateFormation(game, ["math", "math"])).toBe(false); expect(normalizeFormation(game, ["aoi-r", "japanese", "science", "yuna"], "math").leaderMemberId).toBe("aoi-r"); expect(getTokyoDomeMissions({ ...game, milestones: { starterGroupCompleted: true } })[0].done).toBe(true);
+  });
+  it("uses gacha leader rarity bonuses without making SSR mandatory", () => {
+    const definition = GACHA_MEMBER_DEFINITIONS.find((member) => member.id === "sena-ssr")!; const base = createInitialGameState(); const game = { ...base, members: [...base.members, { id: definition.id, name: definition.name, specialty: "", joined: true, abilities: definition.baseStats }], activeMemberIds: ["math", definition.id], leaderMemberId: definition.id }; expect(applyLeaderSkillToBattleStats(game, { vocal: 20, dance: 20, song: 20, character: 20 }).vocal).toBe(23);
+  });
+  it("applies every rarity item bonus and does not permit a zero-quantity use", () => {
+    const game = createInitialGameState(); for (const [rarity, bonus] of [["N", 1], ["R", 2], ["SR", 3], ["SSR", 5]] as const) { const item = TRAINING_ITEMS.find((candidate) => candidate.ability === "vocal" && candidate.rarity === rarity)!; const result = applyTrainingItem(game, { ...normalizeGachaState(), itemInventory: { [item.id]: 1 } }, item.id, "math")!; expect(result.game.members[0].abilities.vocal).toBe(game.members[0].abilities.vocal + bonus); } expect(applyTrainingItem(game, normalizeGachaState(), "vocal-n", "math")).toBeNull();
   });
 });

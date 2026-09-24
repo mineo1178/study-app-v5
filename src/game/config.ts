@@ -1,4 +1,5 @@
 import type { IdolAbility, IdolMember, LeaderSkillDefinition, MemberDefinition, ProducerGameState } from "./types";
+import { GACHA_MEMBER_DEFINITIONS } from "./gacha/config";
 
 export const GAME_START = new Date("2026-09-23T00:00:00+09:00").getTime();
 export const ACTIVITY_POINT_MINUTES = 10;
@@ -48,6 +49,7 @@ export const MEMBER_DEFINITIONS: MemberDefinition[] = [
   { id: "japanese", name: "コトハ", subjectType: "japanese", sourceType: "starter", baseStats: INITIAL_MEMBERS[1].abilities, leaderSkill: leader("heartful-words", "Heartful Words", "楽曲系 +10%", { type: "battle-category", category: "song", percent: 10 }) },
   { id: "science", name: "リナ", subjectType: "science", sourceType: "starter", baseStats: INITIAL_MEMBERS[2].abilities, leaderSkill: leader("perfect-step", "Perfect Step", "ダンス系 +10%", { type: "battle-category", category: "dance", percent: 10 }) },
   { id: "yuna", name: "ユナ", subjectType: "social", sourceType: "starter", baseStats: INITIAL_MEMBERS[4].abilities, leaderSkill: leader("fan-maker", "Fan Maker", "ライブ獲得ファン +10%", { type: "live-fan-gain", percent: 10 }) },
+  ...GACHA_MEMBER_DEFINITIONS,
 ];
 
 export const createInitialGameState = (): ProducerGameState => ({
@@ -57,7 +59,10 @@ export const createInitialGameState = (): ProducerGameState => ({
 export const normalizeGameState = (saved: Partial<ProducerGameState>): ProducerGameState => {
   const initial = createInitialGameState();
   const savedMembers = saved.members ?? [];
-  const members = initial.members.map((member) => { const old = savedMembers.find((item) => item.id === member.id); return old ? { ...member, ...old, abilities: { ...member.abilities, ...(old.abilities ?? {}) } } : member; });
+  const members = [
+    ...initial.members.map((member) => { const old = savedMembers.find((item) => item.id === member.id); return old ? { ...member, ...old, abilities: { ...member.abilities, ...(old.abilities ?? {}) } } : member; }),
+    ...savedMembers.filter((member) => !initial.members.some((initialMember) => initialMember.id === member.id)).map((member) => ({ ...member, abilities: { ...member.abilities } })),
+  ];
   const songs = initial.songs.map((song) => { const old = saved.songs?.find((item) => item.id === song.id); return old ? { ...song, ...old, profile: old.profile ?? song.profile, requiredMilestones: old.requiredMilestones ?? song.requiredMilestones, songType: old.songType ?? song.songType, songStats: { ...song.songStats, ...(old.songStats ?? {}) } } : song; });
   const joinedIds = members.filter((member) => member.joined).map((member) => member.id);
   const activeMemberIds = Array.from(new Set((saved.activeMemberIds ?? joinedIds).filter((id): id is string => typeof id === "string" && joinedIds.includes(id)))).slice(0, 4);

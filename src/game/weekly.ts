@@ -16,8 +16,8 @@ export const getWeekIdJst = (date = new Date()) => {
 };
 export const isFinalizableWeek = (date: Date, now = new Date()) => getWeekBoundsJst(date).endAt < now.getTime() && getWeekBoundsJst(date).endAt >= GAME_START;
 export const getUnfinalizedWeeks = (knownWeekIds: string[], now = new Date(), limit = 8) => { const weeks: Date[] = []; let cursor = new Date(getWeekBoundsJst(now).startAt - 1); while (isFinalizableWeek(cursor, now) && weeks.length < limit) { const id = getWeekIdJst(cursor); if (!knownWeekIds.includes(id)) weeks.push(new Date(cursor)); cursor = new Date(getWeekBoundsJst(cursor).startAt - 1); } return weeks.reverse(); };
-export const createWeeklyResult = (game: ProducerGameState, entries: { duration: number; endAt?: number }[], date: Date): WeeklyResult => {
-  const { startAt, endAt } = getWeekBoundsJst(date); const actualMinutes = entries.filter((entry) => (entry.endAt ?? 0) >= startAt && (entry.endAt ?? 0) <= endAt).reduce((total, entry) => total + Math.floor(entry.duration / 60), 0);
+export const createWeeklyResult = (game: ProducerGameState, entries: { duration: number; creditedDuration?: number; endAt?: number }[], date: Date): WeeklyResult => {
+  const { startAt, endAt } = getWeekBoundsJst(date); const actualMinutes = entries.filter((entry) => (entry.endAt ?? 0) >= startAt && (entry.endAt ?? 0) <= endAt).reduce((total, entry) => total + Math.floor((entry.creditedDuration ?? entry.duration) / 60), 0);
   const targetMinutes = getWeeklyGoalMinutes(new Date(startAt)); const battle = getRivalBattle(actualMinutes, targetMinutes); const fanAfter = applyFanChange(game.fans, battle.fanChange);
   return { weekId: getWeekIdJst(date), startAt, endAt, targetMinutes, actualMinutes, achievementRate: targetMinutes ? actualMinutes / targetMinutes : 0, battleResult: battle.status, rivalId: "sparkle", fanBefore: game.fans, fanDelta: fanAfter - game.fans, fanAfter, finalizedAt: Date.now(), version: "v1.69" };
 };

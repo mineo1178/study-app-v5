@@ -95,6 +95,10 @@ import { LIVE_COST, SPARKLE_STAGES } from "./game/config";
 import { calculateAudience, calculateFanGain, canPerformLive, createSong, getCurrentVenue, getLiveRating, isVenueSoldOut } from "./game/song-live";
 import { calculateBattleStats, calculateRivalBattleResult, canStartRivalBattle, getRivalBattleRewards } from "./game/rival-battle";
 import { applyLeaderSkillToBattleStats, applyLeaderSkillToLiveFanGain, getFormationSnapshot, setLeader } from "./game/leader-skills";
+import { getNextTicketThreshold, grantWeeklyGachaReward, normalizeGachaState, resolveGachaDraw, applyTrainingItem, calculateWeeklyGachaReward } from "./game/gacha/logic";
+import type { GachaDraw, GachaRandomRolls, GachaState, GachaTicketType, GachaWeek } from "./game/gacha/types";
+import { normalizeFormation } from "./game/formation";
+import { GACHA_FEATURE_START_DATE } from "./game/gacha/config";
 
 // ==========================================
 // Firebase Initialization (Vite + Vercel)
@@ -142,7 +146,7 @@ if (hasFirebaseConfig) {
 // ==========================================
 
 const FAMILY_ID = "oomine-study-2026";
-const APP_VERSION = "v1.71";
+const APP_VERSION = "v1.72";
 
 // Firestore Path 固定（変更禁止）
 // 実DB構造:
@@ -179,6 +183,9 @@ const getPerformancesCol = (database: ReturnType<typeof getFirestore>) => collec
 const getPerformanceDoc = (database: ReturnType<typeof getFirestore>, id: string) => doc(database, ...FIRESTORE_ROOT, "game", "idol-produce", "performances", id);
 const getRivalBattlesCol = (database: ReturnType<typeof getFirestore>) => collection(database, ...FIRESTORE_ROOT, "game", "idol-produce", "rivalBattles");
 const getRivalBattleDoc = (database: ReturnType<typeof getFirestore>, id: string) => doc(database, ...FIRESTORE_ROOT, "game", "idol-produce", "rivalBattles", id);
+const getGachaStateDoc = (database: ReturnType<typeof getFirestore>) => doc(database, ...FIRESTORE_ROOT, "game", "idol-produce", "gacha", "state");
+const getGachaWeekDoc = (database: ReturnType<typeof getFirestore>, weekId: string) => doc(database, ...FIRESTORE_ROOT, "game", "idol-produce", "gachaWeeks", weekId);
+const getGachaDrawDoc = (database: ReturnType<typeof getFirestore>, drawId: string) => doc(database, ...FIRESTORE_ROOT, "game", "idol-produce", "gachaDraws", drawId);
 
 // Cache Keys
 const CACHE_KEY_TASKS = `study-app-v5-${FAMILY_ID}-tasks`;
@@ -3205,6 +3212,8 @@ export default function App() {
   const [weeklyResults, setWeeklyResults] = useState<WeeklyResult[]>([]);
   const [performances, setPerformances] = useState<Performance[]>([]);
   const [rivalBattles, setRivalBattles] = useState<RivalBattleRecord[]>([]);
+  const [gachaState, setGachaState] = useState<GachaState>(normalizeGachaState);
+  const [lastGachaDraw, setLastGachaDraw] = useState<GachaDraw | null>(null);
 
   const [isAddModalOpen, setAddModalOpen] = useState(false);
   const [selectedUnit, setSelectedUnit] = useState<string | null>(null);
@@ -3342,6 +3351,8 @@ export default function App() {
       try {
         const snapshot = await getDoc(getGameDoc(dbInstance));
         if (snapshot.exists()) setGame(normalizeGameState(snapshot.data() as Partial<ProducerGameState>));
+        const gachaSnapshot = await getDoc(getGachaStateDoc(dbInstance));
+        if (gachaSnapshot.exists()) setGachaState(normalizeGachaState(gachaSnapshot.data() as Partial<GachaState>));
         const weeks = await getDocs(getWeeksCol(dbInstance));
         setWeeklyResults(weeks.docs.map((week) => week.data() as WeeklyResult).sort((a, b) => b.startAt - a.startAt));
         const performanceSnap = await getDocs(getPerformancesCol(dbInstance));
@@ -3686,6 +3697,8 @@ export default function App() {
       const finalized = dates.map((date) => {
         const result = createWeeklyResult(nextGame, allStudyEntries, date);
         nextGame = { ...nextGame, fans: result.fanAfter };
+        const reward = calculateWeeklyGachaReward(result.achievementRate, result.endAt);
+        if (reward) setGachaState((current) => grantWeeklyGachaReward(current, reward));
         return result;
       });
       setGame(nextGame);
@@ -3703,7 +3716,9 @@ export default function App() {
           const gameRef = getGameDoc(dbInstance); const gameSnapshot = await transaction.get(gameRef);
           const current = gameSnapshot.exists() ? gameSnapshot.data() as ProducerGameState : createInitialGameState();
           const week = createWeeklyResult(current, allStudyEntries, date);
+          const reward = calculateWeeklyGachaReward(week.achievementRate, week.endAt); const gachaWeekRef = getGachaWeekDoc(dbInstance, week.weekId); const gachaRef = getGachaStateDoc(dbInstance); const [gachaWeekSnapshot, gachaSnapshot] = await Promise.all([transaction.get(gachaWeekRef), transaction.get(gachaRef)]);
           transaction.set(weekRef, week); transaction.set(gameRef, { ...current, fans: week.fanAfter });
+          if (week.endAt >= GACHA_FEATURE_START_DATE && !gachaWeekSnapshot.exists()) { const gacha = grantWeeklyGachaReward(normalizeGachaState(gachaSnapshot.exists() ? gachaSnapshot.data() as Partial<GachaState> : undefined), reward); const gachaWeek: GachaWeek = { weekId: week.weekId, targetMinutes: week.targetMinutes, creditedMinutes: week.actualMinutes, achievementRate: week.achievementRate, reward, grantedAt: Date.now() }; transaction.set(gachaWeekRef, gachaWeek); transaction.set(gachaRef, gacha); }
           return week;
         });
         finalized.push(result);
@@ -3711,6 +3726,8 @@ export default function App() {
       const latest = finalized[finalized.length - 1];
       setGame((current) => ({ ...current, fans: latest.fanAfter }));
       setWeeklyResults((current) => [...finalized, ...current.filter((week) => !finalized.some((item) => item.weekId === week.weekId))].sort((a, b) => b.startAt - a.startAt));
+      const gachaSnapshot = await getDoc(getGachaStateDoc(dbInstance));
+      if (gachaSnapshot.exists()) setGachaState(normalizeGachaState(gachaSnapshot.data() as Partial<GachaState>));
     } catch { setSyncState("offline"); }
   }, [allStudyEntries, game, isSampleMode, weeklyResults]);
 
@@ -3769,6 +3786,38 @@ export default function App() {
     if (!isSampleMode && dbInstance && auth?.currentUser) {
       try { await updateDoc(getGameDoc(dbInstance), { leaderMemberId: memberId }); } catch { setSyncState("offline"); }
     }
+  };
+
+  const changeFormation = async (memberIds: string[]) => {
+    const formation = normalizeFormation(game, memberIds, game.leaderMemberId);
+    if (formation.activeMemberIds.length !== memberIds.length || (game.members.filter((member) => member.joined).length >= 4 && formation.activeMemberIds.length !== 4)) return;
+    setGame((current) => ({ ...current, ...formation }));
+    const dbInstance = getSafeDb();
+    if (!isSampleMode && dbInstance && auth?.currentUser) {
+      try { await updateDoc(getGameDoc(dbInstance), formation); } catch { setSyncState("offline"); }
+    }
+  };
+
+  const drawGacha = async (ticketType: GachaTicketType) => {
+    const random = new Uint32Array(3); crypto.getRandomValues(random); const rolls: GachaRandomRolls = { rarityRoll: random[0] / 2 ** 32, categoryRoll: random[1] / 2 ** 32, poolRoll: random[2] / 2 ** 32 }; const drawId = `gacha-${crypto.randomUUID?.() || Date.now()}`;
+    if (isSampleMode || !auth?.currentUser || !getSafeDb()) { const result = resolveGachaDraw(game, gachaState, drawId, ticketType, rolls); if (!result) return; setGame(result.game); setGachaState(result.gacha); setLastGachaDraw(result.draw); return; }
+    const dbInstance = getSafeDb()!;
+    try {
+      const result = await runTransaction(dbInstance, async (transaction) => {
+        const drawRef = getGachaDrawDoc(dbInstance, drawId); const stateRef = getGachaStateDoc(dbInstance); const gameRef = getGameDoc(dbInstance); const [existing, stateSnapshot, gameSnapshot] = await Promise.all([transaction.get(drawRef), transaction.get(stateRef), transaction.get(gameRef)]);
+        if (existing.exists()) return { draw: existing.data() as GachaDraw, game: null, gacha: null };
+        const currentGame = gameSnapshot.exists() ? normalizeGameState(gameSnapshot.data() as Partial<ProducerGameState>) : createInitialGameState(); const currentGacha = normalizeGachaState(stateSnapshot.exists() ? stateSnapshot.data() as Partial<GachaState> : undefined); const resolved = resolveGachaDraw(currentGame, currentGacha, drawId, ticketType, rolls); if (!resolved) throw new Error("NO_TICKET");
+        transaction.set(drawRef, resolved.draw); transaction.set(stateRef, resolved.gacha); if (resolved.game !== currentGame) transaction.set(gameRef, resolved.game); return resolved;
+      });
+      setLastGachaDraw(result.draw); if (result.game) setGame(result.game); if (result.gacha) setGachaState(result.gacha);
+    } catch { setSyncState("offline"); }
+  };
+
+  const useTrainingItem = async (itemId: string, memberId: string) => {
+    const itemUseId = `item-${crypto.randomUUID?.() || Date.now()}`;
+    if (isSampleMode || !auth?.currentUser || !getSafeDb()) { const result = applyTrainingItem(game, gachaState, itemId, memberId, itemUseId); if (!result) return; setGame(result.game); setGachaState(result.gacha); return; }
+    const dbInstance = getSafeDb()!;
+    try { const result = await runTransaction(dbInstance, async (transaction) => { const stateRef = getGachaStateDoc(dbInstance); const gameRef = getGameDoc(dbInstance); const [stateSnapshot, gameSnapshot] = await Promise.all([transaction.get(stateRef), transaction.get(gameRef)]); const currentGame = gameSnapshot.exists() ? normalizeGameState(gameSnapshot.data() as Partial<ProducerGameState>) : createInitialGameState(); const currentGacha = normalizeGachaState(stateSnapshot.exists() ? stateSnapshot.data() as Partial<GachaState> : undefined); const applied = applyTrainingItem(currentGame, currentGacha, itemId, memberId, itemUseId); if (!applied) throw new Error("ITEM_NOT_AVAILABLE"); transaction.set(stateRef, applied.gacha); transaction.set(gameRef, applied.game); return applied; }); setGame(result.game); setGachaState(result.gacha); } catch { setSyncState("offline"); }
   };
 
   const createSongFor = async (songId: string) => {
@@ -4141,6 +4190,12 @@ export default function App() {
             onJoin={joinMember}
             onRecruitYuna={recruitYunaMember}
             onSetLeader={changeLeader}
+            onChangeFormation={changeFormation}
+            gachaState={gachaState}
+            gachaForecast={getNextTicketThreshold(getWeekStudyMinutes(allStudyEntries), getWeeklyGoalMinutes())}
+            lastGachaDraw={lastGachaDraw}
+            onDrawGacha={drawGacha}
+            onUseTrainingItem={useTrainingItem}
             boostPercent={currentBoostPercent}
             weeklyResults={weeklyResults}
             performances={performances}
