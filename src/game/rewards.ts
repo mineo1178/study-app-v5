@@ -1,4 +1,4 @@
-import { ACTIVITY_POINT_MINUTES, LESSON_COST, LESSON_GAIN, MEMBER_JOIN_COST, THIRD_MEMBER_JOIN_COST } from "./config";
+import { ACTIVITY_POINT_MINUTES, LESSON_COST, LESSON_GAIN, MEMBER_JOIN_COST, THIRD_MEMBER_JOIN_COST, YUNA_JOIN_COST } from "./config";
 import { calculateBoostedPoints } from "./test-bonus";
 import type { ProducerGameState, StudyHistoryLike } from "./types";
 
@@ -19,10 +19,30 @@ export const canJoinMember = (game: ProducerGameState) => game.activityPoints >=
 export const joinNextMember = (game: ProducerGameState) => {
   if (!canJoinMember(game)) return game;
   const next = game.members.find((member) => member.id === "japanese")!;
-  return { ...game, activityPoints: game.activityPoints - MEMBER_JOIN_COST, members: game.members.map((member) => member.id === next.id ? { ...member, joined: true } : member) };
+  return { ...game, activityPoints: game.activityPoints - MEMBER_JOIN_COST, members: game.members.map((member) => member.id === next.id ? { ...member, joined: true } : member), activeMemberIds: [...(game.activeMemberIds ?? game.members.filter((member) => member.joined).map((member) => member.id)), next.id].filter((id, index, values) => values.indexOf(id) === index).slice(0, 4) };
 };
 export const canRecruitThirdMember = (game: ProducerGameState, hasFirstLive: boolean) => game.members.filter((member) => member.joined).length === 2 && game.songs[0]?.status === "completed" && hasFirstLive && game.activityPoints >= THIRD_MEMBER_JOIN_COST;
 export const recruitThirdMember = (game: ProducerGameState, hasFirstLive: boolean) => {
   if (!canRecruitThirdMember(game, hasFirstLive)) return game;
-  return { ...game, activityPoints: game.activityPoints - THIRD_MEMBER_JOIN_COST, members: game.members.map((member) => member.id === "science" ? { ...member, joined: true } : member) };
+  return { ...game, activityPoints: game.activityPoints - THIRD_MEMBER_JOIN_COST, members: game.members.map((member) => member.id === "science" ? { ...member, joined: true } : member), activeMemberIds: [...(game.activeMemberIds ?? game.members.filter((member) => member.joined).map((member) => member.id)), "science"].filter((id, index, values) => values.indexOf(id) === index).slice(0, 4) };
+};
+export const getYunaRecruitmentStatus = (game: ProducerGameState) => {
+  const member = (id: string) => game.members.find((candidate) => candidate.id === id)?.joined === true;
+  if (member("yuna")) return { canRecruit: false, reason: "ユナはすでに加入しています" };
+  if (!["math", "japanese", "science"].every(member)) return { canRecruit: false, reason: "ミオ・コトハ・リナをそろえよう" };
+  if (game.songs.filter((song) => song.status === "completed").length < 2) return { canRecruit: false, reason: "オリジナル曲を2曲完成させよう" };
+  if (!game.wonRivalBattleIds?.includes("sparkle-stage-1")) return { canRecruit: false, reason: "Sparkleとの初対バンに勝とう" };
+  if (!game.milestones?.miniLiveHouseSoldOut) return { canRecruit: false, reason: "ミニライブハウスを100席満員にしよう" };
+  if (game.activityPoints < YUNA_JOIN_COST) return { canRecruit: false, reason: `あと${YUNA_JOIN_COST - game.activityPoints}Pでユナを迎えられるよ` };
+  return { canRecruit: true, reason: "ユナを迎えよう！" };
+};
+export const recruitYuna = (game: ProducerGameState, now = Date.now()): ProducerGameState => {
+  if (!getYunaRecruitmentStatus(game).canRecruit) return game;
+  return {
+    ...game,
+    activityPoints: game.activityPoints - YUNA_JOIN_COST,
+    members: game.members.map((member) => member.id === "yuna" ? { ...member, joined: true, joinedAt: now } : member),
+    activeMemberIds: [...(game.activeMemberIds ?? game.members.filter((member) => member.joined).map((member) => member.id)).filter((id) => id !== "social"), "yuna"].filter((id, index, values) => values.indexOf(id) === index).slice(0, 4),
+    milestones: { ...game.milestones, starterGroupCompleted: true },
+  };
 };

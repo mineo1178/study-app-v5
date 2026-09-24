@@ -1,6 +1,7 @@
 import { LIVE_COST, SONGS, VENUES } from "./config";
 import type { IdolAbility, OriginalSong, Performance, ProducerGameState } from "./types";
-const joined = (game: ProducerGameState) => game.members.filter((member) => member.joined);
+import { getActiveMembers } from "./formation";
+const joined = getActiveMembers;
 const abilities: IdolAbility[] = ["vocal", "harmony", "dance", "character", "lyrics", "composition", "choreography"];
 const hasMilestones = (song: OriginalSong, performances: Performance[]) => (song.requiredMilestones ?? []).every((milestone) => milestone !== "first-live" || performances.length > 0);
 export const canCreateSong = (game: ProducerGameState, song = game.songs[0], performances: Performance[] = []) => song.status === "available" && game.activityPoints >= song.requiredActivityPoints && joined(game).length >= song.requiredMembers && hasMilestones(song, performances) && (song.id !== "kirameki-step" || game.songs[0]?.status === "completed");

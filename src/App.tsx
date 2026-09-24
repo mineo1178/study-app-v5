@@ -84,16 +84,17 @@ import {
 import { ProducerHome } from "./components/game/ProducerHome";
 import { createInitialGameState, normalizeGameState } from "./game/config";
 import { getWeeklyGoalMinutes, getWeekStudyMinutes } from "./game/progression";
-import { canRecruitThirdMember, claimRewards, getSessionActivityPoints, getUnclaimedRewards, joinNextMember, lessonMember, recruitThirdMember } from "./game/rewards";
+import { canRecruitThirdMember, claimRewards, getSessionActivityPoints, getUnclaimedRewards, getYunaRecruitmentStatus, joinNextMember, lessonMember, recruitThirdMember, recruitYuna } from "./game/rewards";
 import type { ProducerGameState } from "./game/types";
 import { getNextBonusGap, getTestBoost, type TestKind } from "./game/test-bonus";
 import { calculateBoostedPoints, getHighestBoost } from "./game/test-bonus";
 import { createWeeklyResult, getUnfinalizedWeeks } from "./game/weekly";
 import type { WeeklyResult } from "./game/types";
 import type { Performance, RivalBattleRecord } from "./game/types";
-import { LIVE_COST } from "./game/config";
+import { LIVE_COST, SPARKLE_STAGES } from "./game/config";
 import { calculateAudience, calculateFanGain, canPerformLive, createSong, getCurrentVenue, getLiveRating, isVenueSoldOut } from "./game/song-live";
 import { calculateBattleStats, calculateRivalBattleResult, canStartRivalBattle, getRivalBattleRewards } from "./game/rival-battle";
+import { applyLeaderSkillToBattleStats, applyLeaderSkillToLiveFanGain, getFormationSnapshot, setLeader } from "./game/leader-skills";
 
 // ==========================================
 // Firebase Initialization (Vite + Vercel)
@@ -141,7 +142,7 @@ if (hasFirebaseConfig) {
 // ==========================================
 
 const FAMILY_ID = "oomine-study-2026";
-const APP_VERSION = "v1.70";
+const APP_VERSION = "v1.71";
 
 // Firestore Path 固定（変更禁止）
 // 実DB構造:
@@ -3718,7 +3719,7 @@ export default function App() {
   }, [finalizePreviousWeek]);
 
   const runLesson = async (memberId: string) => {
-    const focus = memberId === "science" ? "dance" : memberId === "japanese" ? "lyrics" : memberId === "social" ? "character" : "vocal";
+    const focus = memberId === "science" ? "dance" : memberId === "japanese" ? "lyrics" : memberId === "social" || memberId === "yuna" ? "character" : "vocal";
     const next = lessonMember(game, memberId, focus);
     if (next === game) return;
     setGame(next);
@@ -3739,6 +3740,37 @@ export default function App() {
     }
   };
 
+  const recruitYunaMember = async () => {
+    if (!getYunaRecruitmentStatus(game).canRecruit) return;
+    if (isSampleMode || !auth?.currentUser || !getSafeDb()) {
+      setGame(recruitYuna(game));
+      return;
+    }
+    const dbInstance = getSafeDb()!;
+    try {
+      const next = await runTransaction(dbInstance, async (transaction) => {
+        const ref = getGameDoc(dbInstance);
+        const snapshot = await transaction.get(ref);
+        const current = snapshot.exists() ? normalizeGameState(snapshot.data() as Partial<ProducerGameState>) : createInitialGameState();
+        const updated = recruitYuna(current);
+        if (updated === current) throw new Error("YUNA_NOT_AVAILABLE");
+        transaction.set(ref, updated);
+        return updated;
+      });
+      setGame(next);
+    } catch { setSyncState("offline"); }
+  };
+
+  const changeLeader = async (memberId: string) => {
+    const next = setLeader(game, memberId);
+    if (next === game) return;
+    setGame(next);
+    const dbInstance = getSafeDb();
+    if (!isSampleMode && dbInstance && auth?.currentUser) {
+      try { await updateDoc(getGameDoc(dbInstance), { leaderMemberId: memberId }); } catch { setSyncState("offline"); }
+    }
+  };
+
   const createSongFor = async (songId: string) => {
     const next = createSong(game, songId, Date.now(), performances);
     if (next === game) return;
@@ -3750,27 +3782,35 @@ export default function App() {
   };
 
   const performFirstLive = async () => {
-    const song = game.songs[0];
-    if (!canPerformLive(game, song)) return;
-    const venue = getCurrentVenue(game, performances);
+    if (!canPerformLive(game, game.songs[0])) return;
     const performanceId = `performance-${crypto.randomUUID?.() || Date.now()}`;
-    const audience = calculateAudience(game, song, venue.id); const rating = getLiveRating(calculateAudience(game, song, venue.id)); const fanGain = calculateFanGain(audience, rating, song);
-    const apply = (current: ProducerGameState) => ({ ...current, activityPoints: current.activityPoints - LIVE_COST, fans: current.fans + fanGain, milestones: { ...current.milestones, miniLiveHouseSoldOut: current.milestones?.miniLiveHouseSoldOut || isVenueSoldOut(performance) }, songs: current.songs.map((item) => item.id === song.id ? { ...item, performanceCount: item.performanceCount + 1 } : item) });
-    const performance: Performance = { performanceId, songId: song.id, venueId: venue.id, performedAt: Date.now(), audience, capacity: venue.capacity, rating, fanGain, fanBefore: game.fans, fanAfter: game.fans + fanGain, version: "v1.69" };
-    if (isSampleMode || !auth?.currentUser || !getSafeDb()) { setGame(apply); setPerformances((current) => [performance, ...current].slice(0, 5)); return; }
+    const createResult = (current: ProducerGameState): { next: ProducerGameState; performance: Performance } => {
+      const song = current.songs[0]; const venue = getCurrentVenue(current, performances);
+      if (!canPerformLive(current, song, venue.id)) throw new Error("LIVE_NOT_AVAILABLE");
+      const audience = calculateAudience(current, song, venue.id); const rating = getLiveRating(calculateAudience(current, song, venue.id));
+      const leaderBonus = applyLeaderSkillToLiveFanGain(current, calculateFanGain(audience, rating, song));
+      const performance: Performance = { performanceId, songId: song.id, venueId: venue.id, performedAt: Date.now(), audience, capacity: venue.capacity, rating, fanGain: leaderBonus.finalFanGain, fanBefore: current.fans, fanAfter: current.fans + leaderBonus.finalFanGain, version: APP_VERSION, formation: getFormationSnapshot(current), leaderBonus: leaderBonus.skillId ? leaderBonus : null };
+      const next = { ...current, activityPoints: current.activityPoints - LIVE_COST, fans: current.fans + leaderBonus.finalFanGain, milestones: { ...current.milestones, miniLiveHouseSoldOut: current.milestones?.miniLiveHouseSoldOut || isVenueSoldOut(performance) }, songs: current.songs.map((item) => item.id === song.id ? { ...item, performanceCount: item.performanceCount + 1 } : item) };
+      return { next, performance };
+    };
+    if (isSampleMode || !auth?.currentUser || !getSafeDb()) { const result = createResult(game); setGame(result.next); setPerformances((current) => [result.performance, ...current].slice(0, 5)); return; }
     const dbInstance = getSafeDb()!;
-    try { const result = await runTransaction(dbInstance, async (transaction) => { const performanceRef = getPerformanceDoc(dbInstance, performanceId); const existing = await transaction.get(performanceRef); if (existing.exists()) return null; const gameRef = getGameDoc(dbInstance); const gameSnap = await transaction.get(gameRef); const current = gameSnap.exists() ? gameSnap.data() as ProducerGameState : createInitialGameState(); const currentSong = current.songs[0]; if (!canPerformLive(current, currentSong)) throw new Error("LIVE_NOT_AVAILABLE"); const next = apply(current); const saved = { ...performance, fanBefore: current.fans, fanAfter: next.fans }; transaction.set(performanceRef, saved); transaction.set(gameRef, next); return { next, saved }; }); if (result) { setGame(result.next); setPerformances((current) => [result.saved, ...current].slice(0, 5)); } } catch { setSyncState("offline"); }
+    try { const result = await runTransaction(dbInstance, async (transaction) => { const performanceRef = getPerformanceDoc(dbInstance, performanceId); const existing = await transaction.get(performanceRef); if (existing.exists()) return null; const gameRef = getGameDoc(dbInstance); const gameSnap = await transaction.get(gameRef); const current = gameSnap.exists() ? normalizeGameState(gameSnap.data() as Partial<ProducerGameState>) : createInitialGameState(); const prepared = createResult(current); transaction.set(performanceRef, prepared.performance); transaction.set(gameRef, prepared.next); return prepared; }); if (result) { setGame(result.next); setPerformances((current) => [result.performance, ...current].slice(0, 5)); } } catch { setSyncState("offline"); }
   };
 
   const startSparkleBattle = async (songId: string) => {
     const song = game.songs.find((item) => item.id === songId); if (!song || !canStartRivalBattle(game, performances)) return;
-    const battleId = "sparkle-stage-1"; const player = calculateBattleStats(game, song); const outcome = calculateRivalBattleResult(player); const alreadyClaimed = game.claimedRivalBattleIds?.includes(battleId) ?? false; const alreadyWon = game.wonRivalBattleIds?.includes(battleId) ?? false; const reward = getRivalBattleRewards(outcome.overallResult, alreadyWon, alreadyClaimed);
-    const record: RivalBattleRecord = { battleId, rivalId: "sparkle", playedAt: Date.now(), songId, categoryResults: outcome.categoryResults, overallResult: outcome.overallResult, fanGain: reward.fans, bonusPoints: reward.points, version: "v1.70" };
-    const won = outcome.overallResult === "PERFECT WIN" || outcome.overallResult === "WIN";
-    const apply = (current: ProducerGameState) => ({ ...current, fans: current.fans + reward.fans, activityPoints: current.activityPoints + reward.points, rivalEventsCompleted: current.rivalEventsCompleted + reward.event, claimedRivalBattleIds: alreadyClaimed ? current.claimedRivalBattleIds : [...(current.claimedRivalBattleIds ?? []), battleId], wonRivalBattleIds: won && !current.wonRivalBattleIds?.includes(battleId) ? [...(current.wonRivalBattleIds ?? []), battleId] : current.wonRivalBattleIds });
-    if (isSampleMode || !auth?.currentUser || !getSafeDb()) { const next = apply(game); setGame(next); setRivalBattles((current) => [record, ...current.filter((item) => item.battleId !== battleId)]); return; }
+    const battleId = "sparkle-stage-1";
+    const createResult = (current: ProducerGameState): { next: ProducerGameState; record: RivalBattleRecord } => {
+      const currentSong = current.songs.find((item) => item.id === songId); if (!currentSong || !canStartRivalBattle(current, performances)) throw new Error("BATTLE_NOT_AVAILABLE");
+      const basePlayer = calculateBattleStats(current, currentSong); const player = applyLeaderSkillToBattleStats(current, basePlayer); const outcome = calculateRivalBattleResult(player); const alreadyClaimed = current.claimedRivalBattleIds?.includes(battleId) ?? false; const alreadyWon = current.wonRivalBattleIds?.includes(battleId) ?? false; const reward = getRivalBattleRewards(outcome.overallResult, alreadyWon, alreadyClaimed);
+      const record: RivalBattleRecord = { battleId, rivalId: "sparkle", playedAt: Date.now(), songId, categoryResults: outcome.categoryResults, overallResult: outcome.overallResult, fanGain: reward.fans, bonusPoints: reward.points, version: APP_VERSION, formation: getFormationSnapshot(current), categoryScores: Object.fromEntries(Object.entries(player).map(([category, score]) => [category, { playerScore: score, rivalScore: SPARKLE_STAGES[0].stats[category as keyof typeof player], leaderBonusApplied: score - basePlayer[category as keyof typeof basePlayer] }])) };
+      const won = outcome.overallResult === "PERFECT WIN" || outcome.overallResult === "WIN";
+      return { record, next: { ...current, fans: current.fans + reward.fans, activityPoints: current.activityPoints + reward.points, rivalEventsCompleted: current.rivalEventsCompleted + reward.event, claimedRivalBattleIds: alreadyClaimed ? current.claimedRivalBattleIds : [...(current.claimedRivalBattleIds ?? []), battleId], wonRivalBattleIds: won && !current.wonRivalBattleIds?.includes(battleId) ? [...(current.wonRivalBattleIds ?? []), battleId] : current.wonRivalBattleIds } };
+    };
+    if (isSampleMode || !auth?.currentUser || !getSafeDb()) { const result = createResult(game); setGame(result.next); setRivalBattles((current) => [result.record, ...current.filter((item) => item.battleId !== battleId)]); return; }
     const dbInstance = getSafeDb()!;
-    try { const result = await runTransaction(dbInstance, async (transaction) => { const ref = getRivalBattleDoc(dbInstance, `${battleId}-${record.playedAt}`); const gameRef = getGameDoc(dbInstance); const snapshot = await transaction.get(gameRef); const current = snapshot.exists() ? normalizeGameState(snapshot.data() as Partial<ProducerGameState>) : createInitialGameState(); const next = apply(current); transaction.set(ref, record); transaction.set(gameRef, next); return { game: next, record }; }); setGame(result.game); setRivalBattles((current) => [result.record, ...current]); } catch { setSyncState("offline"); }
+    try { const result = await runTransaction(dbInstance, async (transaction) => { const gameRef = getGameDoc(dbInstance); const snapshot = await transaction.get(gameRef); const current = snapshot.exists() ? normalizeGameState(snapshot.data() as Partial<ProducerGameState>) : createInitialGameState(); const prepared = createResult(current); transaction.set(getRivalBattleDoc(dbInstance, `${battleId}-${prepared.record.playedAt}`), prepared.record); transaction.set(gameRef, prepared.next); return prepared; }); setGame(result.next); setRivalBattles((current) => [result.record, ...current]); } catch { setSyncState("offline"); }
   };
 
   // タイマー排他制御：指定したタスク以外の稼働中タスクをすべてストップさせる
@@ -4099,6 +4139,8 @@ export default function App() {
             onClaim={claimStudyRewards}
             onLesson={runLesson}
             onJoin={joinMember}
+            onRecruitYuna={recruitYunaMember}
+            onSetLeader={changeLeader}
             boostPercent={currentBoostPercent}
             weeklyResults={weeklyResults}
             performances={performances}
