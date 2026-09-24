@@ -4,6 +4,7 @@ import type { IdolMember, MemberId, ProducerGameState } from "../types";
 
 export const emptyTicketBalances = () => ({ normal: 0, silver: 0, gold: 0, premium: 0 });
 export const normalizeGachaState = (saved?: Partial<GachaState>): GachaState => ({ ticketBalances: { ...emptyTicketBalances(), ...(saved?.ticketBalances ?? {}) }, starFragments: Math.max(0, saved?.starFragments ?? 0), drawsSinceSrPlus: Math.max(0, saved?.drawsSinceSrPlus ?? 0), drawsSinceSsr: Math.max(0, saved?.drawsSinceSsr ?? 0), itemInventory: { ...(saved?.itemInventory ?? {}) }, usedItemIds: saved?.usedItemIds ?? [] });
+export const createSampleGachaState = (): GachaState => normalizeGachaState({ ticketBalances: { normal: 2, silver: 2, gold: 2, premium: 2 }, itemInventory: { "vocal-n": 1 } });
 export const calculateWeeklyGachaReward = (achievementRate: number, weekEndAt: number): WeeklyGachaReward => {
   if (weekEndAt < GACHA_FEATURE_START_DATE) return null;
   const percent = achievementRate * 100;

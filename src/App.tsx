@@ -95,7 +95,7 @@ import { LIVE_COST, SPARKLE_STAGES } from "./game/config";
 import { calculateAudience, calculateFanGain, canPerformLive, createSong, getCurrentVenue, getLiveRating, isVenueSoldOut } from "./game/song-live";
 import { calculateBattleStats, calculateRivalBattleResult, canStartRivalBattle, getRivalBattleRewards } from "./game/rival-battle";
 import { applyLeaderSkillToBattleStats, applyLeaderSkillToLiveFanGain, getFormationSnapshot, setLeader } from "./game/leader-skills";
-import { getNextTicketThreshold, grantWeeklyGachaReward, normalizeGachaState, resolveGachaDraw, applyTrainingItem, calculateWeeklyGachaReward } from "./game/gacha/logic";
+import { createSampleGachaState, getNextTicketThreshold, grantWeeklyGachaReward, normalizeGachaState, resolveGachaDraw, applyTrainingItem, calculateWeeklyGachaReward } from "./game/gacha/logic";
 import type { GachaDraw, GachaRandomRolls, GachaState, GachaTicketType, GachaWeek } from "./game/gacha/types";
 import { normalizeFormation } from "./game/formation";
 import { GACHA_FEATURE_START_DATE } from "./game/gacha/config";
@@ -3204,6 +3204,7 @@ export default function App() {
     }),
   );
   const [isSampleMode, setIsSampleMode] = useState(false);
+  const [gachaStartsLater] = useState(() => Date.now() < GACHA_FEATURE_START_DATE);
 
   const [activeTab, setActiveTab] = useState("daily");
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -4053,6 +4054,7 @@ export default function App() {
           setIsSampleMode(true);
           setTasks(INITIAL_TASKS);
           setTests(INITIAL_TESTS);
+          setGachaState(createSampleGachaState());
         }}
       />
     );
@@ -4127,6 +4129,7 @@ export default function App() {
                   setIsSampleMode(true);
                   setTasks(generateDummyTasks());
                   setTests(INITIAL_TESTS);
+                  setGachaState(createSampleGachaState());
                 } else {
                   setIsSampleMode(false);
                   fetchData(true);
@@ -4196,6 +4199,7 @@ export default function App() {
             lastGachaDraw={lastGachaDraw}
             onDrawGacha={drawGacha}
             onUseTrainingItem={useTrainingItem}
+            gachaStartsLater={!isSampleMode && gachaStartsLater}
             boostPercent={currentBoostPercent}
             weeklyResults={weeklyResults}
             performances={performances}
