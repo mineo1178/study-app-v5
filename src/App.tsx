@@ -3764,7 +3764,7 @@ export default function App() {
 
   const startSparkleBattle = async (songId: string) => {
     const song = game.songs.find((item) => item.id === songId); if (!song || !canStartRivalBattle(game, performances)) return;
-    const battleId = "sparkle-stage-1"; const player = calculateBattleStats(game, song); const outcome = calculateRivalBattleResult(player); const alreadyClaimed = game.claimedRivalBattleIds?.includes(battleId) ?? false; const reward = getRivalBattleRewards(outcome.overallResult, alreadyClaimed);
+    const battleId = "sparkle-stage-1"; const player = calculateBattleStats(game, song); const outcome = calculateRivalBattleResult(player); const alreadyClaimed = game.claimedRivalBattleIds?.includes(battleId) ?? false; const alreadyWon = game.wonRivalBattleIds?.includes(battleId) ?? false; const reward = getRivalBattleRewards(outcome.overallResult, alreadyWon, alreadyClaimed);
     const record: RivalBattleRecord = { battleId, rivalId: "sparkle", playedAt: Date.now(), songId, categoryResults: outcome.categoryResults, overallResult: outcome.overallResult, fanGain: reward.fans, bonusPoints: reward.points, version: "v1.70" };
     const won = outcome.overallResult === "PERFECT WIN" || outcome.overallResult === "WIN";
     const apply = (current: ProducerGameState) => ({ ...current, fans: current.fans + reward.fans, activityPoints: current.activityPoints + reward.points, rivalEventsCompleted: current.rivalEventsCompleted + reward.event, claimedRivalBattleIds: alreadyClaimed ? current.claimedRivalBattleIds : [...(current.claimedRivalBattleIds ?? []), battleId], wonRivalBattleIds: won && !current.wonRivalBattleIds?.includes(battleId) ? [...(current.wonRivalBattleIds ?? []), battleId] : current.wonRivalBattleIds });
