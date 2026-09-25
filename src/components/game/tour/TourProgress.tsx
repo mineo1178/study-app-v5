@@ -1,0 +1,1 @@
+export function TourProgress({ cleared, total = 3, soldOut = 0 }: { cleared: number; total?: number; soldOut?: number }) { return <div className="rounded-xl bg-slate-100 p-3 text-sm font-bold">全国ツアー前半 {'■'.repeat(cleared)}{'□'.repeat(total - cleared)}<br/>{cleared} / {total} CLEAR{soldOut > 0 && ` ・ SOLD OUT ${soldOut}`}</div>; }

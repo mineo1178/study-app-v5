@@ -1,0 +1,1 @@
+export function TourLegComplete() { return <section className="rounded-2xl border border-amber-200 bg-amber-50 p-5 text-center"><h2 className="text-xl font-black text-amber-800">TOUR LEG 1 COMPLETE!</h2><p className="mt-2 font-bold">3都市のライブを成功させた！</p><p className="mt-1 text-sm">次は――新曲と次のツアーへ</p></section>; }
