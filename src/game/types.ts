@@ -1,3 +1,5 @@
+import type { TourProgress } from "./tour/types";
+
 export type IdolAbility = "vocal" | "harmony" | "dance" | "character" | "lyrics" | "composition" | "choreography";
 export type StarterMemberId = "mio" | "kotoha" | "rina" | "yuna";
 export type MemberId = string;
@@ -32,6 +34,7 @@ export type ProducerGameState = {
   wonRivalBattleIds?: string[];
   activeMemberIds?: MemberId[];
   leaderMemberId?: MemberId | null;
+  tourProgress?: TourProgress;
 };
 export type SongType = "VOCAL" | "DANCE" | "MESSAGE" | "BALANCED" | "PERFORMANCE" | "HARMONY";
 export type SongStats = Record<IdolAbility, number>;

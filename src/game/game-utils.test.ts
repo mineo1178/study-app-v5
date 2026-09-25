@@ -15,6 +15,7 @@ import { normalizeFormation, validateFormation } from "./formation";
 import { canCreateThirdSong, canUnlockRegionalHall, calculateSongLiveModifier, isRegionalHallSoldOut } from "./song-live";
 import { applySongAffinityToBattleStats, canStartNovaStage1, canStartSparkleStage2, getTrainingRecommendation, simulateRivalBattle } from "./rival-battle";
 import { NOVA_STAGE_1 } from "./config";
+import { TOUR_LEG_1_STOPS } from "./tour/config";
 
 describe("producer game", () => {
   it("unlocks the regional hall only after two songs, Stage 1, and a 100-seat sold out", () => {
@@ -135,6 +136,13 @@ describe("producer game", () => {
   });
   it("normalizes older gacha draw records without new optional fields", () => {
     expect(normalizeGachaDraw({ drawId: "legacy", memberId: "aoi-r" })).toMatchObject({ ticketType: "normal", rarity: "N", resultType: "member", duplicate: false, starFragmentsGained: 0, pityApplied: "none", drawnAt: 0 });
+  });
+  it("defines three Tour Leg 1 stops entirely in config", () => {
+    expect(TOUR_LEG_1_STOPS.map((stop) => stop.id)).toEqual(["tour-stop-1", "tour-stop-2", "tour-stop-3"]); expect(TOUR_LEG_1_STOPS.map((stop) => stop.capacity)).toEqual([1200, 1800, 2500]); expect(TOUR_LEG_1_STOPS.every((stop) => stop.clearRate === .75)).toBe(true); expect(TOUR_LEG_1_STOPS.map((stop) => stop.firstClearReward)).toEqual([{ fans: 300, activityPoints: 10 }, { fans: 450, activityPoints: 12 }, { fans: 600, activityPoints: 15 }]); expect(TOUR_LEG_1_STOPS.map((stop) => stop.affinities)).toEqual([["VOCAL", "HARMONY"], ["DANCE"], ["PERFORMANCE", "CHARACTER"]]);
+  });
+  it("normalizes missing and malformed Tour progress without writing data", () => {
+    const legacy = normalizeGameState({}); expect(legacy.tourProgress).toEqual({ completedStopIds: [], soldOutStopIds: [], leg1Completed: false });
+    const normalized = normalizeGameState({ tourProgress: { completedStopIds: ["tour-stop-1", "tour-stop-1", "tour-stop-999"] as never[], soldOutStopIds: ["tour-stop-2", "tour-stop-2", "unknown"] as never[], leg1Completed: true } }); expect(normalized.tourProgress).toEqual({ completedStopIds: ["tour-stop-1", "tour-stop-2"], soldOutStopIds: ["tour-stop-2"], leg1Completed: true });
   });
   it("unlocks the 800-seat city hall only after regional sold out, Sparkle 2, and three songs", () => {
     const base = createInitialGameState(); const ready = { ...base, songsCompleted: 3, songs: base.songs.map((song, index) => ({ ...song, status: index < 3 ? "completed" as const : "available" as const })), wonRivalBattleIds: ["sparkle-stage-2"], milestones: { regionalHallSoldOut: true } };
