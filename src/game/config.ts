@@ -14,12 +14,13 @@ export const RIVAL_FAN_CHANGES = { win: 120, close: 20, rivalWin: -20, lose: -40
 export const SONGS = [
   { id: "beginning-stage", title: "はじまりのステージ", requiredActivityPoints: 20, requiredMembers: 2, requiredMilestones: [], songType: "VOCAL", profile: { vocal: 2, harmony: 2, lyrics: 2, composition: 2 }, fanBonus: 8 },
   { id: "kirameki-step", title: "キラメキステップ", requiredActivityPoints: 35, requiredMembers: 3, requiredMilestones: ["first-live"], songType: "DANCE", profile: { dance: 3, choreography: 3, character: 2, harmony: 1 }, fanBonus: 12 },
+  { id: "colorful-memory", title: "カラフルメモリー", requiredActivityPoints: 50, requiredMembers: 4, requiredMilestones: ["regional-hall"], songType: "PERFORMANCE", profile: { character: 4, harmony: 3, vocal: 2, dance: 2 }, fanBonus: 18 },
 ] as const;
-export const VENUES = [{ id: "practice-studio", name: "練習スタジオ", capacity: 30, unlockOrder: 1, requiredFans: 0, requiredSongs: 1, requiredMembers: 2, requiredMilestones: [] }, { id: "mini-live-house", name: "ミニライブハウス", capacity: 100, unlockOrder: 2, requiredFans: 50, requiredSongs: 1, requiredMembers: 2, requiredMilestones: ["first-live"] }] as const;
+export const VENUES = [{ id: "practice-studio", name: "練習スタジオ", capacity: 30, unlockOrder: 1, requiredFans: 0, requiredSongs: 1, requiredMembers: 2, requiredMilestones: [] }, { id: "mini-live-house", name: "ミニライブハウス", capacity: 100, unlockOrder: 2, requiredFans: 50, requiredSongs: 1, requiredMembers: 2, requiredMilestones: ["first-live"] }, { id: "regional-hall", name: "地域ホール", capacity: 300, unlockOrder: 3, requiredFans: 0, requiredSongs: 2, requiredMembers: 4, requiredMilestones: ["sparkle-stage-1", "mini-live-house-sold-out"] }] as const;
 export const LIVE_COST = 5;
 export const MINI_LIVE_HOUSE_SOLD_OUT_CAPACITY = 100;
 export const NEXT_VENUE = { name: "地域ホール", capacity: 300, requirements: ["オリジナル曲2曲", "Sparkle初対バン勝利", "ミニライブハウス100席満員"] } as const;
-export const SPARKLE_STAGES = [{ battleId: "sparkle-stage-1", rivalId: "sparkle", name: "Sparkle Stage 1", requiredMembers: 3, requiredSongs: 2, requiredVenueId: "mini-live-house", stats: { vocal: 32, dance: 36, song: 32, character: 34 }, rewards: { winFans: 300, winPoints: 10, participationFans: 20, participationPoints: 2 } }] as const;
+export const SPARKLE_STAGES = [{ battleId: "sparkle-stage-1", rivalId: "sparkle", name: "Sparkle Stage 1", requiredMembers: 3, requiredSongs: 2, requiredVenueId: "mini-live-house", stats: { vocal: 32, dance: 36, song: 32, character: 34 }, rewards: { winFans: 300, winPoints: 10, participationFans: 20, participationPoints: 2 } }, { battleId: "sparkle-stage-2", rivalId: "sparkle", name: "Sparkle Stage 2", requiredMembers: 4, requiredSongs: 3, requiredVenueId: "regional-hall", stats: { vocal: 47, dance: 49, song: 46, character: 43 }, rewards: { winFans: 500, winPoints: 15, participationFans: 30, participationPoints: 3 } }] as const;
 
 export const MONTHLY_STUDY_GOALS: Record<string, number> = {
   "2026-09": 43, "2026-10": 46, "2026-11": 48, "2026-12": 50,

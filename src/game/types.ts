@@ -33,13 +33,13 @@ export type ProducerGameState = {
   activeMemberIds?: MemberId[];
   leaderMemberId?: MemberId | null;
 };
-export type SongType = "VOCAL" | "DANCE" | "MESSAGE" | "BALANCED";
+export type SongType = "VOCAL" | "DANCE" | "MESSAGE" | "BALANCED" | "PERFORMANCE";
 export type SongStats = Record<IdolAbility, number>;
 export type OriginalSong = { id: string; title: string; status: "locked" | "available" | "in_progress" | "completed"; createdAt?: number; completedAt?: number; level: number; performanceCount: number; requiredActivityPoints: number; requiredMembers: number; requiredMilestones?: readonly string[]; songType: SongType; profile: Partial<Record<IdolAbility, number>>; songStats: SongStats; fanBonus: number; };
 export type FormationSnapshot = { activeMemberIds: MemberId[]; leaderMemberId: MemberId | null; leaderSkillId: LeaderSkillId | null };
 export type Performance = { performanceId: string; songId: string; venueId: string; performedAt: number; audience: number; capacity: number; rating: "GOOD" | "GREAT" | "PERFECT"; fanGain: number; fanBefore: number; fanAfter: number; version: string; formation?: FormationSnapshot; leaderBonus?: { skillId: LeaderSkillId; baseFanGain: number; bonusFanGain: number; finalFanGain: number } | null; };
 export type BattleCategory = "vocal" | "dance" | "song" | "character";
-export type RivalBattleRecord = { battleId: string; rivalId: string; playedAt: number; songId: string; categoryResults: Record<BattleCategory, "WIN" | "LOSE" | "DRAW">; overallResult: "PERFECT WIN" | "WIN" | "DRAW" | "Sparkle WIN"; fanGain: number; bonusPoints: number; version: string; formation?: FormationSnapshot; categoryScores?: Partial<Record<BattleCategory, { playerScore: number; rivalScore: number; leaderBonusApplied: number }>>; };
+export type RivalBattleRecord = { battleId: string; rivalId: string; playedAt: number; songId: string; stage?: number; categoryResults: Record<BattleCategory, "WIN" | "LOSE" | "DRAW">; overallResult: "PERFECT WIN" | "WIN" | "DRAW" | "Sparkle WIN"; fanGain: number; bonusPoints: number; version: string; formation?: FormationSnapshot; categoryScores?: Partial<Record<BattleCategory, { playerScore: number; rivalScore: number; leaderBonusApplied: number }>>; };
 
 export type WeeklyResult = {
   weekId: string;

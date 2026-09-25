@@ -12,8 +12,24 @@ import { getActiveMembers } from "./formation";
 import { applyGachaPity, applyTrainingItem, calculateDuplicateFragments, calculateWeeklyGachaReward, exchangeStarFragments, getNextTicketThreshold, grantWeeklyGachaReward, normalizeGachaDraw, normalizeGachaState, resolveGachaDraw, resolveGachaRarity, validateRateTables } from "./gacha/logic";
 import { GACHA_FEATURE_START_DATE, GACHA_MEMBER_DEFINITIONS, TRAINING_ITEMS } from "./gacha/config";
 import { normalizeFormation, validateFormation } from "./formation";
+import { canCreateThirdSong, canUnlockRegionalHall, calculateSongLiveModifier, isRegionalHallSoldOut } from "./song-live";
+import { applySongAffinityToBattleStats, canStartSparkleStage2 } from "./rival-battle";
 
 describe("producer game", () => {
+  it("unlocks the regional hall only after two songs, Stage 1, and a 100-seat sold out", () => {
+    const base = createInitialGameState(); const ready = { ...base, songsCompleted: 2, songs: base.songs.map((song, index) => ({ ...song, status: index < 2 ? "completed" as const : "available" as const })), members: base.members.map((member) => ({ ...member, joined: ["math", "japanese", "science", "yuna"].includes(member.id) })), activeMemberIds: ["math", "japanese", "science", "yuna"], wonRivalBattleIds: ["sparkle-stage-1"], milestones: { miniLiveHouseSoldOut: true } };
+    expect(canUnlockRegionalHall(ready)).toBe(true); expect(canCreateThirdSong({ ...ready, activityPoints: 49 })).toBe(false); expect(canCreateThirdSong({ ...ready, activityPoints: 50 })).toBe(true);
+  });
+  it("caps regional hall audience and marks sold out only at 300", () => {
+    const performance = { venueId: "regional-hall", capacity: 300, audience: 299 } as Performance; expect(isRegionalHallSoldOut(performance)).toBe(false); expect(isRegionalHallSoldOut({ ...performance, audience: 300 })).toBe(true); const game = { ...createInitialGameState(), fans: 999999 }; const song = { ...game.songs[0], status: "completed" as const, songStats: Object.fromEntries(Object.keys(game.members[0].abilities).map((key) => [key, 999])) as typeof game.songs[0]["songStats"] }; expect(calculateAudience(game, song, "regional-hall")).toBe(300);
+  });
+  it("uses small, distinct song modifiers and unlocks Stage 2 after a regional live", () => {
+    const songs = createInitialGameState().songs.map((song) => ({ ...song, status: "completed" as const })); const game = { ...createInitialGameState(), songs, songsCompleted: 3, members: createInitialGameState().members.map((member) => ({ ...member, joined: ["math", "japanese", "science", "yuna"].includes(member.id) })), activeMemberIds: ["math", "japanese", "science", "yuna"], wonRivalBattleIds: ["sparkle-stage-1"], milestones: { miniLiveHouseSoldOut: true } }; expect(canStartSparkleStage2(game, [{ venueId: "regional-hall" } as Performance])).toBe(true); expect(calculateSongLiveModifier(songs[1])).toBeGreaterThan(1); expect(applySongAffinityToBattleStats({ vocal: 40, dance: 40, song: 40, character: 40 }, songs[2]).character).toBeGreaterThan(40);
+  });
+  it("awards Sparkle Stage 2's first win once and keeps a replay at zero", () => {
+    expect(getRivalBattleRewards("WIN", false, false, 2)).toEqual({ fans: 500, points: 15, event: 1 });
+    expect(getRivalBattleRewards("WIN", true, true, 2)).toEqual({ fans: 0, points: 0, event: 0 });
+  });
   it("turns credited study time into activity points and never claims a session twice", () => {
     const entry = { id: "s1", duration: 1800, creditedDuration: 1800 };
     expect(getSessionActivityPoints(entry)).toBe(3);
