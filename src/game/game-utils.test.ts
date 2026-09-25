@@ -17,6 +17,9 @@ import { applySongAffinityToBattleStats, canStartNovaStage1, canStartSparkleStag
 import { NOVA_STAGE_1 } from "./config";
 import { TOUR_LEG_1_STOPS } from "./tour/config";
 import { canStartTourStop, canUnlockNationalTour, capTourAudience, getTourClearAudience, getTourStopStatus, isTourLeg1Completed, isTourStopCleared, isTourStopSoldOut } from "./tour/progression";
+import { getTourAffinityPercent } from "./tour/affinity";
+import { simulateTourPerformance } from "./tour/simulation";
+import { getBestTourRecommendation, getTourTrainingRecommendation } from "./tour/recommendation";
 
 describe("producer game", () => {
   it("unlocks the regional hall only after two songs, Stage 1, and a 100-seat sold out", () => {
@@ -160,6 +163,14 @@ describe("producer game", () => {
   });
   it("completes only Tour Leg 1 when every stop is clear or sold out", () => {
     expect(isTourLeg1Completed({ completedStopIds: [], soldOutStopIds: [], leg1Completed: false })).toBe(false); expect(isTourLeg1Completed({ completedStopIds: ["tour-stop-1", "tour-stop-2", "tour-stop-3"], soldOutStopIds: [], leg1Completed: false })).toBe(true); expect(isTourLeg1Completed({ completedStopIds: ["tour-stop-1", "tour-stop-2"], soldOutStopIds: ["tour-stop-3"], leg1Completed: false })).toBe(true);
+  });
+  it("simulates Tour performances from active current stats, song snapshots, affinity, and live-only Leader effects", () => {
+    const base = createInitialGameState(); const game = { ...base, members: base.members.map((member, index) => ({ ...member, joined: index < 4 || member.id === "yuna", abilities: { ...member.abilities, vocal: 5, harmony: 5, dance: 5, character: 5, lyrics: 5, composition: 5, choreography: 5 } })), activeMemberIds: ["math", "japanese", "science", "yuna"], leaderMemberId: "yuna", songs: base.songs.map((song) => ({ ...song, status: "completed" as const, songStats: { vocal: 5, harmony: 5, dance: 5, character: 5, lyrics: 5, composition: 5, choreography: 5 } })) };
+    const vocal = simulateTourPerformance(game, "tour-stop-1", "beginning-stage")!; const dance = simulateTourPerformance(game, "tour-stop-1", "kirameki-step")!; expect(vocal.capacity).toBe(1200); expect(vocal.clearThreshold).toBe(900); expect(vocal.appliedAffinityPercent).toBe(8); expect(dance.appliedAffinityPercent).toBe(0); expect(vocal.activeMemberIds).toEqual(["math", "japanese", "science", "yuna"]); expect(vocal.fanGain).toBeGreaterThan(0); expect(getTourAffinityPercent(TOUR_LEG_1_STOPS[1], game.songs[1])).toBe(8); expect(getTourAffinityPercent(TOUR_LEG_1_STOPS[2], game.songs[2])).toBe(8);
+    const inactiveChanged = { ...game, members: [...game.members, { id: "extra", name: "Extra", specialty: "", joined: true, abilities: { vocal: 999, harmony: 999, dance: 999, character: 999, lyrics: 999, composition: 999, choreography: 999 } }] }; expect(simulateTourPerformance(inactiveChanged, "tour-stop-1", "beginning-stage")!.audience).toBe(vocal.audience); const swapped = { ...inactiveChanged, activeMemberIds: ["math", "japanese", "science", "extra"] }; expect(simulateTourPerformance(swapped, "tour-stop-1", "beginning-stage")!.audience).toBeGreaterThan(vocal.audience); expect(simulateTourPerformance(game, "tour-stop-1", "beginning-stage")).toEqual(vocal);
+  });
+  it("keeps Tour recommendations pure and returns training only when a stop is not clear", () => {
+    const base = createInitialGameState(); const game = { ...base, members: base.members.map((member, index) => ({ ...member, joined: index < 4 || member.id === "yuna", abilities: { vocal: 1, harmony: 1, dance: 1, character: 1, lyrics: 1, composition: 1, choreography: 1 } })), activeMemberIds: ["math", "japanese", "science", "yuna"], songs: base.songs.map((song) => ({ ...song, status: "completed" as const, songStats: { vocal: 0, harmony: 0, dance: 0, character: 0, lyrics: 0, composition: 0, choreography: 0 } })) }; const before = JSON.stringify(game); const training = getTourTrainingRecommendation(game, "tour-stop-2", "kirameki-step"); expect(training?.targetId).toBe("dance-choreography"); expect(getBestTourRecommendation(game, "tour-stop-2", "kirameki-step")).toBeTruthy(); expect(JSON.stringify(game)).toBe(before);
   });
   it("unlocks the 800-seat city hall only after regional sold out, Sparkle 2, and three songs", () => {
     const base = createInitialGameState(); const ready = { ...base, songsCompleted: 3, songs: base.songs.map((song, index) => ({ ...song, status: index < 3 ? "completed" as const : "available" as const })), wonRivalBattleIds: ["sparkle-stage-2"], milestones: { regionalHallSoldOut: true } };
