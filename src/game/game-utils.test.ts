@@ -16,6 +16,7 @@ import { canCreateThirdSong, canUnlockRegionalHall, calculateSongLiveModifier, i
 import { applySongAffinityToBattleStats, canStartNovaStage1, canStartSparkleStage2, getTrainingRecommendation, simulateRivalBattle } from "./rival-battle";
 import { NOVA_STAGE_1 } from "./config";
 import { TOUR_LEG_1_STOPS } from "./tour/config";
+import { canStartTourStop, canUnlockNationalTour, capTourAudience, getTourClearAudience, getTourStopStatus, isTourLeg1Completed, isTourStopCleared, isTourStopSoldOut } from "./tour/progression";
 
 describe("producer game", () => {
   it("unlocks the regional hall only after two songs, Stage 1, and a 100-seat sold out", () => {
@@ -143,6 +144,22 @@ describe("producer game", () => {
   it("normalizes missing and malformed Tour progress without writing data", () => {
     const legacy = normalizeGameState({}); expect(legacy.tourProgress).toEqual({ completedStopIds: [], soldOutStopIds: [], leg1Completed: false });
     const normalized = normalizeGameState({ tourProgress: { completedStopIds: ["tour-stop-1", "tour-stop-1", "tour-stop-999"] as never[], soldOutStopIds: ["tour-stop-2", "tour-stop-2", "unknown"] as never[], leg1Completed: true } }); expect(normalized.tourProgress).toEqual({ completedStopIds: ["tour-stop-1", "tour-stop-2"], soldOutStopIds: ["tour-stop-2"], leg1Completed: true });
+  });
+  it("unlocks the national tour only with city hall, four songs, NOVA, and both major rivals", () => {
+    const base = createInitialGameState(); const ready = { ...base, songs: base.songs.map((song) => ({ ...song, status: "completed" as const })), milestones: { cityHallSoldOut: true }, wonRivalBattleIds: ["sparkle-stage-1", "sparkle-stage-2", "nova-stage-1"] };
+    expect(canUnlockNationalTour({ ...ready, milestones: {} })).toBe(false); expect(canUnlockNationalTour({ ...ready, wonRivalBattleIds: ["sparkle-stage-1"] })).toBe(false); expect(canUnlockNationalTour({ ...ready, songs: ready.songs.slice(0, 3) })).toBe(false); expect(canUnlockNationalTour({ ...ready, wonRivalBattleIds: ["sparkle-stage-1", "sparkle-stage-2"] })).toBe(false); expect(canUnlockNationalTour(ready)).toBe(true);
+  });
+  it("derives ordered Tour stop status and permits replays without skip", () => {
+    const base = createInitialGameState(); const game = { ...base, songs: base.songs.map((song) => ({ ...song, status: "completed" as const })), milestones: { cityHallSoldOut: true }, wonRivalBattleIds: ["sparkle-stage-1", "nova-stage-1"] };
+    expect(TOUR_LEG_1_STOPS.map((stop) => getTourStopStatus(base, stop.id))).toEqual(["locked", "locked", "locked"]); expect(TOUR_LEG_1_STOPS.map((stop) => getTourStopStatus(game, stop.id))).toEqual(["open", "locked", "locked"]); expect(canStartTourStop(game, "tour-stop-2")).toBe(false);
+    const clear1 = { ...game, tourProgress: { completedStopIds: ["tour-stop-1" as const], soldOutStopIds: [], leg1Completed: false } }; expect(getTourStopStatus(clear1, "tour-stop-1")).toBe("clear"); expect(canStartTourStop(clear1, "tour-stop-1")).toBe(true); expect(getTourStopStatus(clear1, "tour-stop-2")).toBe("open");
+    const sold1 = { ...clear1, tourProgress: { completedStopIds: ["tour-stop-1" as const], soldOutStopIds: ["tour-stop-1" as const], leg1Completed: false } }; expect(getTourStopStatus(sold1, "tour-stop-1")).toBe("sold-out"); expect(canStartTourStop(sold1, "tour-stop-1")).toBe(true); const clear2 = { ...clear1, tourProgress: { completedStopIds: ["tour-stop-1", "tour-stop-2"] as ("tour-stop-1" | "tour-stop-2")[], soldOutStopIds: [], leg1Completed: false } }; expect(getTourStopStatus(clear2, "tour-stop-3")).toBe("open");
+  });
+  it("uses configured clear thresholds, sold-out boundaries, and safe audience caps", () => {
+    const [one, two, three] = TOUR_LEG_1_STOPS; expect([one, two, three].map(getTourClearAudience)).toEqual([900, 1350, 1875]); expect(isTourStopCleared(one, 899)).toBe(false); expect(isTourStopCleared(one, 900)).toBe(true); expect(isTourStopCleared(two, 1349)).toBe(false); expect(isTourStopCleared(two, 1350)).toBe(true); expect(isTourStopCleared(three, 1874)).toBe(false); expect(isTourStopCleared(three, 1875)).toBe(true); expect(isTourStopSoldOut(one, 1199)).toBe(false); expect(isTourStopSoldOut(one, 1200)).toBe(true); expect(isTourStopSoldOut(two, 1800)).toBe(true); expect(isTourStopSoldOut(three, 2500)).toBe(true); expect([capTourAudience(one, -1), capTourAudience(one, 1199), capTourAudience(one, 1201), capTourAudience(two, 1801), capTourAudience(three, 2501)]).toEqual([0, 1199, 1200, 1800, 2500]);
+  });
+  it("completes only Tour Leg 1 when every stop is clear or sold out", () => {
+    expect(isTourLeg1Completed({ completedStopIds: [], soldOutStopIds: [], leg1Completed: false })).toBe(false); expect(isTourLeg1Completed({ completedStopIds: ["tour-stop-1", "tour-stop-2", "tour-stop-3"], soldOutStopIds: [], leg1Completed: false })).toBe(true); expect(isTourLeg1Completed({ completedStopIds: ["tour-stop-1", "tour-stop-2"], soldOutStopIds: ["tour-stop-3"], leg1Completed: false })).toBe(true);
   });
   it("unlocks the 800-seat city hall only after regional sold out, Sparkle 2, and three songs", () => {
     const base = createInitialGameState(); const ready = { ...base, songsCompleted: 3, songs: base.songs.map((song, index) => ({ ...song, status: index < 3 ? "completed" as const : "available" as const })), wonRivalBattleIds: ["sparkle-stage-2"], milestones: { regionalHallSoldOut: true } };

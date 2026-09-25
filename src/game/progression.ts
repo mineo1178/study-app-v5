@@ -23,7 +23,8 @@ export const getRivalBattle = (minutes: number, goalMinutes: number) => {
   return { status: rate >= .7 ? "LOSE" : "BIG LOSS", fanChange: RIVAL_FAN_CHANGES.lose, remaining, message: "今週の目標に向かって進もう" };
 };
 export const applyFanChange = (fans: number, change: number) => Math.max(0, fans + change);
-export const getMajorRivalProgress = (game: ProducerGameState) => ["sparkle", "nova", "legend4"].filter((rival) => rival === "sparkle" ? game.wonRivalBattleIds?.some((id) => id.startsWith("sparkle-")) : game.wonRivalBattleIds?.some((id) => id.startsWith(`${rival}-`))).length;
+export const getMajorRivalIds = (game: ProducerGameState) => ["sparkle", "nova", "legend4"].filter((rival) => game.wonRivalBattleIds?.some((id) => id.startsWith(`${rival}-`)));
+export const getMajorRivalProgress = (game: ProducerGameState) => getMajorRivalIds(game).length;
 export const getTokyoDomeMissions = (game: ProducerGameState, recentWeekRate = 0) => [
   { label: "4人のメンバーをそろえる", done: ["math", "japanese", "science", "yuna"].every((id) => game.members.some((member) => member.id === id && member.joined)) },
   { label: "メンバー育成ミッションを達成", done: game.lessonsCompleted >= 20 },
