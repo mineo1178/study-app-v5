@@ -23,13 +23,14 @@ export const getRivalBattle = (minutes: number, goalMinutes: number) => {
   return { status: rate >= .7 ? "LOSE" : "BIG LOSS", fanChange: RIVAL_FAN_CHANGES.lose, remaining, message: "今週の目標に向かって進もう" };
 };
 export const applyFanChange = (fans: number, change: number) => Math.max(0, fans + change);
+export const getMajorRivalProgress = (game: ProducerGameState) => ["sparkle", "nova", "legend4"].filter((rival) => rival === "sparkle" ? game.wonRivalBattleIds?.some((id) => id.startsWith("sparkle-")) : game.wonRivalBattleIds?.some((id) => id.startsWith(`${rival}-`))).length;
 export const getTokyoDomeMissions = (game: ProducerGameState, recentWeekRate = 0) => [
   { label: "4人のメンバーをそろえる", done: ["math", "japanese", "science", "yuna"].every((id) => game.members.some((member) => member.id === id && member.joined)) },
   { label: "メンバー育成ミッションを達成", done: game.lessonsCompleted >= 20 },
   { label: "オリジナル曲を5曲完成", done: game.songsCompleted >= 5 },
   { label: "ファン45,000人", done: game.fans >= 45000 },
   { label: "全国ツアー完走", done: false },
-  { label: "ライバル3組との重要イベント達成", done: game.rivalEventsCompleted >= 3 },
+  { label: "ライバル3組との重要イベント達成", done: getMajorRivalProgress(game) >= 3 },
   { label: "プロデューサー条件達成", done: game.producerStars >= 7 && recentWeekRate >= .9 },
 ];
 export const RIVAL_TARGET_HOURS = RIVAL_WEEKLY_HOURS;

@@ -5,7 +5,7 @@ import { applyFanChange, getMonthlyGoalHours, getMonthlyGoalMinutes, getRivalBat
 import { canRecruitThirdMember, claimRewards, getSessionActivityPoints, getYunaRecruitmentStatus, joinNextMember, lessonMember, recruitThirdMember, recruitYuna } from "./rewards";
 import { calculateBoostedPoints, getHighestBoost, getNextBonusGap, getTestBoost, testImportance } from "./test-bonus";
 import { createWeeklyResult, getUnfinalizedWeeks, getWeekBoundsJst, getWeekIdJst, isFinalizableWeek } from "./weekly";
-import { canCreateSong, calculateAudience, calculateFanGain, createSong, getLiveRating, getNextGoal, isVenueSoldOut, isVenueUnlocked } from "./song-live";
+import { canCreateFourthSong, canCreateSong, calculateAudience, calculateFanGain, createSong, getLiveRating, getNextGoal, isVenueSoldOut, isVenueUnlocked, canUnlockCityHall } from "./song-live";
 import { calculateBattleStats, calculateRivalBattleResult, canStartRivalBattle, getBattleImprovementHint, getRivalBattleRewards } from "./rival-battle";
 import { applyLeaderSkillToBattleStats, applyLeaderSkillToLiveFanGain, getFormationSnapshot, setLeader } from "./leader-skills";
 import { getActiveMembers } from "./formation";
@@ -13,7 +13,8 @@ import { applyGachaPity, applyTrainingItem, calculateDuplicateFragments, calcula
 import { GACHA_FEATURE_START_DATE, GACHA_MEMBER_DEFINITIONS, TRAINING_ITEMS } from "./gacha/config";
 import { normalizeFormation, validateFormation } from "./formation";
 import { canCreateThirdSong, canUnlockRegionalHall, calculateSongLiveModifier, isRegionalHallSoldOut } from "./song-live";
-import { applySongAffinityToBattleStats, canStartSparkleStage2 } from "./rival-battle";
+import { applySongAffinityToBattleStats, canStartNovaStage1, canStartSparkleStage2, getTrainingRecommendation, simulateRivalBattle } from "./rival-battle";
+import { NOVA_STAGE_1 } from "./config";
 
 describe("producer game", () => {
   it("unlocks the regional hall only after two songs, Stage 1, and a 100-seat sold out", () => {
@@ -134,5 +135,20 @@ describe("producer game", () => {
   });
   it("normalizes older gacha draw records without new optional fields", () => {
     expect(normalizeGachaDraw({ drawId: "legacy", memberId: "aoi-r" })).toMatchObject({ ticketType: "normal", rarity: "N", resultType: "member", duplicate: false, starFragmentsGained: 0, pityApplied: "none", drawnAt: 0 });
+  });
+  it("unlocks the 800-seat city hall only after regional sold out, Sparkle 2, and three songs", () => {
+    const base = createInitialGameState(); const ready = { ...base, songsCompleted: 3, songs: base.songs.map((song, index) => ({ ...song, status: index < 3 ? "completed" as const : "available" as const })), wonRivalBattleIds: ["sparkle-stage-2"], milestones: { regionalHallSoldOut: true } };
+    expect(canUnlockCityHall({ ...ready, milestones: {} })).toBe(false); expect(canUnlockCityHall({ ...ready, wonRivalBattleIds: [] })).toBe(false); expect(canUnlockCityHall({ ...ready, songs: ready.songs.map((song, index) => ({ ...song, status: index < 2 ? "completed" as const : "available" as const })) })).toBe(false); expect(canUnlockCityHall(ready)).toBe(true);
+  });
+  it("requires 65P for the fourth song and keeps its stat snapshot fixed", () => {
+    const base = createInitialGameState(); const ready = { ...base, activityPoints: 65, songsCompleted: 3, members: base.members.map((member) => ({ ...member, joined: ["math", "japanese", "science", "yuna"].includes(member.id) })), activeMemberIds: ["math", "japanese", "science", "yuna"], songs: base.songs.map((song, index) => ({ ...song, status: index < 3 ? "completed" as const : index === 3 ? "available" as const : song.status })), wonRivalBattleIds: ["sparkle-stage-2"], milestones: { regionalHallSoldOut: true } };
+    expect(canCreateFourthSong({ ...ready, activityPoints: 64 })).toBe(false); expect(canCreateFourthSong(ready)).toBe(true); const created = createSong(ready, "tsunagaru-melody"); expect(created.activityPoints).toBe(0); expect(created.songs[3].status).toBe("completed"); expect(createSong(created, "tsunagaru-melody")).toBe(created);
+  });
+  it("caps city-hall attendance and preserves the sold-out boundary", () => {
+    expect(isVenueSoldOut({ venueId: "city-hall", capacity: 800, audience: 799 } as Performance)).toBe(false); expect(isVenueSoldOut({ venueId: "city-hall", capacity: 800, audience: 800 } as Performance)).toBe(true); const game = { ...createInitialGameState(), fans: 999999 }; const song = { ...game.songs[0], status: "completed" as const, songStats: Object.fromEntries(Object.keys(game.members[0].abilities).map((key) => [key, 999])) as typeof game.songs[0]["songStats"] }; expect(calculateAudience(game, song, "city-hall")).toBe(800);
+  });
+  it("unlocks NOVA only after city live and supports a three-win starter strategy", () => {
+    const base = createInitialGameState(); const ready = { ...base, songsCompleted: 4, members: base.members.filter((member) => ["math", "japanese", "science", "yuna"].includes(member.id)).map((member) => ({ ...member, joined: true, abilities: { ...member.abilities, vocal: 28, harmony: 28, lyrics: 30, composition: 30, character: 30 } })), activeMemberIds: ["math", "japanese", "science", "yuna"], leaderMemberId: "japanese", songs: base.songs.map((song) => ({ ...song, status: "completed" as const, songStats: { vocal: 25, harmony: 25, dance: 10, character: 25, lyrics: 25, composition: 25, choreography: 10 } })), wonRivalBattleIds: ["sparkle-stage-2"], milestones: { regionalHallSoldOut: true } };
+    expect(canStartNovaStage1(ready, [])).toBe(false); expect(canStartNovaStage1(ready, [{ venueId: "city-hall" } as Performance])).toBe(true); const result = simulateRivalBattle(ready, ready.songs[3]); expect(result.categoryResults.dance).toBe("LOSE"); expect(["WIN", "PERFECT WIN"]).toContain(result.overallResult); expect(NOVA_STAGE_1.stats).toEqual({ vocal: 49, dance: 58, song: 48, character: 54 }); expect(getTrainingRecommendation({ vocal: 40, dance: 60, song: 60, character: 60 })).toContain("歌唱");
   });
 });
