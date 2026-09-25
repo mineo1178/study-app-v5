@@ -1,5 +1,5 @@
 import type { IdolAbility, MemberStats } from "../types";
-import type { GachaMemberDefinition, GachaRarity, GachaTicketType, TrainingItemDefinition } from "./types";
+import type { GachaExchangeDefinition, GachaMemberDefinition, GachaRarity, GachaTicketType, TrainingItemDefinition } from "./types";
 
 export const GACHA_FEATURE_START_DATE = new Date("2026-09-28T00:00:00+09:00").getTime();
 export const GACHA_RATES: Record<GachaTicketType, Record<GachaRarity, number>> = {
@@ -21,3 +21,7 @@ export const GACHA_MEMBER_DEFINITIONS: GachaMemberDefinition[] = [
 ];
 const itemNames: Record<IdolAbility, string> = { vocal: "ボーカルマイク", harmony: "ハーモニーイヤモニ", dance: "ダンスシューズ", character: "ステージバッジ", lyrics: "作詞ノート", composition: "作曲キーボード", choreography: "振付ノート" };
 export const TRAINING_ITEMS: TrainingItemDefinition[] = (Object.keys(itemNames) as IdolAbility[]).flatMap((ability) => (["N", "R", "SR", "SSR"] as GachaRarity[]).map((rarity) => ({ id: `${ability}-${rarity.toLowerCase()}`, name: itemNames[ability], ability, rarity, bonus: ITEM_BONUSES[rarity] })));
+export const GACHA_EXCHANGE_LINEUP: GachaExchangeDefinition[] = [
+  { id: "gold-ticket", name: "GOLDチケット", description: "SR以上も狙えるガチャチケット", fragmentCost: 40, reward: { ticketType: "gold", quantity: 1 } },
+  ...(Object.keys(itemNames) as IdolAbility[]).map((ability) => ({ id: `${ability}-item-r`, name: `${itemNames[ability]} R`, description: `${ability}を+2育成できるアイテム`, fragmentCost: 15, reward: { itemId: `${ability}-r`, quantity: 1 } })),
+];

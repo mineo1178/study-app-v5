@@ -95,8 +95,8 @@ import { LIVE_COST, SPARKLE_STAGES } from "./game/config";
 import { calculateAudience, calculateFanGain, canPerformLive, createSong, getCurrentVenue, getLiveRating, isVenueSoldOut } from "./game/song-live";
 import { calculateBattleStats, calculateRivalBattleResult, canStartRivalBattle, getRivalBattleRewards } from "./game/rival-battle";
 import { applyLeaderSkillToBattleStats, applyLeaderSkillToLiveFanGain, getFormationSnapshot, setLeader } from "./game/leader-skills";
-import { createSampleGachaState, getNextTicketThreshold, grantWeeklyGachaReward, normalizeGachaState, resolveGachaDraw, applyTrainingItem, calculateWeeklyGachaReward } from "./game/gacha/logic";
-import type { GachaDraw, GachaRandomRolls, GachaState, GachaTicketType, GachaWeek } from "./game/gacha/types";
+import { createSampleGachaDraws, createSampleGachaState, exchangeStarFragments, getNextTicketThreshold, grantWeeklyGachaReward, normalizeGachaDraw, normalizeGachaState, resolveGachaDraw, applyTrainingItem, calculateWeeklyGachaReward } from "./game/gacha/logic";
+import type { GachaDraw, GachaExchangeDefinition, GachaRandomRolls, GachaState, GachaTicketType, GachaWeek } from "./game/gacha/types";
 import { normalizeFormation } from "./game/formation";
 import { GACHA_FEATURE_START_DATE } from "./game/gacha/config";
 
@@ -146,7 +146,7 @@ if (hasFirebaseConfig) {
 // ==========================================
 
 const FAMILY_ID = "oomine-study-2026";
-const APP_VERSION = "v1.72";
+const APP_VERSION = "v1.73";
 
 // Firestore Path 固定（変更禁止）
 // 実DB構造:
@@ -186,6 +186,8 @@ const getRivalBattleDoc = (database: ReturnType<typeof getFirestore>, id: string
 const getGachaStateDoc = (database: ReturnType<typeof getFirestore>) => doc(database, ...FIRESTORE_ROOT, "game", "idol-produce", "gacha", "state");
 const getGachaWeekDoc = (database: ReturnType<typeof getFirestore>, weekId: string) => doc(database, ...FIRESTORE_ROOT, "game", "idol-produce", "gachaWeeks", weekId);
 const getGachaDrawDoc = (database: ReturnType<typeof getFirestore>, drawId: string) => doc(database, ...FIRESTORE_ROOT, "game", "idol-produce", "gachaDraws", drawId);
+const getGachaDrawsCol = (database: ReturnType<typeof getFirestore>) => collection(database, ...FIRESTORE_ROOT, "game", "idol-produce", "gachaDraws");
+const getGachaExchangeDoc = (database: ReturnType<typeof getFirestore>, exchangeId: string) => doc(database, ...FIRESTORE_ROOT, "game", "idol-produce", "gachaExchanges", exchangeId);
 
 // Cache Keys
 const CACHE_KEY_TASKS = `study-app-v5-${FAMILY_ID}-tasks`;
@@ -3215,6 +3217,7 @@ export default function App() {
   const [rivalBattles, setRivalBattles] = useState<RivalBattleRecord[]>([]);
   const [gachaState, setGachaState] = useState<GachaState>(normalizeGachaState);
   const [lastGachaDraw, setLastGachaDraw] = useState<GachaDraw | null>(null);
+  const [gachaHistory, setGachaHistory] = useState<GachaDraw[]>([]);
 
   const [isAddModalOpen, setAddModalOpen] = useState(false);
   const [selectedUnit, setSelectedUnit] = useState<string | null>(null);
@@ -3354,6 +3357,8 @@ export default function App() {
         if (snapshot.exists()) setGame(normalizeGameState(snapshot.data() as Partial<ProducerGameState>));
         const gachaSnapshot = await getDoc(getGachaStateDoc(dbInstance));
         if (gachaSnapshot.exists()) setGachaState(normalizeGachaState(gachaSnapshot.data() as Partial<GachaState>));
+        const drawsSnapshot = await getDocs(getGachaDrawsCol(dbInstance));
+        setGachaHistory(drawsSnapshot.docs.map((draw) => normalizeGachaDraw({ drawId: draw.id, ...draw.data() } as Partial<GachaDraw> & { drawId: string })).sort((a, b) => b.drawnAt - a.drawnAt).slice(0, 20));
         const weeks = await getDocs(getWeeksCol(dbInstance));
         setWeeklyResults(weeks.docs.map((week) => week.data() as WeeklyResult).sort((a, b) => b.startAt - a.startAt));
         const performanceSnap = await getDocs(getPerformancesCol(dbInstance));
@@ -3801,7 +3806,7 @@ export default function App() {
 
   const drawGacha = async (ticketType: GachaTicketType) => {
     const random = new Uint32Array(3); crypto.getRandomValues(random); const rolls: GachaRandomRolls = { rarityRoll: random[0] / 2 ** 32, categoryRoll: random[1] / 2 ** 32, poolRoll: random[2] / 2 ** 32 }; const drawId = `gacha-${crypto.randomUUID?.() || Date.now()}`;
-    if (isSampleMode || !auth?.currentUser || !getSafeDb()) { const result = resolveGachaDraw(game, gachaState, drawId, ticketType, rolls); if (!result) return; setGame(result.game); setGachaState(result.gacha); setLastGachaDraw(result.draw); return; }
+    if (isSampleMode || !auth?.currentUser || !getSafeDb()) { const result = resolveGachaDraw(game, gachaState, drawId, ticketType, rolls); if (!result) return; setGame(result.game); setGachaState(result.gacha); setLastGachaDraw(result.draw); setGachaHistory((current) => [result.draw, ...current.filter((draw) => draw.drawId !== result.draw.drawId)]); return; }
     const dbInstance = getSafeDb()!;
     try {
       const result = await runTransaction(dbInstance, async (transaction) => {
@@ -3810,7 +3815,7 @@ export default function App() {
         const currentGame = gameSnapshot.exists() ? normalizeGameState(gameSnapshot.data() as Partial<ProducerGameState>) : createInitialGameState(); const currentGacha = normalizeGachaState(stateSnapshot.exists() ? stateSnapshot.data() as Partial<GachaState> : undefined); const resolved = resolveGachaDraw(currentGame, currentGacha, drawId, ticketType, rolls); if (!resolved) throw new Error("NO_TICKET");
         transaction.set(drawRef, resolved.draw); transaction.set(stateRef, resolved.gacha); if (resolved.game !== currentGame) transaction.set(gameRef, resolved.game); return resolved;
       });
-      setLastGachaDraw(result.draw); if (result.game) setGame(result.game); if (result.gacha) setGachaState(result.gacha);
+      setLastGachaDraw(result.draw); setGachaHistory((current) => [result.draw, ...current.filter((draw) => draw.drawId !== result.draw.drawId)]); if (result.game) setGame(result.game); if (result.gacha) setGachaState(result.gacha);
     } catch { setSyncState("offline"); }
   };
 
@@ -3819,6 +3824,21 @@ export default function App() {
     if (isSampleMode || !auth?.currentUser || !getSafeDb()) { const result = applyTrainingItem(game, gachaState, itemId, memberId, itemUseId); if (!result) return; setGame(result.game); setGachaState(result.gacha); return; }
     const dbInstance = getSafeDb()!;
     try { const result = await runTransaction(dbInstance, async (transaction) => { const stateRef = getGachaStateDoc(dbInstance); const gameRef = getGameDoc(dbInstance); const [stateSnapshot, gameSnapshot] = await Promise.all([transaction.get(stateRef), transaction.get(gameRef)]); const currentGame = gameSnapshot.exists() ? normalizeGameState(gameSnapshot.data() as Partial<ProducerGameState>) : createInitialGameState(); const currentGacha = normalizeGachaState(stateSnapshot.exists() ? stateSnapshot.data() as Partial<GachaState> : undefined); const applied = applyTrainingItem(currentGame, currentGacha, itemId, memberId, itemUseId); if (!applied) throw new Error("ITEM_NOT_AVAILABLE"); transaction.set(stateRef, applied.gacha); transaction.set(gameRef, applied.game); return applied; }); setGame(result.game); setGachaState(result.gacha); } catch { setSyncState("offline"); }
+  };
+
+  const exchangeGachaFragments = async (exchange: GachaExchangeDefinition) => {
+    const exchangeId = `exchange-${crypto.randomUUID?.() || Date.now()}`;
+    if (isSampleMode || !auth?.currentUser || !getSafeDb()) { const result = exchangeStarFragments(gachaState, exchange, exchangeId); if (result) setGachaState(result.gacha); return; }
+    const dbInstance = getSafeDb()!;
+    try {
+      const result = await runTransaction(dbInstance, async (transaction) => {
+        const exchangeRef = getGachaExchangeDoc(dbInstance, exchangeId); const stateRef = getGachaStateDoc(dbInstance); const [existing, stateSnapshot] = await Promise.all([transaction.get(exchangeRef), transaction.get(stateRef)]);
+        if (existing.exists()) return { gacha: null };
+        const current = normalizeGachaState(stateSnapshot.exists() ? stateSnapshot.data() as Partial<GachaState> : undefined); const exchanged = exchangeStarFragments(current, exchange, exchangeId); if (!exchanged) throw new Error("NOT_ENOUGH_FRAGMENTS");
+        transaction.set(exchangeRef, exchanged.exchange); transaction.set(stateRef, exchanged.gacha); return exchanged;
+      });
+      if (result.gacha) setGachaState(result.gacha);
+    } catch { setSyncState("offline"); }
   };
 
   const createSongFor = async (songId: string) => {
@@ -4055,6 +4075,7 @@ export default function App() {
           setTasks(INITIAL_TASKS);
           setTests(INITIAL_TESTS);
           setGachaState(createSampleGachaState());
+          setGachaHistory(createSampleGachaDraws());
         }}
       />
     );
@@ -4130,6 +4151,7 @@ export default function App() {
                   setTasks(generateDummyTasks());
                   setTests(INITIAL_TESTS);
                   setGachaState(createSampleGachaState());
+                  setGachaHistory(createSampleGachaDraws());
                 } else {
                   setIsSampleMode(false);
                   fetchData(true);
@@ -4197,8 +4219,10 @@ export default function App() {
             gachaState={gachaState}
             gachaForecast={getNextTicketThreshold(getWeekStudyMinutes(allStudyEntries), getWeeklyGoalMinutes())}
             lastGachaDraw={lastGachaDraw}
+            gachaHistory={gachaHistory}
             onDrawGacha={drawGacha}
             onUseTrainingItem={useTrainingItem}
+            onExchangeGacha={exchangeGachaFragments}
             gachaStartsLater={!isSampleMode && gachaStartsLater}
             boostPercent={currentBoostPercent}
             weeklyResults={weeklyResults}

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Performance } from "./types";
-import { createInitialGameState, normalizeGameState } from "./config";
+import { createInitialGameState, MEMBER_DEFINITIONS, normalizeGameState } from "./config";
 import { applyFanChange, getMonthlyGoalHours, getMonthlyGoalMinutes, getRivalBattle, getTokyoDomeMissions, getWeeklyGoalMinutes } from "./progression";
 import { canRecruitThirdMember, claimRewards, getSessionActivityPoints, getYunaRecruitmentStatus, joinNextMember, lessonMember, recruitThirdMember, recruitYuna } from "./rewards";
 import { calculateBoostedPoints, getHighestBoost, getNextBonusGap, getTestBoost, testImportance } from "./test-bonus";
@@ -9,8 +9,8 @@ import { canCreateSong, calculateAudience, calculateFanGain, createSong, getLive
 import { calculateBattleStats, calculateRivalBattleResult, canStartRivalBattle, getBattleImprovementHint, getRivalBattleRewards } from "./rival-battle";
 import { applyLeaderSkillToBattleStats, applyLeaderSkillToLiveFanGain, getFormationSnapshot, setLeader } from "./leader-skills";
 import { getActiveMembers } from "./formation";
-import { applyGachaPity, applyTrainingItem, calculateDuplicateFragments, calculateWeeklyGachaReward, getNextTicketThreshold, grantWeeklyGachaReward, normalizeGachaState, resolveGachaDraw, resolveGachaRarity, validateRateTables } from "./gacha/logic";
-import { GACHA_FEATURE_START_DATE, GACHA_MEMBER_DEFINITIONS, TRAINING_ITEMS } from "./gacha/config";
+import { applyGachaPity, applyTrainingItem, calculateDuplicateFragments, calculateWeeklyGachaReward, exchangeStarFragments, getNextTicketThreshold, grantWeeklyGachaReward, normalizeGachaDraw, normalizeGachaState, resolveGachaDraw, resolveGachaRarity, validateRateTables } from "./gacha/logic";
+import { GACHA_EXCHANGE_LINEUP, GACHA_FEATURE_START_DATE, GACHA_MEMBER_DEFINITIONS, TRAINING_ITEMS } from "./gacha/config";
 import { normalizeFormation, validateFormation } from "./formation";
 
 describe("producer game", () => {
@@ -106,5 +106,16 @@ describe("producer game", () => {
   });
   it("applies every rarity item bonus and does not permit a zero-quantity use", () => {
     const game = createInitialGameState(); for (const [rarity, bonus] of [["N", 1], ["R", 2], ["SR", 3], ["SSR", 5]] as const) { const item = TRAINING_ITEMS.find((candidate) => candidate.ability === "vocal" && candidate.rarity === rarity)!; const result = applyTrainingItem(game, { ...normalizeGachaState(), itemInventory: { [item.id]: 1 } }, item.id, "math")!; expect(result.game.members[0].abilities.vocal).toBe(game.members[0].abilities.vocal + bonus); } expect(applyTrainingItem(game, normalizeGachaState(), "vocal-n", "math")).toBeNull();
+  });
+  it("exchanges fragments once for a GOLD ticket or selected R training item", () => {
+    const state = normalizeGachaState({ starFragments: 55 }); const gold = GACHA_EXCHANGE_LINEUP.find((exchange) => exchange.id === "gold-ticket")!; const first = exchangeStarFragments(state, gold, "exchange-1", 1)!;
+    expect(first.gacha.starFragments).toBe(15); expect(first.gacha.ticketBalances.gold).toBe(1); expect(first.exchange.exchangeId).toBe("exchange-1"); const replay = exchangeStarFragments(first.gacha, gold, "exchange-1", 2, first.exchange)!; expect(replay.gacha).toBe(first.gacha); expect(replay.gacha.ticketBalances.gold).toBe(1);
+    const dance = GACHA_EXCHANGE_LINEUP.find((exchange) => exchange.id === "dance-item-r")!; const item = exchangeStarFragments(normalizeGachaState({ starFragments: 15 }), dance, "exchange-2")!; expect(item.gacha.itemInventory["dance-r"]).toBe(1);
+  });
+  it("keeps a sixteen-member collection with starter and gacha rarity definitions", () => {
+    expect(MEMBER_DEFINITIONS).toHaveLength(16); expect(MEMBER_DEFINITIONS.filter((member) => member.sourceType === "starter")).toHaveLength(4); expect(MEMBER_DEFINITIONS.filter((member) => member.rarity === "R")).toHaveLength(4); expect(MEMBER_DEFINITIONS.filter((member) => member.rarity === "SR")).toHaveLength(4); expect(MEMBER_DEFINITIONS.filter((member) => member.rarity === "SSR")).toHaveLength(4);
+  });
+  it("normalizes older gacha draw records without new optional fields", () => {
+    expect(normalizeGachaDraw({ drawId: "legacy", memberId: "aoi-r" })).toMatchObject({ ticketType: "normal", rarity: "N", resultType: "member", duplicate: false, starFragmentsGained: 0, pityApplied: "none", drawnAt: 0 });
   });
 });

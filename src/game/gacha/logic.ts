@@ -1,10 +1,16 @@
-import { GACHA_CATEGORY_RATES, GACHA_FEATURE_START_DATE, GACHA_MEMBER_DEFINITIONS, GACHA_RATES, TRAINING_ITEMS, DUPLICATE_FRAGMENTS } from "./config";
-import type { GachaDraw, GachaDrawResult, GachaRandomRolls, GachaRarity, GachaResultType, GachaState, GachaTicketType, WeeklyGachaReward } from "./types";
+import { GACHA_CATEGORY_RATES, GACHA_EXCHANGE_LINEUP, GACHA_FEATURE_START_DATE, GACHA_MEMBER_DEFINITIONS, GACHA_RATES, TRAINING_ITEMS, DUPLICATE_FRAGMENTS } from "./config";
+import type { GachaDraw, GachaDrawResult, GachaExchange, GachaExchangeDefinition, GachaRandomRolls, GachaRarity, GachaResultType, GachaState, GachaTicketType, WeeklyGachaReward } from "./types";
 import type { IdolMember, MemberId, ProducerGameState } from "../types";
 
 export const emptyTicketBalances = () => ({ normal: 0, silver: 0, gold: 0, premium: 0 });
 export const normalizeGachaState = (saved?: Partial<GachaState>): GachaState => ({ ticketBalances: { ...emptyTicketBalances(), ...(saved?.ticketBalances ?? {}) }, starFragments: Math.max(0, saved?.starFragments ?? 0), drawsSinceSrPlus: Math.max(0, saved?.drawsSinceSrPlus ?? 0), drawsSinceSsr: Math.max(0, saved?.drawsSinceSsr ?? 0), itemInventory: { ...(saved?.itemInventory ?? {}) }, usedItemIds: saved?.usedItemIds ?? [] });
-export const createSampleGachaState = (): GachaState => normalizeGachaState({ ticketBalances: { normal: 2, silver: 2, gold: 2, premium: 2 }, itemInventory: { "vocal-n": 1 } });
+export const normalizeGachaDraw = (saved: Partial<GachaDraw> & { drawId: string }): GachaDraw => ({ drawId: saved.drawId, ticketType: saved.ticketType ?? "normal", rarity: saved.rarity ?? "N", resultType: saved.resultType ?? (saved.memberId ? "member" : "item"), memberId: saved.memberId, itemId: saved.itemId, itemQuantity: saved.itemQuantity, duplicate: saved.duplicate ?? false, starFragmentsGained: saved.starFragmentsGained ?? 0, pityApplied: saved.pityApplied ?? "none", drawnAt: saved.drawnAt ?? 0 });
+export const createSampleGachaState = (): GachaState => normalizeGachaState({ ticketBalances: { normal: 2, silver: 2, gold: 2, premium: 2 }, starFragments: 70, itemInventory: { "vocal-n": 1 } });
+export const createSampleGachaDraws = (): GachaDraw[] => [
+  { drawId: "sample-member", ticketType: "gold", rarity: "SR", resultType: "member", memberId: "rei-sr", duplicate: false, starFragmentsGained: 0, pityApplied: "none", drawnAt: 3 },
+  { drawId: "sample-item", ticketType: "silver", rarity: "R", resultType: "item", itemId: "dance-r", itemQuantity: 1, duplicate: false, starFragmentsGained: 0, pityApplied: "none", drawnAt: 2 },
+  { drawId: "sample-duplicate", ticketType: "normal", rarity: "R", resultType: "member", memberId: "aoi-r", duplicate: true, starFragmentsGained: 10, pityApplied: "none", drawnAt: 1 },
+];
 export const calculateWeeklyGachaReward = (achievementRate: number, weekEndAt: number): WeeklyGachaReward => {
   if (weekEndAt < GACHA_FEATURE_START_DATE) return null;
   const percent = achievementRate * 100;
@@ -40,3 +46,13 @@ export const applyTrainingItem = (game: ProducerGameState, state: GachaState, it
   const item = TRAINING_ITEMS.find((candidate) => candidate.id === itemId); const member = game.members.find((candidate) => candidate.id === memberId && candidate.joined); if (!item || !member || (state.itemInventory[itemId] ?? 0) < 1 || (itemUseId && state.usedItemIds?.includes(itemUseId))) return null;
   return { game: { ...game, members: game.members.map((candidate) => candidate.id === memberId ? { ...candidate, abilities: { ...candidate.abilities, [item.ability]: candidate.abilities[item.ability] + item.bonus } } : candidate) }, gacha: { ...state, itemInventory: { ...state.itemInventory, [itemId]: state.itemInventory[itemId] - 1 }, usedItemIds: itemUseId ? [...(state.usedItemIds ?? []), itemUseId].slice(-100) : state.usedItemIds } };
 };
+export const exchangeStarFragments = (state: GachaState, exchange: GachaExchangeDefinition, exchangeId: string, exchangedAt = Date.now(), existingExchange?: GachaExchange): { gacha: GachaState; exchange: GachaExchange } | null => {
+  if (existingExchange) return { gacha: state, exchange: existingExchange };
+  if (!exchangeId || state.starFragments < exchange.fragmentCost) return null;
+  const ticketBalances = { ...state.ticketBalances };
+  const itemInventory = { ...state.itemInventory };
+  if (exchange.reward.ticketType) ticketBalances[exchange.reward.ticketType] += exchange.reward.quantity;
+  if (exchange.reward.itemId) itemInventory[exchange.reward.itemId] = (itemInventory[exchange.reward.itemId] ?? 0) + exchange.reward.quantity;
+  return { gacha: { ...state, starFragments: state.starFragments - exchange.fragmentCost, ticketBalances, itemInventory }, exchange: { exchangeId, exchangeItemId: exchange.id, fragmentCost: exchange.fragmentCost, reward: exchange.reward, exchangedAt } };
+};
+export const findGachaExchange = (exchangeItemId: string) => GACHA_EXCHANGE_LINEUP.find((exchange) => exchange.id === exchangeItemId);
