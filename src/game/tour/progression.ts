@@ -8,6 +8,11 @@ const includes = (ids: TourStopId[], id: TourStopId) => ids.includes(id);
 const completeIds = (progress: TourProgress) => new Set([...progress.completedStopIds, ...progress.soldOutStopIds]);
 
 export const canUnlockNationalTour = (game: ProducerGameState) => Boolean(game.milestones?.cityHallSoldOut) && game.songs.filter((song) => song.status === "completed").length >= 4 && game.wonRivalBattleIds?.includes("nova-stage-1") === true && ["sparkle", "nova"].every((rival) => getMajorRivalIds(game).includes(rival));
+export const getNationalTourMissingConditions = (game: ProducerGameState) => [
+  !game.milestones?.cityHallSoldOut ? "シティホール800席 SOLD OUT" : null,
+  !game.wonRivalBattleIds?.includes("nova-stage-1") ? "NOVA Stage 1 CLEAR" : null,
+  game.songs.filter((song) => song.status === "completed").length < 4 ? "オリジナル曲4曲" : null,
+].filter((condition): condition is string => !!condition);
 export const getTourClearAudience = (stop: TourStopDefinition) => Math.ceil(stop.capacity * stop.clearRate);
 export const capTourAudience = (stop: TourStopDefinition, audience: number) => Math.max(0, Math.min(stop.capacity, Math.floor(audience)));
 export const isTourStopCleared = (stop: TourStopDefinition, audience: number) => audience >= getTourClearAudience(stop);
@@ -23,4 +28,11 @@ export const getTourStopStatus = (game: ProducerGameState, stopId: TourStopId): 
 export const canStartTourStop = (game: ProducerGameState, stopId: TourStopId) => getTourStopStatus(game, stopId) !== "locked";
 export const getCurrentTourStop = (game: ProducerGameState) => TOUR_LEG_1_STOPS.find((stop) => getTourStopStatus(game, stop.id) === "open") ?? null;
 export const isTourLeg1Completed = (progress: TourProgress) => TOUR_LEG_1_STOPS.every((stop) => completeIds(progress).has(stop.id));
+export const getTourNextGoal = (game: ProducerGameState) => {
+  if (!canUnlockNationalTour(game)) return null;
+  if (game.tourProgress?.leg1Completed) return "次は新曲と次のツアーへ！";
+  const stop = getCurrentTourStop(game);
+  return stop ? `全国ツアー ${stop.city}公演をCLEARしよう！` : null;
+};
+export const getTourLeg1ProgressLabel = (game: ProducerGameState) => !canUnlockNationalTour(game) ? "未開始" : game.tourProgress?.leg1Completed ? "前半 COMPLETE" : "前半進行中";
 export const getTourStop = stopById;

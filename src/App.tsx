@@ -101,6 +101,8 @@ import type { IdolAbility } from "./game/types";
 import { normalizeFormation } from "./game/formation";
 import { GACHA_FEATURE_START_DATE } from "./game/gacha/config";
 import { createGameFirestoreRefs } from "./game/firestore-repository";
+import { commitTourPerformance, prepareTourPerformance, type TourPerformanceResult } from "./game/tour/repository";
+import type { TourStopId } from "./game/tour/types";
 
 // ==========================================
 // Firebase Initialization (Vite + Vercel)
@@ -3869,6 +3871,32 @@ export default function App() {
     try { const result = await runTransaction(dbInstance, async (transaction) => { const performanceRef = getPerformanceDoc(dbInstance, performanceId); const existing = await transaction.get(performanceRef); if (existing.exists()) return null; const gameRef = getGameDoc(dbInstance); const gameSnap = await transaction.get(gameRef); const current = gameSnap.exists() ? normalizeGameState(gameSnap.data() as Partial<ProducerGameState>) : createInitialGameState(); const prepared = createResult(current); transaction.set(performanceRef, prepared.performance); transaction.set(gameRef, prepared.next); return prepared; }); if (result) { setGame(result.next); setPerformances((current) => [result.performance, ...current].slice(0, 5)); } } catch { setSyncState("offline"); }
   };
 
+  const performTour = async (tourStopId: TourStopId, songId: string): Promise<TourPerformanceResult | null> => {
+    const performanceId = `tour-performance-${crypto.randomUUID?.() || Date.now()}`;
+    const performedAt = Date.now();
+    if (isSampleMode || !auth?.currentUser || !getSafeDb()) {
+      const prepared = prepareTourPerformance(game, performanceId, tourStopId, songId, performedAt);
+      if (!prepared) return null;
+      const result = { ...prepared, alreadyApplied: false };
+      setGame(result.game);
+      setPerformances((current) => [result.performance, ...current.filter((performance) => performance.performanceId !== result.performance.performanceId)].slice(0, 5));
+      return result;
+    }
+    const dbInstance = getSafeDb()!;
+    try {
+      const result = await commitTourPerformance({ database: dbInstance, root: FIRESTORE_ROOT, performanceId, tourStopId, songId, performedAt });
+      if (!result) return null;
+      setGame(result.game);
+      setPerformances((current) => [result.performance, ...current.filter((performance) => performance.performanceId !== result.performance.performanceId)].slice(0, 5));
+      setSyncState("synced");
+      return result;
+    } catch (error) {
+      console.error("tour performance failed", error);
+      setSyncState("offline");
+      throw error;
+    }
+  };
+
   const startSparkleBattle = async (songId: string, stage = 1) => {
     const isNova = stage === 3; const song = game.songs.find((item) => item.id === songId); const canStart = isNova ? canStartNovaStage1(game, performances) : stage === 2 ? canStartSparkleStage2(game, performances) : canStartRivalBattle(game, performances); if (!song || song.status !== "completed" || !canStart) return;
     const stageConfig = isNova ? NOVA_STAGE_1 : SPARKLE_STAGES[stage - 1]; const battleId = stageConfig.battleId;
@@ -4232,6 +4260,7 @@ export default function App() {
             onCreateSong={createSongFor}
             onPerform={performFirstLive}
             onRivalBattle={startSparkleBattle}
+            onPerformTour={performTour}
           />
         ) : (
           <AchievementsView tasks={tasks} />
