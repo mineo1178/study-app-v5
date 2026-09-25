@@ -64,7 +64,7 @@ const normalizeTourProgress = (saved?: Partial<TourProgress>): TourProgress => {
 };
 export const createInitialGameState = (): ProducerGameState => ({
   activityPoints: 0, fans: 120, members: INITIAL_MEMBERS.map((member) => ({ ...member, abilities: { ...member.abilities } })),
-  claimedSessionIds: [], lessonsCompleted: 0, songsCompleted: 0, rivalEventsCompleted: 0, producerStars: 0, boostRemainder: 0, milestones: {}, claimedRivalBattleIds: [], wonRivalBattleIds: [], activeMemberIds: ["math"], leaderMemberId: "math", tourProgress: { completedStopIds: [], soldOutStopIds: [], leg1Completed: false }, songs: SONGS.map((song, index) => ({ ...song, status: index === 0 ? "available" : "locked", level: 1, performanceCount: 0, songStats: { vocal: 0, harmony: 0, dance: 0, character: 0, lyrics: 0, composition: 0, choreography: 0 } })),
+  claimedSessionIds: [], lessonsCompleted: 0, songsCompleted: 0, rivalEventsCompleted: 0, producerStars: 0, boostRemainder: 0, milestones: {}, claimedRivalBattleIds: [], wonRivalBattleIds: [], claimedTourRewardKeys: [], activeMemberIds: ["math"], leaderMemberId: "math", tourProgress: { completedStopIds: [], soldOutStopIds: [], leg1Completed: false }, songs: SONGS.map((song, index) => ({ ...song, status: index === 0 ? "available" : "locked", level: 1, performanceCount: 0, songStats: { vocal: 0, harmony: 0, dance: 0, character: 0, lyrics: 0, composition: 0, choreography: 0 } })),
 });
 export const normalizeGameState = (saved: Partial<ProducerGameState>): ProducerGameState => {
   const initial = createInitialGameState();
@@ -78,5 +78,5 @@ export const normalizeGameState = (saved: Partial<ProducerGameState>): ProducerG
   const activeMemberIds = Array.from(new Set((saved.activeMemberIds ?? joinedIds).filter((id): id is string => typeof id === "string" && joinedIds.includes(id)))).slice(0, 4);
   const leaderMemberId = saved.leaderMemberId && activeMemberIds.includes(saved.leaderMemberId) ? saved.leaderMemberId : activeMemberIds[0] ?? null;
   const starterGroupCompleted = saved.milestones?.starterGroupCompleted === true || ["math", "japanese", "science", "yuna"].every((id) => members.find((member) => member.id === id)?.joined);
-  return { ...initial, ...saved, members, songs, activeMemberIds, leaderMemberId, tourProgress: normalizeTourProgress(saved.tourProgress), milestones: { ...initial.milestones, ...(saved.milestones ?? {}), starterGroupCompleted }, claimedRivalBattleIds: saved.claimedRivalBattleIds ?? [], wonRivalBattleIds: saved.wonRivalBattleIds ?? [] };
+  return { ...initial, ...saved, members, songs, activeMemberIds, leaderMemberId, tourProgress: normalizeTourProgress(saved.tourProgress), milestones: { ...initial.milestones, ...(saved.milestones ?? {}), starterGroupCompleted }, claimedRivalBattleIds: saved.claimedRivalBattleIds ?? [], wonRivalBattleIds: saved.wonRivalBattleIds ?? [], claimedTourRewardKeys: saved.claimedTourRewardKeys ?? [] };
 };

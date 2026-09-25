@@ -100,6 +100,7 @@ import type { GachaDraw, GachaRandomRolls, GachaState, GachaTicketType, GachaWee
 import type { IdolAbility } from "./game/types";
 import { normalizeFormation } from "./game/formation";
 import { GACHA_FEATURE_START_DATE } from "./game/gacha/config";
+import { createGameFirestoreRefs } from "./game/firestore-repository";
 
 // ==========================================
 // Firebase Initialization (Vite + Vercel)
@@ -154,6 +155,7 @@ const APP_VERSION = "v1.75";
 // families/oomine-study-2026/tasks
 // families/oomine-study-2026/tests
 const FIRESTORE_ROOT = ["families", FAMILY_ID] as const;
+const { getGameDoc, getRewardLedgerDoc, getPerformancesCol, getPerformanceDoc } = createGameFirestoreRefs(FIRESTORE_ROOT);
 
 // Safe DB Wrapper
 const getSafeDb = () => {
@@ -176,12 +178,8 @@ const getTaskDoc = (database: any, id: string) =>
 
 const getTestDoc = (database: any, id: string) =>
   doc(database, ...FIRESTORE_ROOT, "tests", id);
-const getGameDoc = (database: any) => doc(database, ...FIRESTORE_ROOT, "game", "idol-produce");
-const getRewardLedgerDoc = (database: any, sessionId: string) => doc(database, ...FIRESTORE_ROOT, "rewardLedger", sessionId);
 const getWeeksCol = (database: ReturnType<typeof getFirestore>) => collection(database, ...FIRESTORE_ROOT, "game", "idol-produce", "weeks");
 const getWeekDoc = (database: ReturnType<typeof getFirestore>, weekId: string) => doc(database, ...FIRESTORE_ROOT, "game", "idol-produce", "weeks", weekId);
-const getPerformancesCol = (database: ReturnType<typeof getFirestore>) => collection(database, ...FIRESTORE_ROOT, "game", "idol-produce", "performances");
-const getPerformanceDoc = (database: ReturnType<typeof getFirestore>, id: string) => doc(database, ...FIRESTORE_ROOT, "game", "idol-produce", "performances", id);
 const getRivalBattlesCol = (database: ReturnType<typeof getFirestore>) => collection(database, ...FIRESTORE_ROOT, "game", "idol-produce", "rivalBattles");
 const getRivalBattleDoc = (database: ReturnType<typeof getFirestore>, id: string) => doc(database, ...FIRESTORE_ROOT, "game", "idol-produce", "rivalBattles", id);
 const getGachaStateDoc = (database: ReturnType<typeof getFirestore>) => doc(database, ...FIRESTORE_ROOT, "game", "idol-produce", "gacha", "state");
