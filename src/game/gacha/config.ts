@@ -22,6 +22,11 @@ export const GACHA_MEMBER_DEFINITIONS: GachaMemberDefinition[] = [
 const itemNames: Record<IdolAbility, string> = { vocal: "ボーカルマイク", harmony: "ハーモニーイヤモニ", dance: "ダンスシューズ", character: "ステージバッジ", lyrics: "作詞ノート", composition: "作曲キーボード", choreography: "振付ノート" };
 export const TRAINING_ITEMS: TrainingItemDefinition[] = (Object.keys(itemNames) as IdolAbility[]).flatMap((ability) => (["N", "R", "SR", "SSR"] as GachaRarity[]).map((rarity) => ({ id: `${ability}-${rarity.toLowerCase()}`, name: itemNames[ability], ability, rarity, bonus: ITEM_BONUSES[rarity] })));
 export const GACHA_EXCHANGE_LINEUP: GachaExchangeDefinition[] = [
-  { id: "gold-ticket", name: "GOLDチケット", description: "SR以上も狙えるガチャチケット", fragmentCost: 40, reward: { ticketType: "gold", quantity: 1 } },
-  ...(Object.keys(itemNames) as IdolAbility[]).map((ability) => ({ id: `${ability}-item-r`, name: `${itemNames[ability]} R`, description: `${ability}を+2育成できるアイテム`, fragmentCost: 15, reward: { itemId: `${ability}-r`, quantity: 1 } })),
+  { id: "silver-ticket", name: "SILVERチケット", description: "SILVERガチャチケット", fragmentCost: 80, reward: { ticketType: "silver", quantity: 1 } },
+  { id: "gold-ticket", name: "GOLDチケット", description: "SR以上も狙えるガチャチケット", fragmentCost: 150, reward: { ticketType: "gold", quantity: 1 } },
+  { id: "premium-ticket", name: "PREMIUMチケット", description: "PREMIUMガチャチケット", fragmentCost: 350, reward: { ticketType: "premium", quantity: 1 } },
+  ...(Object.keys(itemNames) as IdolAbility[]).flatMap((ability) => ([
+    { id: `${ability}-item-r`, name: `${itemNames[ability]} R`, description: `${ability}を+2育成できるアイテム`, fragmentCost: 25, reward: { itemId: `${ability}-r`, quantity: 1 } },
+    { id: `${ability}-item-sr`, name: `${itemNames[ability]} SR`, description: `${ability}を+3育成できるアイテム`, fragmentCost: 60, reward: { itemId: `${ability}-sr`, quantity: 1 } },
+  ])),
 ];

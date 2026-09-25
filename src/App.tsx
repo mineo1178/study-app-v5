@@ -96,7 +96,8 @@ import { calculateAudience, calculateFanGain, canPerformLive, createSong, getCur
 import { calculateBattleStats, calculateRivalBattleResult, canStartRivalBattle, getRivalBattleRewards } from "./game/rival-battle";
 import { applyLeaderSkillToBattleStats, applyLeaderSkillToLiveFanGain, getFormationSnapshot, setLeader } from "./game/leader-skills";
 import { createSampleGachaDraws, createSampleGachaState, exchangeStarFragments, getNextTicketThreshold, grantWeeklyGachaReward, normalizeGachaDraw, normalizeGachaState, resolveGachaDraw, applyTrainingItem, calculateWeeklyGachaReward } from "./game/gacha/logic";
-import type { GachaDraw, GachaExchangeDefinition, GachaRandomRolls, GachaState, GachaTicketType, GachaWeek } from "./game/gacha/types";
+import type { GachaDraw, GachaRandomRolls, GachaState, GachaTicketType, GachaWeek } from "./game/gacha/types";
+import type { IdolAbility } from "./game/types";
 import { normalizeFormation } from "./game/formation";
 import { GACHA_FEATURE_START_DATE } from "./game/gacha/config";
 
@@ -3826,15 +3827,15 @@ export default function App() {
     try { const result = await runTransaction(dbInstance, async (transaction) => { const stateRef = getGachaStateDoc(dbInstance); const gameRef = getGameDoc(dbInstance); const [stateSnapshot, gameSnapshot] = await Promise.all([transaction.get(stateRef), transaction.get(gameRef)]); const currentGame = gameSnapshot.exists() ? normalizeGameState(gameSnapshot.data() as Partial<ProducerGameState>) : createInitialGameState(); const currentGacha = normalizeGachaState(stateSnapshot.exists() ? stateSnapshot.data() as Partial<GachaState> : undefined); const applied = applyTrainingItem(currentGame, currentGacha, itemId, memberId, itemUseId); if (!applied) throw new Error("ITEM_NOT_AVAILABLE"); transaction.set(stateRef, applied.gacha); transaction.set(gameRef, applied.game); return applied; }); setGame(result.game); setGachaState(result.gacha); } catch { setSyncState("offline"); }
   };
 
-  const exchangeGachaFragments = async (exchange: GachaExchangeDefinition) => {
-    const exchangeId = `exchange-${crypto.randomUUID?.() || Date.now()}`;
-    if (isSampleMode || !auth?.currentUser || !getSafeDb()) { const result = exchangeStarFragments(gachaState, exchange, exchangeId); if (result) setGachaState(result.gacha); return; }
+  const exchangeGachaFragments = async (exchangeItemId: string, selectedStat?: IdolAbility) => {
+    const requestExchangeId = `exchange-${crypto.randomUUID?.() || Date.now()}`;
+    if (isSampleMode || !auth?.currentUser || !getSafeDb()) { const result = exchangeStarFragments(gachaState, exchangeItemId, requestExchangeId, selectedStat); if (result) setGachaState(result.gacha); return; }
     const dbInstance = getSafeDb()!;
     try {
       const result = await runTransaction(dbInstance, async (transaction) => {
-        const exchangeRef = getGachaExchangeDoc(dbInstance, exchangeId); const stateRef = getGachaStateDoc(dbInstance); const [existing, stateSnapshot] = await Promise.all([transaction.get(exchangeRef), transaction.get(stateRef)]);
-        if (existing.exists()) return { gacha: null };
-        const current = normalizeGachaState(stateSnapshot.exists() ? stateSnapshot.data() as Partial<GachaState> : undefined); const exchanged = exchangeStarFragments(current, exchange, exchangeId); if (!exchanged) throw new Error("NOT_ENOUGH_FRAGMENTS");
+        const exchangeRef = getGachaExchangeDoc(dbInstance, requestExchangeId); const stateRef = getGachaStateDoc(dbInstance); const [existing, stateSnapshot] = await Promise.all([transaction.get(exchangeRef), transaction.get(stateRef)]);
+        const current = normalizeGachaState(stateSnapshot.exists() ? stateSnapshot.data() as Partial<GachaState> : undefined); const exchanged = exchangeStarFragments(current, exchangeItemId, requestExchangeId, selectedStat, Date.now(), existing.exists() ? existing.data() as never : undefined); if (!exchanged) throw new Error("NOT_ENOUGH_FRAGMENTS");
+        if (existing.exists()) return exchanged;
         transaction.set(exchangeRef, exchanged.exchange); transaction.set(stateRef, exchanged.gacha); return exchanged;
       });
       if (result.gacha) setGachaState(result.gacha);
