@@ -30,7 +30,7 @@ export const getTokyoDomeMissions = (game: ProducerGameState, recentWeekRate = 0
   { label: "メンバー育成ミッションを達成", done: game.lessonsCompleted >= 20 },
   { label: "オリジナル曲を5曲完成", done: game.songsCompleted >= 5 },
   { label: "ファン45,000人", done: game.fans >= 45000 },
-  { label: "全国ツアー完走", done: false },
+  { label: "全国ツアー完走", done: ["tour-stop-1", "tour-stop-2", "tour-stop-3", "tour-stop-4", "tour-stop-5", "tour-stop-6"].every((id) => game.tourProgress?.completedStopIds.includes(id as never) || game.tourProgress?.soldOutStopIds.includes(id as never)) },
   { label: "ライバル3組との重要イベント達成", done: getMajorRivalProgress(game) >= 3 },
   { label: "プロデューサー条件達成", done: game.producerStars >= 7 && recentWeekRate >= .9 },
 ];

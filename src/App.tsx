@@ -91,9 +91,9 @@ import { calculateBoostedPoints, getHighestBoost } from "./game/test-bonus";
 import { createWeeklyResult, getUnfinalizedWeeks } from "./game/weekly";
 import type { WeeklyResult } from "./game/types";
 import type { Performance, RivalBattleRecord } from "./game/types";
-import { NOVA_STAGE_1, SPARKLE_STAGES } from "./game/config";
+import { NOVA_STAGES, SPARKLE_STAGES } from "./game/config";
 import { calculateAudience, calculateFanGain, canPerformLive, createSong, getCurrentVenue, getLiveCost, getLiveRating, isRegionalHallSoldOut, isVenueSoldOut } from "./game/song-live";
-import { applySongAffinityToBattleStats, calculateBattleStats, calculateRivalBattleResult, canStartNovaStage1, canStartRivalBattle, canStartSparkleStage2, getRivalBattleRewards } from "./game/rival-battle";
+import { applySongAffinityToBattleStats, calculateBattleStats, calculateRivalBattleResult, canStartNovaStage1, canStartNovaStage2, canStartRivalBattle, canStartSparkleStage2, getRivalBattleRewards } from "./game/rival-battle";
 import { applyLeaderSkillToBattleStats, applyLeaderSkillToLiveFanGain, getFormationSnapshot, setLeader } from "./game/leader-skills";
 import { createSampleGachaDraws, createSampleGachaState, exchangeStarFragments, getNextTicketThreshold, grantWeeklyGachaReward, normalizeGachaDraw, normalizeGachaState, resolveGachaDraw, applyTrainingItem, calculateWeeklyGachaReward } from "./game/gacha/logic";
 import type { GachaDraw, GachaRandomRolls, GachaState, GachaTicketType, GachaWeek } from "./game/gacha/types";
@@ -150,7 +150,7 @@ if (hasFirebaseConfig) {
 // ==========================================
 
 const FAMILY_ID = "oomine-study-2026";
-const APP_VERSION = "v1.76";
+const APP_VERSION = "v1.77";
 
 // Firestore Path 固定（変更禁止）
 // 実DB構造:
@@ -3898,12 +3898,12 @@ export default function App() {
   };
 
   const startSparkleBattle = async (songId: string, stage = 1) => {
-    const isNova = stage === 3; const song = game.songs.find((item) => item.id === songId); const canStart = isNova ? canStartNovaStage1(game, performances) : stage === 2 ? canStartSparkleStage2(game, performances) : canStartRivalBattle(game, performances); if (!song || song.status !== "completed" || !canStart) return;
-    const stageConfig = isNova ? NOVA_STAGE_1 : SPARKLE_STAGES[stage - 1]; const battleId = stageConfig.battleId;
+    const isNova = stage >= 3; const novaStage = stage - 3; const song = game.songs.find((item) => item.id === songId); const canStart = stage === 4 ? canStartNovaStage2(game) : isNova ? canStartNovaStage1(game, performances) : stage === 2 ? canStartSparkleStage2(game, performances) : canStartRivalBattle(game, performances); if (!song || song.status !== "completed" || !canStart) return;
+    const stageConfig = isNova ? NOVA_STAGES[novaStage] : SPARKLE_STAGES[stage - 1]; const battleId = stageConfig.battleId;
     const createResult = (current: ProducerGameState): { next: ProducerGameState; record: RivalBattleRecord } => {
-      const currentSong = current.songs.find((item) => item.id === songId); const allowed = isNova ? canStartNovaStage1(current, performances) : stage === 2 ? canStartSparkleStage2(current, performances) : canStartRivalBattle(current, performances); if (!currentSong || currentSong.status !== "completed" || !allowed) throw new Error("BATTLE_NOT_AVAILABLE");
-      const basePlayer = calculateBattleStats(current, currentSong); const leaderPlayer = applyLeaderSkillToBattleStats(current, basePlayer); const player = stage === 1 ? leaderPlayer : applySongAffinityToBattleStats(leaderPlayer, currentSong); const outcome = calculateRivalBattleResult(player, stage, isNova ? NOVA_STAGE_1.stats : undefined); const alreadyClaimed = current.claimedRivalBattleIds?.includes(battleId) ?? false; const alreadyWon = current.wonRivalBattleIds?.includes(battleId) ?? false; const reward = getRivalBattleRewards(outcome.overallResult, alreadyWon, alreadyClaimed, stage, isNova ? "nova" : "sparkle");
-      const record: RivalBattleRecord = { battleId, attemptId: `attempt-${crypto.randomUUID?.() || Date.now()}`, rivalId: isNova ? "nova" : "sparkle", stage: isNova ? 1 : stage, playedAt: Date.now(), songId, selectedSongId: songId, categoryResults: outcome.categoryResults, overallResult: outcome.overallResult, fanGain: reward.fans, bonusPoints: reward.points, version: APP_VERSION, formation: getFormationSnapshot(current), baseCategoryStats: basePlayer, finalCategoryStats: player, rivalStats: stageConfig.stats, categoryScores: Object.fromEntries(Object.entries(player).map(([category, score]) => [category, { playerScore: score, rivalScore: stageConfig.stats[category as keyof typeof player], leaderBonusApplied: score - basePlayer[category as keyof typeof basePlayer] }])) };
+      const currentSong = current.songs.find((item) => item.id === songId); const allowed = stage === 4 ? canStartNovaStage2(current) : isNova ? canStartNovaStage1(current, performances) : stage === 2 ? canStartSparkleStage2(current, performances) : canStartRivalBattle(current, performances); if (!currentSong || currentSong.status !== "completed" || !allowed) throw new Error("BATTLE_NOT_AVAILABLE");
+      const basePlayer = calculateBattleStats(current, currentSong); const leaderPlayer = applyLeaderSkillToBattleStats(current, basePlayer); const player = stage === 1 ? leaderPlayer : applySongAffinityToBattleStats(leaderPlayer, currentSong); const outcome = calculateRivalBattleResult(player, stage, isNova ? stageConfig.stats : undefined); const alreadyClaimed = current.claimedRivalBattleIds?.includes(battleId) ?? false; const alreadyWon = current.wonRivalBattleIds?.includes(battleId) ?? false; const reward = getRivalBattleRewards(outcome.overallResult, alreadyWon, alreadyClaimed, stage, isNova ? "nova" : "sparkle");
+      const record: RivalBattleRecord = { battleId, attemptId: `attempt-${crypto.randomUUID?.() || Date.now()}`, rivalId: isNova ? "nova" : "sparkle", stage: isNova ? novaStage + 1 : stage, playedAt: Date.now(), songId, selectedSongId: songId, categoryResults: outcome.categoryResults, overallResult: outcome.overallResult, fanGain: reward.fans, bonusPoints: reward.points, version: APP_VERSION, formation: getFormationSnapshot(current), baseCategoryStats: basePlayer, finalCategoryStats: player, rivalStats: stageConfig.stats, categoryScores: Object.fromEntries(Object.entries(player).map(([category, score]) => [category, { playerScore: score, rivalScore: stageConfig.stats[category as keyof typeof player], leaderBonusApplied: score - basePlayer[category as keyof typeof basePlayer] }])) };
       const won = outcome.overallResult === "PERFECT WIN" || outcome.overallResult === "WIN";
       return { record, next: { ...current, fans: current.fans + reward.fans, activityPoints: current.activityPoints + reward.points, rivalEventsCompleted: current.rivalEventsCompleted + reward.event, claimedRivalBattleIds: alreadyClaimed ? current.claimedRivalBattleIds : [...(current.claimedRivalBattleIds ?? []), battleId], wonRivalBattleIds: won && !current.wonRivalBattleIds?.includes(battleId) ? [...(current.wonRivalBattleIds ?? []), battleId] : current.wonRivalBattleIds } };
     };
