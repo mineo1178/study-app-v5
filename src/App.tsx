@@ -1,3 +1,5 @@
+import { commitArenaPerformance, prepareArenaPerformance, type ArenaResult } from "./game/arena";
+import type { ArenaLiveId } from "./game/arena-progression";
 import React, {
   useState,
   useEffect,
@@ -151,7 +153,7 @@ if (hasFirebaseConfig) {
 // ==========================================
 
 const FAMILY_ID = "oomine-study-2026";
-const APP_VERSION = "v1.78";
+const APP_VERSION = "v1.79";
 
 // Firestore Path 固定（変更禁止）
 // 実DB構造:
@@ -3923,6 +3925,31 @@ export default function App() {
       throw error;
     }
   };
+  const performArena = async (liveId: ArenaLiveId, songId: string): Promise<ArenaResult | null> => {
+    const performanceId = `arena-performance-${crypto.randomUUID?.() || Date.now()}`;
+    const performedAt = Date.now();
+    if (isSampleMode || !auth?.currentUser || !getSafeDb()) {
+      const prepared = prepareArenaPerformance(game, performanceId, songId, performedAt, liveId);
+      if (!prepared) return null;
+      const result = { ...prepared, alreadyApplied: false };
+      setGame(result.game);
+      setPerformances((current) => [result.performance, ...current.filter((performance) => performance.performanceId !== result.performance.performanceId)].slice(0, 5));
+      return result;
+    }
+    const dbInstance = getSafeDb()!;
+    try {
+      const result = await commitArenaPerformance({ database: dbInstance, root: FIRESTORE_ROOT, performanceId, songId, performedAt, liveId });
+      if (!result) return null;
+      setGame(result.game);
+      setPerformances((current) => [result.performance, ...current.filter((performance) => performance.performanceId !== result.performance.performanceId)].slice(0, 5));
+      setSyncState("synced");
+      return result;
+    } catch (error) {
+      console.error("arena performance failed", error);
+      setSyncState("offline");
+      throw error;
+    }
+  };
 
   const startSparkleBattle = async (songId: string, stage = 1) => {
     const isNova = stage >= 3; const novaStage = stage - 3; const song = game.songs.find((item) => item.id === songId); const canStart = stage === 4 ? canStartNovaStage2(game) : isNova ? canStartNovaStage1(game, performances) : stage === 2 ? canStartSparkleStage2(game, performances) : canStartRivalBattle(game, performances); if (!song || song.status !== "completed" || !canStart) return;
@@ -4288,6 +4315,7 @@ export default function App() {
             onPerform={performFirstLive}
             onRivalBattle={startSparkleBattle}
             onPerformTour={performTour}
+            onPerformArena={performArena}
             onPerformMajorDebut={performMajorDebut}
           />
         ) : (

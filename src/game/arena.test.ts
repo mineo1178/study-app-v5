@@ -1,0 +1,50 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { Firestore } from "firebase/firestore";
+import { createInitialGameState, MAJOR_DEBUT_REWARD_KEY, SONGS, VENUES } from "./config";
+import { ARENA_LIVES, ARENA_REQUIRED_FANS, canStartArenaLive, getArenaAction, getArenaRewardKey, isArenaChapterUnlocked, isArenaCompleted, isArenaPreludeCompleted, type ArenaLiveId } from "./arena-progression";
+import { commitArenaPerformance, prepareArenaPerformance, simulateArenaLive } from "./arena";
+import { getGrowthRoadmap, prepareMajorDebutPerformance } from "./major-debut";
+import { getNextGoal } from "./song-live";
+import type { ProducerGameState } from "./types";
+
+const store = vi.hoisted(() => new Map<string, unknown>());
+vi.mock("./firestore-repository", () => ({ createGameFirestoreRefs: () => ({ getGameDoc: () => "game", getPerformanceDoc: (_db: unknown, id: string) => `performance/${id}`, getRewardLedgerDoc: (_db: unknown, id: string) => `ledger/${id}` }) }));
+vi.mock("firebase/firestore", () => ({ runTransaction: async (_db: unknown, callback: (tx: unknown) => Promise<unknown>) => callback({ get: async (ref: string) => ({ exists: () => store.has(ref), data: () => store.get(ref) }), set: (ref: string, data: unknown) => store.set(ref, data), update: (ref: string, data: object) => store.set(ref, { ...store.get(ref) as object, ...data }) }) }));
+const abilities = (value: number) => ({ vocal: value, harmony: value, dance: value, character: value, lyrics: value, composition: value, choreography: value });
+const ready = (): ProducerGameState => {
+  const base = createInitialGameState();
+  return { ...base, fans: ARENA_REQUIRED_FANS, claimedTourRewardKeys: [MAJOR_DEBUT_REWARD_KEY], activeMemberIds: ["math", "japanese", "science", "yuna"], leaderMemberId: "math", members: base.members.map((member) => ({ ...member, joined: true, abilities: abilities(25) })), songs: base.songs.map((song) => ({ ...song, status: "completed", songStats: abilities(25) })) };
+};
+const perform = (game: ProducerGameState, id: ArenaLiveId = "arena-prelude", songId = SONGS[0].id as string) => prepareArenaPerformance(game, "performance", songId, 1, id);
+const mainReady = () => ({ ...ready(), claimedTourRewardKeys: [MAJOR_DEBUT_REWARD_KEY, getArenaRewardKey("arena-prelude")] });
+const commit = (id: string, liveId: ArenaLiveId = "arena-prelude") => commitArenaPerformance({ database: {} as Firestore, root: {} as never, performanceId: id, songId: SONGS[0].id, performedAt: 1, liveId });
+
+describe("arena progression", () => {
+  beforeEach(() => store.clear());
+  it("locks the chapter before debut CLEAR", () => { const game = { ...ready(), claimedTourRewardKeys: [] }; expect(isArenaChapterUnlocked(game)).toBe(false); expect(perform(game)).toBeNull(); });
+  it("unlocks the chapter after debut CLEAR", () => expect(isArenaChapterUnlocked(ready())).toBe(true));
+  it("requires the fan threshold", () => expect(perform({ ...ready(), fans: ARENA_REQUIRED_FANS - 1 })).toBeNull());
+  it("requires each original song, not a completed counter", () => { const game = ready(); game.songs[2].status = "available"; game.songsCompleted = 6; expect(perform(game)).toBeNull(); });
+  it("requires four active members", () => expect(perform({ ...ready(), activeMemberIds: ["math", "japanese", "science"] })).toBeNull());
+  it("unlocks prelude at the exact fan boundary", () => expect(canStartArenaLive(ready(), "arena-prelude")).toBe(true));
+  it("clears prelude with ordinarily trained starter members", () => expect(perform(ready())?.performance).toMatchObject({ isClear: true, capacity: 15000, clearThreshold: 13500 }));
+  it("locks the arena before prelude CLEAR", () => expect(perform(ready(), "arena-first")).toBeNull());
+  it("unlocks the arena after prelude CLEAR", () => expect(canStartArenaLive(mainReady(), "arena-first")).toBe(true));
+  it("clears the arena with ordinary training", () => expect(perform(mainReady(), "arena-first")?.performance).toMatchObject({ isClear: true, capacity: 20000, clearThreshold: 18000, version: "v1.79" }));
+  it("does not clear or grant bonuses on failure", () => { const game = mainReady(); game.members = game.members.map((m) => ({ ...m, abilities: abilities(1) })); game.songs = game.songs.map((s) => ({ ...s, songStats: abilities(0) })); const result = perform(game, "arena-first")!; expect(result.performance.isClear).toBe(false); expect(result.reward).toBeNull(); expect(isArenaCompleted(result.game)).toBe(false); });
+  it("grants prelude first CLEAR rewards", () => expect(perform(ready())?.reward).toMatchObject({ fanBonus: 1500, activityPointBonus: 20 }));
+  it("never repeats prelude first CLEAR rewards", () => { const first = perform(ready())!; const next = perform(first.game)!; expect(next.reward).toBeNull(); expect(next.game.activityPoints).toBe(first.game.activityPoints); expect(next.game.fans).toBe(first.game.fans + next.performance.fanGain); });
+  it("grants arena first CLEAR rewards", () => expect(perform(mainReady(), "arena-first")?.reward).toMatchObject({ fanBonus: 3000, activityPointBonus: 40 }));
+  it("never repeats arena first CLEAR rewards", () => { const first = perform(mainReady(), "arena-first")!; expect(perform(first.game, "arena-first")?.reward).toBeNull(); });
+  it("changes NEXT GOAL and roadmap after arena CLEAR", () => { const game = perform(mainReady(), "arena-first")!.game; expect(getNextGoal(game, [])).toBe("次の目標：東京ドーム！"); expect(getGrowthRoadmap(game)).toMatchObject({ arena: "complete", tokyoDome: "next" }); });
+  it("keeps Tokyo Dome unimplemented", () => { expect(Object.keys(ARENA_LIVES)).toEqual(["arena-prelude", "arena-first"]); expect(VENUES.some((v) => (v.id as string).includes("dome"))).toBe(false); });
+  it.each(SONGS)("allows $title in both shows", (song) => { expect(perform(ready(), "arena-prelude", song.id)).not.toBeNull(); expect(perform(mainReady(), "arena-first", song.id)).not.toBeNull(); });
+  it("applies song affinity and Leader fan bonus once", () => { const game = ready(); const dance = simulateArenaLive(game, "arena-prelude", "kirameki-step")!; expect(dance.appliedAffinityPercent).toBe(8); const yuna = simulateArenaLive({ ...game, leaderMemberId: "yuna" }, "arena-prelude", "kirameki-step")!; expect(yuna.fanGain).toBe(dance.fanGain + Math.floor(dance.fanGain * .1)); });
+  it("rejects invalid Leader, duplicate formation, or unknown songs", () => { expect(perform({ ...ready(), leaderMemberId: "english" })).toBeNull(); expect(perform({ ...ready(), activeMemberIds: ["math", "math", "science", "yuna"] })).toBeNull(); expect(perform(ready(), "arena-prelude", "unknown")).toBeNull(); });
+  it("shows one next action and handles old state", () => { expect(getArenaAction({ ...ready(), fans: 36000 })).toContain("1,000人"); expect(isArenaPreludeCompleted(createInitialGameState())).toBe(false); expect(getGrowthRoadmap(ready())).toMatchObject({ arena: "current", tokyoDome: "locked" }); });
+  it("leaves growth after debut at the minimum fan condition", () => { const game = ready(); game.fans = 25000; game.claimedTourRewardKeys = []; game.leaderMemberId = "yuna"; game.members = game.members.map((m) => ({ ...m, abilities: abilities(100) })); game.tourProgress = { completedStopIds: ["tour-stop-1", "tour-stop-2", "tour-stop-3", "tour-stop-4", "tour-stop-5", "tour-stop-6"], soldOutStopIds: [], leg1Completed: true }; const result = prepareMajorDebutPerformance(game, "debut", "beyond-the-dream", 1)!; expect(result.game.fans).toBe(36383); expect(canStartArenaLive(result.game, "arena-prelude")).toBe(false); });
+  it("makes a repeated performance ID a no-op", async () => { store.set("game", ready()); const first = await commit("same"); const saved = store.get("game"); const next = await commit("same"); expect(first?.reward).not.toBeNull(); expect(next?.alreadyApplied).toBe(true); expect(next?.reward).toBeNull(); expect(store.get("game")).toEqual(saved); });
+  it("uses the saved ledger after reload even if the cached claim is missing", async () => { store.set("game", ready()); store.set(`ledger/${getArenaRewardKey("arena-prelude")}`, { fanBonus: 1500 }); const result = await commit("new"); expect(result?.reward).toBeNull(); expect(result?.game.activityPoints).toBe(ready().activityPoints); });
+  it("uses current transaction state for another device's next attempt", async () => { store.set("game", ready()); await commit("device-a"); const next = await commit("device-b"); expect(next?.reward).toBeNull(); expect(next?.game.claimedTourRewardKeys?.filter((key) => key === getArenaRewardKey("arena-prelude"))).toHaveLength(1); });
+  it("rejects a transaction if conditions changed on another device", async () => { store.set("game", { ...ready(), fans: 0 }); expect(await commit("stale")).toBeNull(); expect(store.has("performance/stale")).toBe(false); });
+});
