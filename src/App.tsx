@@ -103,6 +103,7 @@ import { GACHA_FEATURE_START_DATE } from "./game/gacha/config";
 import { createGameFirestoreRefs } from "./game/firestore-repository";
 import { commitTourPerformance, prepareTourPerformance, type TourPerformanceResult } from "./game/tour/repository";
 import type { TourStopId } from "./game/tour/types";
+import { commitMajorDebutPerformance, prepareMajorDebutPerformance, type MajorDebutResult } from "./game/major-debut";
 
 // ==========================================
 // Firebase Initialization (Vite + Vercel)
@@ -150,7 +151,7 @@ if (hasFirebaseConfig) {
 // ==========================================
 
 const FAMILY_ID = "oomine-study-2026";
-const APP_VERSION = "v1.77";
+const APP_VERSION = "v1.78";
 
 // Firestore Path 固定（変更禁止）
 // 実DB構造:
@@ -3897,6 +3898,32 @@ export default function App() {
     }
   };
 
+  const performMajorDebut = async (songId: string): Promise<MajorDebutResult | null> => {
+    const performanceId = `major-debut-performance-${crypto.randomUUID?.() || Date.now()}`;
+    const performedAt = Date.now();
+    if (isSampleMode || !auth?.currentUser || !getSafeDb()) {
+      const prepared = prepareMajorDebutPerformance(game, performanceId, songId, performedAt);
+      if (!prepared) return null;
+      const result = { ...prepared, alreadyApplied: false };
+      setGame(result.game);
+      setPerformances((current) => [result.performance, ...current.filter((performance) => performance.performanceId !== result.performance.performanceId)].slice(0, 5));
+      return result;
+    }
+    const dbInstance = getSafeDb()!;
+    try {
+      const result = await commitMajorDebutPerformance({ database: dbInstance, root: FIRESTORE_ROOT, performanceId, songId, performedAt });
+      if (!result) return null;
+      setGame(result.game);
+      setPerformances((current) => [result.performance, ...current.filter((performance) => performance.performanceId !== result.performance.performanceId)].slice(0, 5));
+      setSyncState("synced");
+      return result;
+    } catch (error) {
+      console.error("major debut performance failed", error);
+      setSyncState("offline");
+      throw error;
+    }
+  };
+
   const startSparkleBattle = async (songId: string, stage = 1) => {
     const isNova = stage >= 3; const novaStage = stage - 3; const song = game.songs.find((item) => item.id === songId); const canStart = stage === 4 ? canStartNovaStage2(game) : isNova ? canStartNovaStage1(game, performances) : stage === 2 ? canStartSparkleStage2(game, performances) : canStartRivalBattle(game, performances); if (!song || song.status !== "completed" || !canStart) return;
     const stageConfig = isNova ? NOVA_STAGES[novaStage] : SPARKLE_STAGES[stage - 1]; const battleId = stageConfig.battleId;
@@ -4261,6 +4288,7 @@ export default function App() {
             onPerform={performFirstLive}
             onRivalBattle={startSparkleBattle}
             onPerformTour={performTour}
+            onPerformMajorDebut={performMajorDebut}
           />
         ) : (
           <AchievementsView tasks={tasks} />

@@ -33,7 +33,7 @@ export const isNationalTourCompleted = (progress: TourProgress) => TOUR_STOPS.ev
 export const getTourNextGoal = (game: ProducerGameState) => {
   if (!canUnlockNationalTour(game)) return null;
   const progress = game.tourProgress ?? { completedStopIds: [], soldOutStopIds: [], leg1Completed: false };
-  if (isNationalTourCompleted(progress)) return "全国ツアー完走！ 次の大きなステージを目指そう！";
+  if (isNationalTourCompleted(progress)) return null;
   if (isTourLeg1Completed(progress) && game.songs.filter((song) => song.status === "completed").length < 5) return "5曲目「未来へのアンコール」を作ろう！";
   if (isTourLeg1Completed(progress) && !game.wonRivalBattleIds?.includes("nova-stage-2")) return "NOVA Stage 2に挑戦しよう！";
   const stop = getCurrentTourStop(game);

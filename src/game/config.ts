@@ -19,7 +19,10 @@ export const SONGS = [
   { id: "colorful-memory", title: "カラフルメモリー", requiredActivityPoints: 50, requiredMembers: 4, requiredMilestones: ["regional-hall"], songType: "PERFORMANCE", profile: { character: 4, harmony: 3, vocal: 2, dance: 2 }, fanBonus: 18 },
   { id: "tsunagaru-melody", title: "つながるメロディ", requiredActivityPoints: 65, requiredMembers: 4, requiredMilestones: ["city-hall"], songType: "HARMONY", profile: { harmony: 4, lyrics: 3, character: 2, vocal: 1 }, fanBonus: 22 },
   { id: "mirai-encore", title: "未来へのアンコール", requiredActivityPoints: 80, requiredMembers: 4, requiredMilestones: ["tour-leg-1"], songType: "MESSAGE", profile: { lyrics: 4, character: 3, vocal: 2, harmony: 2 }, fanBonus: 26 },
+  { id: "beyond-the-dream", title: "夢のその先へ", requiredActivityPoints: 100, requiredMembers: 4, requiredMilestones: ["national-tour-complete"], songType: "BALANCED", profile: { vocal: 2, harmony: 2, dance: 2, character: 2, lyrics: 2, composition: 2, choreography: 2 }, fanBonus: 30 },
 ] as const;
+export const MAJOR_DEBUT_REWARD_KEY = "major-debut-live-first-clear";
+export const MAJOR_DEBUT_LIVE = { venueId: "major-debut-live", name: "メジャーデビューライブ", capacity: 10000, clearRate: 0.9, requiredFans: 25000, requiredMembers: 4, affinities: ["BALANCED", "MESSAGE"] as const, firstClearReward: { fans: 2000, activityPoints: 30 } } as const;
 export const VENUES = [{ id: "practice-studio", name: "練習スタジオ", capacity: 30, unlockOrder: 1, requiredFans: 0, requiredSongs: 1, requiredMembers: 2, requiredMilestones: [] }, { id: "mini-live-house", name: "ミニライブハウス", capacity: 100, unlockOrder: 2, requiredFans: 50, requiredSongs: 1, requiredMembers: 2, requiredMilestones: ["first-live"] }, { id: "regional-hall", name: "地域ホール", capacity: 300, unlockOrder: 3, requiredFans: 0, requiredSongs: 2, requiredMembers: 4, requiredMilestones: ["sparkle-stage-1", "mini-live-house-sold-out"] }, { id: "city-hall", name: "シティホール", capacity: 800, unlockOrder: 4, requiredFans: 0, requiredSongs: 3, requiredMembers: 4, requiredMilestones: ["regional-hall-sold-out", "sparkle-stage-2"] }] as const;
 export const LIVE_COST = 5;
 export const MINI_LIVE_HOUSE_SOLD_OUT_CAPACITY = 100;
@@ -77,7 +80,7 @@ export const normalizeGameState = (saved: Partial<ProducerGameState>): ProducerG
     ...savedMembers.filter((member) => !initial.members.some((initialMember) => initialMember.id === member.id)).map((member) => ({ ...member, abilities: { ...member.abilities } })),
   ];
   const restoredSongs = initial.songs.map((song) => { const old = saved.songs?.find((item) => item.id === song.id); return old ? { ...song, ...old, profile: old.profile ?? song.profile, requiredMilestones: old.requiredMilestones ?? song.requiredMilestones, songType: old.songType ?? song.songType, songStats: { ...song.songStats, ...(old.songStats ?? {}) } } : song; });
-  const songs = restoredSongs.map((song, index) => index === 4 && song.status === "locked" && restoredSongs.slice(0, 4).every((item) => item.status === "completed") ? { ...song, status: "available" as const } : song);
+  const songs = restoredSongs.map((song, index) => (index === 4 && restoredSongs.slice(0, 4).every((item) => item.status === "completed") || index === 5 && restoredSongs.slice(0, 5).every((item) => item.status === "completed")) && song.status === "locked" ? { ...song, status: "available" as const } : song);
   const joinedIds = members.filter((member) => member.joined).map((member) => member.id);
   const activeMemberIds = Array.from(new Set((saved.activeMemberIds ?? joinedIds).filter((id): id is string => typeof id === "string" && joinedIds.includes(id)))).slice(0, 4);
   const leaderMemberId = saved.leaderMemberId && activeMemberIds.includes(saved.leaderMemberId) ? saved.leaderMemberId : activeMemberIds[0] ?? null;
