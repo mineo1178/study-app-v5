@@ -67,6 +67,7 @@ import {
   doc,
   setDoc,
   getDocs,
+  onSnapshot,
   updateDoc,
   deleteDoc,
   serverTimestamp,
@@ -81,7 +82,8 @@ import {
   getPausedTaskUpdates,
   getCreditedStudyMinutes,
   getSessionReviewFlags,
-  LONG_BACKGROUND_SECONDS,
+  mergeSyncedTasks,
+  subscribeTimerVisibility,
   type SessionReviewFlag,
   getSubjectTaskStats,
   getTaskStats,
@@ -94,7 +96,7 @@ import { canRecruitThirdMember, claimRewards, getSessionActivityPoints, getUncla
 import type { ProducerGameState } from "./game/types";
 import { getNextBonusGap, getTestBoost, type TestKind } from "./game/test-bonus";
 import { calculateBoostedPoints, getHighestBoost } from "./game/test-bonus";
-import { createWeeklyResult, getUnfinalizedWeeks } from "./game/weekly";
+import { createWeeklyResult, getUnfinalizedWeeks, mergeWeeklyResults } from "./game/weekly";
 import type { WeeklyResult } from "./game/types";
 import type { Performance, RivalBattleRecord } from "./game/types";
 import { NOVA_STAGES, SPARKLE_STAGES } from "./game/config";
@@ -157,7 +159,7 @@ if (hasFirebaseConfig) {
 // ==========================================
 
 const FAMILY_ID = "oomine-study-2026";
-const APP_VERSION = "v1.80";
+const APP_VERSION = "v1.81";
 
 // Firestore Path 固定（変更禁止）
 // 実DB構造:
@@ -427,39 +429,8 @@ const normalizeTask = (task: Task): Task => ({
 });
 
 const mergeTasksFromCloud = (localTasks: Task[], cloudTasks: Task[]): Task[] => {
-  const localById = new Map(localTasks.map((t) => [t.id, normalizeTask(t)]));
-  const cloudById = new Map(cloudTasks.map((t) => [t.id, normalizeTask(t)]));
-  const merged: Task[] = [];
-
-  cloudById.forEach((cloudTask, id) => {
-    const localTask = localById.get(id);
-    if (!localTask) {
-      merged.push(cloudTask);
-      return;
-    }
-
-    const localUpdated = toMillis(localTask.lastUpdatedAt);
-    const cloudUpdated = toMillis(cloudTask.lastUpdatedAt);
-    const localHasRunningState =
-      localTask.isRunning &&
-      !!localTask.sessionStartTime &&
-      (!cloudTask.isRunning ||
-        cloudTask.sessionStartTime !== localTask.sessionStartTime);
-    const shouldKeepLocal =
-      !!localTask.pendingSync ||
-      localUpdated > cloudUpdated ||
-      (localHasRunningState && localUpdated >= cloudUpdated - 30000);
-
-    merged.push(shouldKeepLocal ? localTask : cloudTask);
-  });
-
-  localById.forEach((localTask, id) => {
-    if (!cloudById.has(id) && localTask.pendingSync) {
-      merged.push(localTask);
-    }
-  });
-
-  return merged.sort((a, b) => toMillis(b.lastUpdatedAt) - toMillis(a.lastUpdatedAt));
+  return mergeSyncedTasks(localTasks.map(normalizeTask), cloudTasks.map(normalizeTask))
+    .sort((a, b) => toMillis(b.lastUpdatedAt) - toMillis(a.lastUpdatedAt));
 };
 
 const getPendingTaskUpdates = (): Record<string, any> =>
@@ -620,51 +591,24 @@ const StrictTimer = React.memo(
 
     // タイマーは紙の教材に集中している間も継続する。無操作による停止はしない。
     useEffect(() => {
+      setLocalSeconds(getElapsedSeconds(task));
       if (isRunning) {
-        const startTime = task.sessionStartTime || Date.now();
-        const initialSec = task.currentDuration;
-
         timerRef.current = setInterval(() => {
           const now = Date.now();
-          const elapsed = Math.floor((now - startTime) / 1000);
-          const accurateSecs = initialSec + elapsed;
-
-          setLocalSeconds(accurateSecs);
-
-          if (elapsed > 0 && elapsed % 10 === 0) {
-            updateLocalTask(task.id, { lastUpdatedAt: now });
-          }
-
+          setLocalSeconds(getElapsedSeconds(task, now));
         }, 1000);
       }
       return () => {
         if (timerRef.current) clearInterval(timerRef.current);
       };
-    }, [
-      isRunning,
-      task.sessionStartTime,
-      task.currentDuration,
-      task.id,
-      updateLocalTask,
-      syncTaskToCloud,
-    ]);
+    }, [isRunning, task]);
 
     // バックグラウンド・スリープから復帰した時は表示秒数を補正する。
     useEffect(() => {
-      const handleVis = () => {
-        if (document.hidden && task.isRunning) {
-          hiddenAtRef.current = Date.now();
-        } else if (!document.hidden && task.isRunning) {
-          if (hiddenAtRef.current && Date.now() - hiddenAtRef.current >= LONG_BACKGROUND_SECONDS * 1000) {
-            reviewFlagsRef.current = Array.from(new Set([...reviewFlagsRef.current, "long_background"]));
-          }
-          hiddenAtRef.current = null;
-          setLocalSeconds(getAccurateSeconds()); // 表示秒数も復帰時に即補正する
-        }
-      };
-      document.addEventListener("visibilitychange", handleVis);
-      return () => document.removeEventListener("visibilitychange", handleVis);
-    }, [task.isRunning, getAccurateSeconds]);
+      return subscribeTimerVisibility(document, task, setLocalSeconds, () => {
+        reviewFlagsRef.current = Array.from(new Set([...reviewFlagsRef.current, "long_background"]));
+      }, hiddenAtRef);
+    }, [task]);
 
     const handlePlay = async (e?: React.MouseEvent) => {
       e?.stopPropagation();
@@ -676,6 +620,7 @@ const StrictTimer = React.memo(
 
         const startTime = Date.now();
         reviewFlagsRef.current = [];
+        hiddenAtRef.current = null;
 
         updateLocalTask(task.id, {
         isRunning: true,
@@ -3365,6 +3310,18 @@ export default function App() {
   }, [user, fetchData, isSampleMode]);
 
   useEffect(() => {
+    const dbInstance = getSafeDb();
+    if (!dbInstance || !user || isSampleMode) return;
+    return onSnapshot(query(getTasksCol(dbInstance)), { includeMetadataChanges: true }, (snapshot) => {
+      if (snapshot.metadata.fromCache || snapshot.metadata.hasPendingWrites) return;
+      const cloudTasks = snapshot.docs.map((item) => ({
+        ...normalizeTask({ ...item.data(), id: item.id } as Task), pendingSync: false,
+      }));
+      setTasks((current) => mergeTasksFromCloud(current, cloudTasks));
+    }, () => setSyncState("offline"));
+  }, [user, isSampleMode]);
+
+  useEffect(() => {
     const loadGame = async () => {
       if (isSampleMode || !auth?.currentUser) return;
       const cached = getCache(CACHE_KEY_GAME);
@@ -3695,7 +3652,7 @@ export default function App() {
         return result;
       });
       setGame(nextGame);
-      setWeeklyResults((current) => [...finalized, ...current].sort((a, b) => b.startAt - a.startAt));
+      setWeeklyResults((current) => mergeWeeklyResults(current, finalized));
       return;
     }
     const dbInstance = getSafeDb()!;
@@ -3718,14 +3675,16 @@ export default function App() {
       }
       const latest = finalized[finalized.length - 1];
       setGame((current) => ({ ...current, fans: latest.fanAfter }));
-      setWeeklyResults((current) => [...finalized, ...current.filter((week) => !finalized.some((item) => item.weekId === week.weekId))].sort((a, b) => b.startAt - a.startAt));
+      setWeeklyResults((current) => mergeWeeklyResults(current, finalized));
       const gachaSnapshot = await getDoc(getGachaStateDoc(dbInstance));
       if (gachaSnapshot.exists()) setGachaState(normalizeGachaState(gachaSnapshot.data() as Partial<GachaState>));
     } catch { setSyncState("offline"); }
   }, [allStudyEntries, game, isSampleMode, weeklyResults]);
 
   useEffect(() => {
-    void Promise.resolve().then(finalizePreviousWeek);
+    let cancelled = false;
+    void Promise.resolve().then(() => { if (!cancelled) return finalizePreviousWeek(); });
+    return () => { cancelled = true; };
   }, [finalizePreviousWeek]);
 
   const runLesson = async (memberId: string) => {

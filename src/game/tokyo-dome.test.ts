@@ -29,7 +29,7 @@ describe("Tokyo Dome final live", () => {
   it("requires fans at the boundary", () => { expect(perform({ ...ready(), fans: TOKYO_DOME_REQUIRED_FANS - 1 })).toBeNull(); expect(canStartTokyoDomeLive(ready())).toBe(true); });
   it("requires all six original songs", () => { const game = ready(); game.songs[1].status = "available"; expect(perform(game)).toBeNull(); });
   it("requires four members", () => expect(perform({ ...ready(), activeMemberIds: ["math", "japanese", "science"] })).toBeNull());
-  it.each(SONGS.map((song) => song.id))("allows original song %s with ordinary starter training", (song) => expect(perform(ready(), song)?.performance).toMatchObject({ isClear: true, capacity: 55000, clearThreshold: 49500, version: "v1.80" }));
+  it.each(SONGS.map((song) => song.id))("allows original song %s with ordinary starter training", (song) => expect(perform(ready(), song)?.performance).toMatchObject({ isClear: true, capacity: 55000, clearThreshold: 49500, version: "v1.81" }));
   it("fails below CLEAR without giving a first reward", () => { const game = ready(); game.members = game.members.map((m) => ({ ...m, abilities: abilities(1) })); game.songs = game.songs.map((s) => ({ ...s, songStats: abilities(0) })); const result = perform(game)!; expect(result.performance.isClear).toBe(false); expect(result.reward).toBeNull(); });
   it("clears exactly at 90% and fails one point below", () => {
     const game = ready(); game.leaderMemberId = "yuna";
@@ -51,11 +51,23 @@ describe("Tokyo Dome final live", () => {
     const game = { ...ready(), fans: 37000, claimedTourRewardKeys: [MAJOR_DEBUT_REWARD_KEY] };
     const prelude = prepareArenaPerformance(game, "prelude", SONGS[0].id, 1, "arena-prelude")!;
     const arena = prepareArenaPerformance(prelude.game, "arena", SONGS[0].id, 2, "arena-first")!;
+    expect(prelude.performance.fanGain).toBe(12758);
+    expect(prelude.game.fans).toBe(51258);
+    expect(prelude.reward).toMatchObject({ fanBonus: 1500, activityPointBonus: 20 });
+    expect(arena.reward).toMatchObject({ fanBonus: 3000, activityPointBonus: 40 });
     expect(arena.game.fans).toBe(71266);
     expect(arena.performance.fanGain).toBe(17008);
     expect(canStartTokyoDomeLive(arena.game)).toBe(false);
     const repeat = prepareArenaPerformance(arena.game, "repeat", SONGS[0].id, 3, "arena-first")!;
+    expect(repeat.game.fans).toBe(88274);
+    expect(repeat.reward).toBeNull();
     expect(canStartTokyoDomeLive(repeat.game)).toBe(true);
+    const yunaPrelude = prepareArenaPerformance({ ...game, leaderMemberId: "yuna" }, "yuna-prelude", SONGS[0].id, 1, "arena-prelude")!;
+    const yunaArena = prepareArenaPerformance(yunaPrelude.game, "yuna-arena", SONGS[0].id, 2, "arena-first")!;
+    expect(yunaPrelude.performance.fanGain).toBe(12758 + Math.floor(12758 * .1));
+    expect(yunaArena.performance.fanGain).toBe(17008 + Math.floor(17008 * .1));
+    expect(yunaArena.game.fans).toBe(74241);
+    expect(canStartTokyoDomeLive(yunaArena.game)).toBe(false);
     expect(TOKYO_DOME_LIVE.firstClearReward).toEqual({ fans: 5000, activityPoints: 50 });
   });
   it("renders all six choices, conditions and replay after CLEAR", () => {

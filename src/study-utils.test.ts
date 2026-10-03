@@ -1,6 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   getElapsedSeconds,
+  mergeSyncedTasks,
+  subscribeTimerVisibility,
   getLatestRunningTask,
   getDuplicateTimerUpdates,
   getPausedTaskUpdates,
@@ -26,6 +28,105 @@ const task = (overrides: Partial<StudyTaskLike> = {}): StudyTaskLike => ({
 });
 
 describe("timer helpers", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("keeps running while hidden and resumes from wall time without timer ticks", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1000);
+    const target = Object.assign(new EventTarget(), { hidden: false });
+    const running = task({ isRunning: true, sessionStartTime: 1000, currentDuration: 20 });
+    const resume = vi.fn();
+    const review = vi.fn();
+    const cleanup = subscribeTimerVisibility(target, running, resume, review);
+    target.hidden = true;
+    target.dispatchEvent(new Event("visibilitychange"));
+    vi.setSystemTime(601000);
+    expect(running.isRunning).toBe(true);
+    expect(resume).not.toHaveBeenCalled();
+    expect(getElapsedSeconds(running)).toBe(620);
+    target.hidden = false;
+    target.dispatchEvent(new Event("visibilitychange"));
+    target.dispatchEvent(new Event("visibilitychange"));
+    expect(resume.mock.calls).toEqual([[620], [620]]);
+    expect(review).not.toHaveBeenCalled();
+    cleanup();
+    target.dispatchEvent(new Event("visibilitychange"));
+    expect(resume).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves the existing long-background review across subscription renewal", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1000);
+    const target = Object.assign(new EventTarget(), { hidden: true });
+    const running = task({ isRunning: true, sessionStartTime: 1000 });
+    const hiddenAt = { current: null as number | null };
+    const review = vi.fn();
+    const cleanup = subscribeTimerVisibility(target, running, vi.fn(), review, hiddenAt);
+    vi.setSystemTime(901000);
+    cleanup();
+    const cleanupNext = subscribeTimerVisibility(target, running, vi.fn(), review, hiddenAt);
+    vi.setSystemTime(1801000);
+    target.hidden = false;
+    target.dispatchEvent(new Event("visibilitychange"));
+    expect(review).toHaveBeenCalledTimes(1);
+    expect(running.isRunning).toBe(true);
+    cleanupNext();
+  });
+
+  it("ignores visibility changes for a paused timer", () => {
+    const target = Object.assign(new EventTarget(), { hidden: false });
+    const resume = vi.fn();
+    const review = vi.fn();
+    const cleanup = subscribeTimerVisibility(target, task(), resume, review);
+    target.hidden = true;
+    target.dispatchEvent(new Event("visibilitychange"));
+    target.hidden = false;
+    target.dispatchEvent(new Event("visibilitychange"));
+    expect(resume).not.toHaveBeenCalled();
+    expect(review).not.toHaveBeenCalled();
+    cleanup();
+  });
+
+  it("accepts another client's STOP despite a newer local display timestamp", () => {
+    const local = { ...task({ isRunning: true, sessionStartTime: 1000 }), lastUpdatedAt: 900000, pendingSync: false };
+    const remote = { ...local, ...getPausedTaskUpdates(local, 601000), pendingSync: false };
+    const restored = mergeSyncedTasks([local], [remote]);
+    expect(restored).toEqual([remote]);
+    expect(getLatestRunningTask(restored)).toBeUndefined();
+    expect(getElapsedSeconds(restored[0], 999999)).toBe(600);
+    expect(restored[0].history).toEqual([]);
+  });
+
+  it("converges both client views on the latest START and captures the old cloud STOP before state changes", () => {
+    const older = { ...task({ id: "a", isRunning: true, sessionStartTime: 1000 }), pendingSync: false };
+    const newer = { ...task({ id: "b", isRunning: true, sessionStartTime: 601000 }), pendingSync: false };
+    const cloud = [older, newer];
+    const viewA = mergeSyncedTasks([older, task({ id: "b" })], cloud);
+    const viewB = mergeSyncedTasks([task({ id: "a" }), newer], cloud);
+    expect(getLatestRunningTask(viewA)?.id).toBe("b");
+    expect(getLatestRunningTask(viewB)?.id).toBe("b");
+    const writes = getDuplicateTimerUpdates(viewA, 602000);
+    const nextState = viewA.map((entry) => ({ ...entry, ...writes.find((write) => write.id === entry.id)?.updates }));
+    expect(writes).toEqual([{ id: "a", updates: getPausedTaskUpdates(older, 602000) }]);
+    expect(getLatestRunningTask(nextState)?.id).toBe("b");
+    expect(getDuplicateTimerUpdates(nextState, 603000)).toEqual([]);
+  });
+
+  it("resolves simultaneous START ties independently of client ordering", () => {
+    const a = task({ id: "a", isRunning: true, sessionStartTime: 1000 });
+    const b = task({ id: "b", isRunning: true, sessionStartTime: 1000 });
+    expect(getLatestRunningTask([a, b])?.id).toBe("a");
+    expect(getLatestRunningTask([b, a])?.id).toBe("a");
+  });
+
+  it("protects unsent operations while accepting cloud state after acknowledgement", () => {
+    const local = { ...task({ isRunning: true, sessionStartTime: 1000 }), pendingSync: true };
+    const cloud = { ...task(), pendingSync: false };
+    expect(mergeSyncedTasks([local], [cloud])).toEqual([local]);
+    expect(mergeSyncedTasks([{ ...local, pendingSync: false }], [cloud])).toEqual([cloud]);
+    expect(mergeSyncedTasks([local], [])).toEqual([local]);
+    expect(mergeSyncedTasks([{ ...local, pendingSync: false }], [])).toEqual([]);
+  });
   it.each([60, 180, 299, 300, 301, 601])("continues for %i seconds and saves the real duration on manual pause", (seconds) => {
     const running = task({ isRunning: true, sessionStartTime: 1000 });
     expect(getLatestRunningTask([running])).toBe(running);

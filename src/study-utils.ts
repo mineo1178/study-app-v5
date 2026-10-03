@@ -41,6 +41,41 @@ export const getElapsedSeconds = (
   return task.currentDuration + Math.max(0, Math.floor((now - task.sessionStartTime) / 1000));
 };
 
+// 未送信の操作だけを保護し、同期済みの表示状態はクラウドの操作に従う。
+export const mergeSyncedTasks = <T extends { id: string; pendingSync?: boolean }>(localTasks: T[], cloudTasks: T[]): T[] => {
+  const localById = new Map(localTasks.map((task) => [task.id, task]));
+  const cloudIds = new Set(cloudTasks.map((task) => task.id));
+  return [
+    ...cloudTasks.map((cloud) => {
+      const local = localById.get(cloud.id);
+      return local?.pendingSync ? local : cloud;
+    }),
+    ...localTasks.filter((task) => !cloudIds.has(task.id) && task.pendingSync),
+  ];
+};
+
+export const subscribeTimerVisibility = (
+  target: EventTarget & { readonly hidden: boolean },
+  task: StudyTaskLike,
+  onResume: (seconds: number) => void,
+  onLongBackground: () => void,
+  hiddenAt: { current: number | null } = { current: null },
+) => {
+  if (target.hidden && task.isRunning) hiddenAt.current ??= Date.now();
+  const handleVisibility = () => {
+    if (!task.isRunning) return;
+    if (target.hidden) {
+      hiddenAt.current ??= Date.now();
+    } else {
+      if (hiddenAt.current !== null && Date.now() - hiddenAt.current >= LONG_BACKGROUND_SECONDS * 1000) onLongBackground();
+      hiddenAt.current = null;
+      onResume(getElapsedSeconds(task));
+    }
+  };
+  target.addEventListener("visibilitychange", handleVisibility);
+  return () => target.removeEventListener("visibilitychange", handleVisibility);
+};
+
 // 更新時刻は表示のheartbeatでも変わるため、排他制御は開始時刻で決める。
 export const getLatestRunningTask = <T extends Pick<StudyTaskLike, "id" | "isRunning" | "sessionStartTime">>(tasks: T[]) =>
   tasks.filter((task) => task.isRunning && task.sessionStartTime !== null)

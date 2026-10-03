@@ -2,6 +2,10 @@ import { GAME_START } from "./config";
 import { applyFanChange, getRivalBattle, getWeeklyGoalMinutes } from "./progression";
 import type { ProducerGameState, WeeklyResult } from "./types";
 
+export const mergeWeeklyResults = (current: WeeklyResult[], finalized: WeeklyResult[]) =>
+  [...new Map([...current, ...finalized].map((result) => [result.weekId, result])).values()]
+    .sort((a, b) => b.startAt - a.startAt);
+
 const jstParts = (date: Date) => new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Tokyo", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(date).reduce((parts, part) => ({ ...parts, [part.type]: part.value }), {} as Record<string, string>);
 const jstDate = (date: Date) => { const p = jstParts(date); return new Date(Date.UTC(Number(p.year), Number(p.month) - 1, Number(p.day))); };
 export const getWeekBoundsJst = (date = new Date()) => {
