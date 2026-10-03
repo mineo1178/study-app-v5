@@ -80,7 +80,6 @@ import {
   getElapsedSeconds,
   getDuplicateTimerUpdates,
   getPausedTaskUpdates,
-  getCreditedStudyMinutes,
   getSessionReviewFlags,
   mergeSyncedTasks,
   subscribeTimerVisibility,
@@ -97,6 +96,7 @@ import type { ProducerGameState } from "./game/types";
 import { getNextBonusGap, getTestBoost, type TestKind } from "./game/test-bonus";
 import { calculateBoostedPoints, getHighestBoost } from "./game/test-bonus";
 import { createWeeklyResult, getUnfinalizedWeeks, mergeWeeklyResults } from "./game/weekly";
+import { commitStudySessionOperation, createStudySessionOperation, drainStudySessionOperations, getStudySessionId, prepareStudySessionOperation, type StudySessionOperation } from "./study-session";
 import type { WeeklyResult } from "./game/types";
 import type { Performance, RivalBattleRecord } from "./game/types";
 import { NOVA_STAGES, SPARKLE_STAGES } from "./game/config";
@@ -159,7 +159,7 @@ if (hasFirebaseConfig) {
 // ==========================================
 
 const FAMILY_ID = "oomine-study-2026";
-const APP_VERSION = "v1.81";
+const APP_VERSION = "v1.82";
 
 // Firestore Path 固定（変更禁止）
 // 実DB構造:
@@ -203,6 +203,7 @@ const getGachaExchangeDoc = (database: ReturnType<typeof getFirestore>, exchange
 const CACHE_KEY_TASKS = `study-app-v5-${FAMILY_ID}-tasks`;
 const CACHE_KEY_TESTS = `study-app-v5-${FAMILY_ID}-tests`;
 const CACHE_KEY_PENDING_TASK_UPDATES = `study-app-v5-${FAMILY_ID}-pending-task-updates`;
+const CACHE_KEY_SESSION_OPERATIONS = `study-app-v5-${FAMILY_ID}-session-operations`;
 const CACHE_KEY_GAME = `study-app-v5-${FAMILY_ID}-idol-game`;
 
 type Subject = "math" | "japanese" | "science" | "social";
@@ -228,6 +229,7 @@ interface Task {
   status: "not_started" | "in_progress" | "completed";
   currentDuration: number;
   sessionStartTime: number | null;
+  sessionId?: string;
   isRunning: boolean;
   lastActivityAt?: number;
   lastUpdatedAt: number;
@@ -448,6 +450,10 @@ const clearPendingTaskUpdate = (id: string) => {
   setCache(CACHE_KEY_PENDING_TASK_UPDATES, pending);
 };
 
+const getPendingSessionOperations = (): StudySessionOperation[] => getCache(CACHE_KEY_SESSION_OPERATIONS) || [];
+const isLegacyTimerUpdate = (updates: Record<string, unknown>) =>
+  ["isRunning", "sessionStartTime", "currentDuration", "history"].some((key) => key in updates);
+
 // ==========================================
 // Helper: Generate Dummy Data
 // ==========================================
@@ -619,12 +625,14 @@ const StrictTimer = React.memo(
         await pauseAllOtherTasks(task.id);
 
         const startTime = Date.now();
+        const operation = createStudySessionOperation(task, "start", startTime);
         reviewFlagsRef.current = [];
         hiddenAtRef.current = null;
 
         updateLocalTask(task.id, {
         isRunning: true,
         sessionStartTime: startTime,
+        sessionId: operation.operationId,
         lastActivityAt: startTime,
         lastUpdatedAt: startTime,
         pendingSync: true,
@@ -636,6 +644,7 @@ const StrictTimer = React.memo(
         });
 
         syncTaskToCloud(task.id, {
+        __studyOperation: operation,
         isRunning: true,
         sessionStartTime: startTime,
         lastActivityAt: startTime,
@@ -654,17 +663,20 @@ const StrictTimer = React.memo(
     const handlePauseClick = () => {
       const accurateSecs = getAccurateSeconds();
       const now = Date.now();
+      const operation = createStudySessionOperation(task, "pause", now);
 
       updateLocalTask(task.id, {
         isRunning: false,
         currentDuration: accurateSecs,
         sessionStartTime: null,
+        sessionId: operation.sessionId,
         lastActivityAt: now,
         lastUpdatedAt: now,
         pendingSync: true,
       });
 
       syncTaskToCloud(task.id, {
+        __studyOperation: operation,
         isRunning: false,
         currentDuration: accurateSecs,
         sessionStartTime: null,
@@ -690,18 +702,10 @@ const StrictTimer = React.memo(
         pendingSync: true,
         sessionReviewFlags: reviewFlags,
       });
-      syncTaskToCloud(task.id, {
-        isRunning: false,
-        currentDuration: finalDuration,
-        sessionStartTime: null,
-        lastActivityAt: now,
-        lastUpdatedAt: now,
-        sessionReviewFlags: reviewFlags,
-      });
-
       try {
         await onSaveRecord({
           ...task,
+          sessionId: getStudySessionId(task),
           currentDuration: finalDuration,
           isRunning: false,
           sessionStartTime: null,
@@ -3382,17 +3386,56 @@ export default function App() {
     );
   }, []);
 
+  const sessionFlushRef = useRef<Promise<void> | null>(null);
+  const flushStudySessionOperations = useCallback(() => {
+    if (sessionFlushRef.current) return sessionFlushRef.current;
+    const database = getSafeDb();
+    if (!database || !auth?.currentUser || isSampleMode) return Promise.resolve();
+    const work = async () => {
+      await drainStudySessionOperations(getPendingSessionOperations,
+        (remaining) => setCache(CACHE_KEY_SESSION_OPERATIONS, remaining),
+        (operation) => commitStudySessionOperation(database, getTasksCol(database), operation),
+        (operation, result, remaining) => {
+          const pendingIds = new Set(remaining.map((item) => item.taskId));
+          setTasks((current) => current.filter((task) => result.status !== "missing" || task.id !== operation.taskId || pendingIds.has(task.id)).map((task) => {
+            if (pendingIds.has(task.id)) return task;
+            const saved = result.tasks.find((item) => item.id === task.id);
+            return saved ? { ...normalizeTask(saved as Task), pendingSync: false } : task;
+          }));
+          if (result.status === "conflict") console.warn("Study session changed; stale operation ignored", operation.kind);
+        });
+      setSyncState("synced");
+    };
+    sessionFlushRef.current = work().catch((error) => {
+      setSyncState("offline");
+      throw error;
+    }).finally(() => { sessionFlushRef.current = null; });
+    return sessionFlushRef.current;
+  }, [isSampleMode]);
+
   const syncTaskToCloud = useCallback(
     async (id: string, cloudUpdates: any) => {
       const dbInstance = getSafeDb();
       if (!dbInstance || !auth?.currentUser || isSampleMode) return;
+      if (cloudUpdates.__studyOperation) {
+        const operation = cloudUpdates.__studyOperation as StudySessionOperation;
+        const queued = getPendingSessionOperations();
+        if (!queued.some((item) => item.operationId === operation.operationId)) setCache(CACHE_KEY_SESSION_OPERATIONS, [...queued, operation]);
+        try {
+          await flushStudySessionOperations();
+          if (getPendingSessionOperations().some((item) => item.operationId === operation.operationId)) await flushStudySessionOperations();
+        } catch { /* 操作は順序付きキューに保持する。 */ }
+        return;
+      }
+      if (isLegacyTimerUpdate(cloudUpdates)) { setSyncState("offline"); return; }
       try {
         const taskRef = getTaskDoc(dbInstance, id);
         const { pendingSync, ...safeCloudUpdates } = cloudUpdates;
         await updateDoc(taskRef, safeCloudUpdates);
-        clearPendingTaskUpdate(id);
-        updateLocalTask(id, { pendingSync: false });
-        setSyncState("synced");
+        const retainedLegacy = isLegacyTimerUpdate(getPendingTaskUpdates()[id] || {});
+        if (!retainedLegacy) clearPendingTaskUpdate(id);
+        updateLocalTask(id, { pendingSync: retainedLegacy || getPendingSessionOperations().some((item) => item.taskId === id) });
+        setSyncState(retainedLegacy ? "offline" : "synced");
         setLastSync(
           new Date().toLocaleTimeString("ja-JP", {
             hour: "2-digit",
@@ -3405,13 +3448,14 @@ export default function App() {
         setSyncState("offline");
       }
     },
-    [isSampleMode, updateLocalTask],
+    [isSampleMode, updateLocalTask, flushStudySessionOperations],
   );
 
   const flushPendingTaskUpdates = useCallback(async () => {
     const dbInstance = getSafeDb();
     if (!dbInstance || !auth?.currentUser || isSampleMode) return;
 
+    try { await flushStudySessionOperations(); } catch { return; }
     const pending = getPendingTaskUpdates();
     const entries = Object.entries(pending);
     if (entries.length === 0) return;
@@ -3419,12 +3463,14 @@ export default function App() {
     setSyncState("syncing");
     try {
       for (const [id, updates] of entries) {
+        // v1.81のセッション照合情報がないタイマー更新はblind replayしない。
+        if (isLegacyTimerUpdate(updates)) { setSyncState("offline"); continue; }
         const { pendingSync, ...safeCloudUpdates } = updates as any;
         await updateDoc(getTaskDoc(dbInstance, id), safeCloudUpdates);
         clearPendingTaskUpdate(id);
-        updateLocalTask(id, { pendingSync: false });
+        updateLocalTask(id, { pendingSync: getPendingSessionOperations().some((item) => item.taskId === id) });
       }
-      setSyncState("synced");
+      setSyncState(Object.values(getPendingTaskUpdates()).some(isLegacyTimerUpdate) ? "offline" : "synced");
       setLastSync(
         new Date().toLocaleTimeString("ja-JP", {
           hour: "2-digit",
@@ -3434,7 +3480,7 @@ export default function App() {
     } catch (e) {
       setSyncState("offline");
     }
-  }, [isSampleMode, updateLocalTask]);
+  }, [isSampleMode, updateLocalTask, flushStudySessionOperations]);
 
   useEffect(() => {
     const retry = () => flushPendingTaskUpdates();
@@ -3461,12 +3507,13 @@ export default function App() {
       setTasks((prev) =>
         prev.map((t) => {
           const hit = updatesToSync.find((u) => u.id === t.id);
-          return hit ? { ...t, ...hit.updates } : t;
+          return hit ? { ...t, ...hit.updates, sessionId: getStudySessionId(t) } : t;
         }),
       );
 
-      updatesToSync.forEach(({ id, updates }) => {
-        syncTaskToCloud(id, updates);
+      updatesToSync.forEach(({ id }) => {
+        const task = currentTasks.find((item) => item.id === id)!;
+        syncTaskToCloud(id, { __studyOperation: createStudySessionOperation(task, "pause", now) });
       });
     }, 1000);
 
@@ -3549,50 +3596,12 @@ export default function App() {
 
   const saveHistoryRecord = async (task: Task) => {
     if (task.currentDuration === 0) return;
-    const endAt = Date.now();
-    const startAt =
-      task.sessionStartTime || endAt - task.currentDuration * 1000;
-    const reviewFlags = getSessionReviewFlags(
-      task.currentDuration,
-      task.sessionReviewFlags || [],
-    );
-    const creditedDuration =
-      getCreditedStudyMinutes(task.currentDuration, reviewFlags) * 60;
-    const newHistory = {
-      id: endAt.toString(),
-      date: new Date().toLocaleDateString("ja-JP", {
-        month: "numeric",
-        day: "numeric",
-      }),
-      duration: task.currentDuration,
-      memo: task.currentMemo,
-      startAt,
-      endAt,
-      creditedDuration,
-      reviewFlags,
-    };
-
-    const updates = {
-      history: [...task.history, newHistory],
-      currentDuration: 0,
-      currentMemo: "",
-      isRunning: false,
-      sessionStartTime: null,
-      lastActivityAt: Date.now(),
-      lastUpdatedAt: Date.now(),
-      pendingSync: true,
-      sessionReviewFlags: [],
-      status: task.status === "not_started" ? "in_progress" : task.status,
-    };
-    const cloudUpdates = {
-      ...updates,
-      pendingSync: false,
-    };
-
-    updateLocalTask(task.id, updates as Partial<Task>);
-    if (!isSampleMode) {
-      await syncTaskToCloud(task.id, cloudUpdates);
-    }
+    const operation = createStudySessionOperation(task, "save");
+    // STOPとhistory追加を分割しない。クラウド上の最新historyに一度だけ追加する。
+    const local = prepareStudySessionOperation([task], operation);
+    const updates = local.updates.get(task.id);
+    if (updates) updateLocalTask(task.id, { ...updates, pendingSync: !isSampleMode } as Partial<Task>);
+    if (!isSampleMode) await syncTaskToCloud(task.id, { __studyOperation: operation });
     setDetailTaskId(null);
   };
 
@@ -3939,54 +3948,14 @@ export default function App() {
     async (currentTaskId: string) => {
       const now = Date.now();
       const tasksToPause = tasksRef.current.filter((t) => t.isRunning && t.id !== currentTaskId);
-      const pausedUpdates = new Map(tasksToPause.map((t) => [t.id, getPausedTaskUpdates(t, now)]));
+      const pausedUpdates = new Map(tasksToPause.map((t) => [t.id, { ...getPausedTaskUpdates(t, now), sessionId: getStudySessionId(t) }]));
       setTasks((prev) => prev.map((t) => {
         const updates = pausedUpdates.get(t.id);
         return updates ? { ...t, ...updates } : t;
       }));
 
-      if (tasksToPause.length > 0) {
-        const dbInstance = getSafeDb();
-        if (dbInstance && auth?.currentUser && !isSampleMode) {
-          try {
-            const batch = writeBatch(dbInstance);
-            tasksToPause.forEach((t) => {
-              const elapsed = t.sessionStartTime
-                ? Math.floor((now - t.sessionStartTime) / 1000)
-                : 0;
-              batch.update(getTaskDoc(dbInstance, t.id), {
-                isRunning: false,
-                currentDuration: t.currentDuration + elapsed,
-                sessionStartTime: null,
-                lastActivityAt: now,
-                lastUpdatedAt: now,
-              });
-            });
-            await batch.commit();
-            setTasks((prev) =>
-              prev.map((t) =>
-                tasksToPause.some((paused) => paused.id === t.id)
-                  ? { ...t, pendingSync: false }
-                  : t,
-              ),
-            );
-          } catch (e) {
-            tasksToPause.forEach((t) => {
-              const elapsed = t.sessionStartTime
-                ? Math.floor((now - t.sessionStartTime) / 1000)
-                : 0;
-              queuePendingTaskUpdate(t.id, {
-                isRunning: false,
-                currentDuration: t.currentDuration + elapsed,
-                sessionStartTime: null,
-                lastActivityAt: now,
-                lastUpdatedAt: now,
-              });
-            });
-            console.error("Batch update failed", e);
-          }
-        }
-      }
+      // START transactionがクラウド上の停止対象を確定してまとめて更新する。
+
     },
     [isSampleMode],
   );

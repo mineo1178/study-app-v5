@@ -29,7 +29,7 @@ describe("Tokyo Dome final live", () => {
   it("requires fans at the boundary", () => { expect(perform({ ...ready(), fans: TOKYO_DOME_REQUIRED_FANS - 1 })).toBeNull(); expect(canStartTokyoDomeLive(ready())).toBe(true); });
   it("requires all six original songs", () => { const game = ready(); game.songs[1].status = "available"; expect(perform(game)).toBeNull(); });
   it("requires four members", () => expect(perform({ ...ready(), activeMemberIds: ["math", "japanese", "science"] })).toBeNull());
-  it.each(SONGS.map((song) => song.id))("allows original song %s with ordinary starter training", (song) => expect(perform(ready(), song)?.performance).toMatchObject({ isClear: true, capacity: 55000, clearThreshold: 49500, version: "v1.81" }));
+  it.each(SONGS.map((song) => song.id))("allows original song %s with ordinary starter training", (song) => expect(perform(ready(), song)?.performance).toMatchObject({ isClear: true, capacity: 55000, clearThreshold: 49500, version: "v1.82" }));
   it("fails below CLEAR without giving a first reward", () => { const game = ready(); game.members = game.members.map((m) => ({ ...m, abilities: abilities(1) })); game.songs = game.songs.map((s) => ({ ...s, songStats: abilities(0) })); const result = perform(game)!; expect(result.performance.isClear).toBe(false); expect(result.reward).toBeNull(); });
   it("clears exactly at 90% and fails one point below", () => {
     const game = ready(); game.leaderMemberId = "yuna";
