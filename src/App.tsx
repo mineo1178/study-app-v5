@@ -112,6 +112,8 @@ import { createGameFirestoreRefs } from "./game/firestore-repository";
 import { commitTourPerformance, prepareTourPerformance, type TourPerformanceResult } from "./game/tour/repository";
 import type { TourStopId } from "./game/tour/types";
 import { commitMajorDebutPerformance, prepareMajorDebutPerformance, type MajorDebutResult } from "./game/major-debut";
+import { DeviceTestPanel } from "./components/DeviceTestPanel";
+import { appendDeviceTestEvent, isDeviceTestEnabled, type DeviceTestEvent, type DeviceTestEventType } from "./device-test";
 
 // ==========================================
 // Firebase Initialization (Vite + Vercel)
@@ -159,7 +161,7 @@ if (hasFirebaseConfig) {
 // ==========================================
 
 const FAMILY_ID = "oomine-study-2026";
-const APP_VERSION = "v1.83";
+const APP_VERSION = "v1.84";
 
 // Firestore Path 固定（変更禁止）
 // 実DB構造:
@@ -205,6 +207,8 @@ const CACHE_KEY_TESTS = `study-app-v5-${FAMILY_ID}-tests`;
 const CACHE_KEY_PENDING_TASK_UPDATES = `study-app-v5-${FAMILY_ID}-pending-task-updates`;
 const CACHE_KEY_SESSION_OPERATIONS = `study-app-v5-${FAMILY_ID}-session-operations`;
 const CACHE_KEY_GAME = `study-app-v5-${FAMILY_ID}-idol-game`;
+const CACHE_KEY_DEVICE_TEST_HISTORY = `study-app-v5-${FAMILY_ID}-device-test-history`;
+const DEVICE_TEST_ENABLED = typeof window !== "undefined" && isDeviceTestEnabled(window.location.search);
 
 type Subject = "math" | "japanese" | "science" | "social";
 
@@ -451,6 +455,7 @@ const clearPendingTaskUpdate = (id: string) => {
 };
 
 const getPendingSessionOperations = (): StudySessionOperation[] => getCache(CACHE_KEY_SESSION_OPERATIONS) || [];
+const getRetryQueueCount = () => Object.keys(getPendingTaskUpdates()).length + getPendingSessionOperations().length;
 const isLegacyTimerUpdate = (updates: Record<string, unknown>) =>
   ["isRunning", "sessionStartTime", "currentDuration", "history"].some((key) => key in updates);
 
@@ -3175,6 +3180,18 @@ export default function App() {
   );
   const [isSampleMode, setIsSampleMode] = useState(false);
   const [gachaStartsLater] = useState(() => Date.now() < GACHA_FEATURE_START_DATE);
+  const [deviceTestHistory, setDeviceTestHistory] = useState<DeviceTestEvent[]>(() => {
+    if (!DEVICE_TEST_ENABLED) return [];
+    const cached = getCache(CACHE_KEY_DEVICE_TEST_HISTORY);
+    return Array.isArray(cached) ? cached : [];
+  });
+  const [deviceOnline, setDeviceOnline] = useState(() => typeof navigator === "undefined" || navigator.onLine);
+  const [deviceVisibility, setDeviceVisibility] = useState<DocumentVisibilityState>(() =>
+    typeof document === "undefined" ? "visible" : document.visibilityState,
+  );
+  const [cloudActiveStudyTaskId, setCloudActiveStudyTaskId] = useState<string | null>();
+  const [activeStudyTaskReadError, setActiveStudyTaskReadError] = useState(false);
+  const [deviceRestoreState, setDeviceRestoreState] = useState("not checked");
 
   const [activeTab, setActiveTab] = useState("daily");
   const [tasks, setTasks] = useState<Task[]>([]);
@@ -3198,10 +3215,60 @@ export default function App() {
   } | null>(null);
 
   const tasksRef = useRef<Task[]>([]);
+  const deviceTestHistoryRef = useRef(deviceTestHistory);
+  const deviceRestoreLoggedRef = useRef(false);
+  const retryMountLoggedRef = useRef(false);
+
+  const recordDeviceTestEvent = useCallback((event: {
+    type: DeviceTestEventType;
+    taskId?: string;
+    sessionId?: string;
+    detail?: string;
+  }) => {
+    if (!DEVICE_TEST_ENABLED) return;
+    const next = appendDeviceTestEvent(deviceTestHistoryRef.current, event);
+    deviceTestHistoryRef.current = next;
+    setCache(CACHE_KEY_DEVICE_TEST_HISTORY, next);
+    setDeviceTestHistory(next);
+  }, []);
 
   useEffect(() => {
     tasksRef.current = tasks;
   }, [tasks]);
+
+  useEffect(() => {
+    if (!DEVICE_TEST_ENABLED) return;
+    const handleOnline = () => {
+      setDeviceOnline(true);
+      recordDeviceTestEvent({ type: "ONLINE" });
+    };
+    const handleOffline = () => {
+      setDeviceOnline(false);
+      recordDeviceTestEvent({ type: "OFFLINE" });
+    };
+    const handleVisibility = () => setDeviceVisibility(document.visibilityState);
+    window.addEventListener("online", handleOnline);
+    window.addEventListener("offline", handleOffline);
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => {
+      window.removeEventListener("online", handleOnline);
+      window.removeEventListener("offline", handleOffline);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
+  }, [recordDeviceTestEvent]);
+
+  useEffect(() => {
+    if (!DEVICE_TEST_ENABLED || !user || isSampleMode) return;
+    const database = getSafeDb();
+    if (!database) return;
+    return onSnapshot(doc(database, ...FIRESTORE_ROOT), (snapshot) => {
+      const value = snapshot.data()?.activeStudyTaskId;
+      setCloudActiveStudyTaskId(typeof value === "string" ? value : null);
+      setActiveStudyTaskReadError(false);
+    }, () => {
+      setActiveStudyTaskReadError(true);
+    });
+  }, [user, isSampleMode]);
 
   // Authentication & Initialization
   useEffect(() => {
@@ -3285,6 +3352,13 @@ export default function App() {
         setCache(CACHE_KEY_TESTS, fetchedTests);
 
         setSyncState("synced");
+        if (DEVICE_TEST_ENABLED) {
+          setDeviceRestoreState((current) => current.endsWith("cloud synchronized")
+            ? current
+            : current === "not checked"
+              ? "cloud synchronized"
+              : `${current} → cloud synchronized`);
+        }
         setLastSync(
           new Date().toLocaleTimeString("ja-JP", {
             hour: "2-digit",
@@ -3296,7 +3370,10 @@ export default function App() {
         setSyncState("offline");
         const ctTasks = getCache(CACHE_KEY_TASKS);
         const ctTests = getCache(CACHE_KEY_TESTS);
-        if (ctTasks) setTasks(ctTasks.map(normalizeTask));
+        if (ctTasks) {
+          setTasks(ctTasks.map(normalizeTask));
+          if (DEVICE_TEST_ENABLED) setDeviceRestoreState("cache fallback");
+        }
         if (ctTests) setTests(ctTests);
       }
     },
@@ -3307,11 +3384,29 @@ export default function App() {
     if (user && !isSampleMode) {
       const ctTasks = getCache(CACHE_KEY_TASKS);
       const ctTests = getCache(CACHE_KEY_TESTS);
-      if (ctTasks) setTasks(ctTasks.map(normalizeTask));
+      if (ctTasks) {
+        const restoredTasks = ctTasks.map(normalizeTask);
+        setTasks(restoredTasks);
+        if (DEVICE_TEST_ENABLED) {
+          const restored = restoredTasks.find((task: Task) => task.isRunning) || restoredTasks.find((task: Task) => task.currentDuration > 0);
+          setDeviceRestoreState(restored ? "local timer restored" : "local cache restored");
+          if (!deviceRestoreLoggedRef.current) {
+            deviceRestoreLoggedRef.current = true;
+            recordDeviceTestEvent({
+              type: "RESTORE",
+              taskId: restored?.id,
+              sessionId: restored?.sessionId,
+              detail: restored ? (restored.isRunning ? "running" : "paused") : `${restoredTasks.length} tasks`,
+            });
+          }
+        }
+      } else if (DEVICE_TEST_ENABLED) {
+        setDeviceRestoreState("no local cache");
+      }
       if (ctTests) setTests(ctTests);
       fetchData();
     }
-  }, [user, fetchData, isSampleMode]);
+  }, [user, fetchData, isSampleMode, recordDeviceTestEvent]);
 
   useEffect(() => {
     const dbInstance = getSafeDb();
@@ -3392,6 +3487,7 @@ export default function App() {
     const database = getSafeDb();
     if (!database || !auth?.currentUser || isSampleMode) return Promise.resolve();
     const work = async () => {
+      const hadPendingOperations = getPendingSessionOperations().length > 0;
       await drainStudySessionOperations(getPendingSessionOperations,
         (remaining) => setCache(CACHE_KEY_SESSION_OPERATIONS, remaining),
         (operation) => commitStudySessionOperation(database, getTasksCol(database), operation),
@@ -3405,6 +3501,9 @@ export default function App() {
           if (result.status === "conflict") console.warn("Study session changed; stale operation ignored", operation.kind);
         });
       setSyncState("synced");
+      if (DEVICE_TEST_ENABLED && hadPendingOperations) {
+        setLastSync(new Date().toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" }));
+      }
     };
     sessionFlushRef.current = work().catch((error) => {
       setSyncState("offline");
@@ -3419,6 +3518,19 @@ export default function App() {
       if (!dbInstance || !auth?.currentUser || isSampleMode) return;
       if (cloudUpdates.__studyOperation) {
         const operation = cloudUpdates.__studyOperation as StudySessionOperation;
+        const currentTask = tasksRef.current.find((task) => task.id === operation.taskId);
+        const eventType: DeviceTestEventType = operation.kind === "save"
+          ? "STOP"
+          : operation.kind === "pause"
+            ? "PAUSE"
+            : currentTask && currentTask.currentDuration > 0
+              ? "RESUME"
+              : "START";
+        recordDeviceTestEvent({
+          type: eventType,
+          taskId: operation.taskId,
+          sessionId: operation.kind === "start" ? operation.operationId : operation.sessionId,
+        });
         const queued = getPendingSessionOperations();
         if (!queued.some((item) => item.operationId === operation.operationId)) setCache(CACHE_KEY_SESSION_OPERATIONS, [...queued, operation]);
         try {
@@ -3448,7 +3560,7 @@ export default function App() {
         setSyncState("offline");
       }
     },
-    [isSampleMode, updateLocalTask, flushStudySessionOperations],
+    [isSampleMode, updateLocalTask, flushStudySessionOperations, recordDeviceTestEvent],
   );
 
   const flushPendingTaskUpdates = useCallback(async () => {
@@ -3483,17 +3595,27 @@ export default function App() {
   }, [isSampleMode, updateLocalTask, flushStudySessionOperations]);
 
   useEffect(() => {
-    const retry = () => flushPendingTaskUpdates();
-    window.addEventListener("online", retry);
-    window.addEventListener("focus", retry);
-    window.addEventListener("pageshow", retry);
-    retry();
-    return () => {
-      window.removeEventListener("online", retry);
-      window.removeEventListener("focus", retry);
-      window.removeEventListener("pageshow", retry);
+    const retry = (source: string) => {
+      const queued = getRetryQueueCount();
+      if (queued > 0 && (source !== "mount" || !retryMountLoggedRef.current)) {
+        if (source === "mount") retryMountLoggedRef.current = true;
+        recordDeviceTestEvent({ type: "RETRY", detail: `${source}: ${queued} queued` });
+      }
+      void flushPendingTaskUpdates();
     };
-  }, [flushPendingTaskUpdates]);
+    const retryOnline = () => retry("online");
+    const retryFocus = () => retry("focus");
+    const retryPageShow = () => retry("pageshow");
+    window.addEventListener("online", retryOnline);
+    window.addEventListener("focus", retryFocus);
+    window.addEventListener("pageshow", retryPageShow);
+    retry("mount");
+    return () => {
+      window.removeEventListener("online", retryOnline);
+      window.removeEventListener("focus", retryFocus);
+      window.removeEventListener("pageshow", retryPageShow);
+    };
+  }, [flushPendingTaskUpdates, recordDeviceTestEvent]);
 
   // グローバルタイマー制御：稼働中タイマーは常に最新1件だけに補正する。
   useEffect(() => {
@@ -4083,6 +4205,20 @@ export default function App() {
 
   return (
     <div className="flex flex-col h-screen w-full bg-slate-50 font-sans text-slate-900 max-w-[1600px] mx-auto shadow-2xl overflow-x-hidden relative">
+      {DEVICE_TEST_ENABLED && (
+        <DeviceTestPanel
+          tasks={tasks}
+          syncState={syncState}
+          lastSync={lastSync}
+          online={deviceOnline}
+          visibility={deviceVisibility}
+          retryQueueCount={getRetryQueueCount()}
+          activeStudyTaskId={cloudActiveStudyTaskId}
+          activeStudyTaskError={activeStudyTaskReadError}
+          restoreState={deviceRestoreState}
+          history={deviceTestHistory}
+        />
+      )}
       {isSampleMode && (
         <div className="bg-amber-100 text-amber-800 text-[10px] md:text-xs lg:text-sm font-bold text-center py-1 md:py-2 flex items-center justify-center gap-1.5 z-40 relative">
           <AlertTriangle className="w-3 h-3 md:w-4 md:h-4 lg:w-5 lg:h-5" />
