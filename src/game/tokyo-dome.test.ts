@@ -1,0 +1,68 @@
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { Firestore } from "firebase/firestore";
+import { createInitialGameState, MAJOR_DEBUT_REWARD_KEY, SONGS } from "./config";
+import { getArenaRewardKey } from "./arena-progression";
+import { prepareArenaPerformance } from "./arena";
+import { TOKYO_DOME_LIVE, TOKYO_DOME_REQUIRED_FANS, TOKYO_DOME_REWARD_KEY, canStartTokyoDomeLive, isTokyoDomeChapterUnlocked, isTokyoDomeCompleted } from "./tokyo-dome-progression";
+import { commitTokyoDomePerformance, prepareTokyoDomePerformance, simulateTokyoDomeLive } from "./tokyo-dome";
+import { getGrowthRoadmap } from "./major-debut";
+import { canPerformLive, getNextGoal } from "./song-live";
+import type { ProducerGameState } from "./types";
+import { TOUR_STOP_IDS } from "./tour/config";
+import { renderToStaticMarkup } from "react-dom/server";
+import { createElement } from "react";
+import { TokyoDomePanel } from "../components/game/TokyoDomePanel";
+const store = vi.hoisted(() => new Map<string, unknown>());
+vi.mock("./firestore-repository", () => ({ createGameFirestoreRefs: () => ({ getGameDoc: () => "game", getPerformanceDoc: (_db: unknown, id: string) => `performance/${id}`, getRewardLedgerDoc: (_db: unknown, id: string) => `ledger/${id}` }) }));
+vi.mock("firebase/firestore", () => ({ runTransaction: async (_db: unknown, callback: (tx: unknown) => Promise<unknown>) => callback({ get: async (ref: string) => ({ exists: () => store.has(ref), data: () => store.get(ref) }), set: (ref: string, data: unknown) => store.set(ref, data), update: (ref: string, data: object) => store.set(ref, { ...store.get(ref) as object, ...data }) }) }));
+const abilities = (n: number) => ({ vocal: n, harmony: n, dance: n, character: n, lyrics: n, composition: n, choreography: n });
+const ready = (): ProducerGameState => {
+  const base = createInitialGameState();
+  return { ...base, fans: TOKYO_DOME_REQUIRED_FANS, activityPoints: 100, claimedTourRewardKeys: [MAJOR_DEBUT_REWARD_KEY, getArenaRewardKey("arena-prelude"), getArenaRewardKey("arena-first")], activeMemberIds: ["math", "japanese", "science", "yuna"], leaderMemberId: "math", members: base.members.map((m) => ({ ...m, joined: true, abilities: abilities(25) })), songs: base.songs.map((s) => ({ ...s, status: "completed", songStats: abilities(25) })) };
+};
+const perform = (game = ready(), song = SONGS[0].id as string) => prepareTokyoDomePerformance(game, "p", song, 1);
+const commit = (id: string) => commitTokyoDomePerformance({ database: {} as Firestore, root: {} as never, performanceId: id, songId: SONGS[0].id, performedAt: 1 });
+describe("Tokyo Dome final live", () => {
+  beforeEach(() => store.clear());
+  it("locks before arena CLEAR and supports old state", () => { const game = { ...ready(), claimedTourRewardKeys: undefined }; expect(isTokyoDomeChapterUnlocked(game)).toBe(false); expect(perform(game)).toBeNull(); expect(isTokyoDomeCompleted(game)).toBe(false); });
+  it("unlocks the chapter on arena CLEAR", () => expect(isTokyoDomeChapterUnlocked(ready())).toBe(true));
+  it("requires fans at the boundary", () => { expect(perform({ ...ready(), fans: TOKYO_DOME_REQUIRED_FANS - 1 })).toBeNull(); expect(canStartTokyoDomeLive(ready())).toBe(true); });
+  it("requires all six original songs", () => { const game = ready(); game.songs[1].status = "available"; expect(perform(game)).toBeNull(); });
+  it("requires four members", () => expect(perform({ ...ready(), activeMemberIds: ["math", "japanese", "science"] })).toBeNull());
+  it.each(SONGS.map((song) => song.id))("allows original song %s with ordinary starter training", (song) => expect(perform(ready(), song)?.performance).toMatchObject({ isClear: true, capacity: 55000, clearThreshold: 49500, version: "v1.80" }));
+  it("fails below CLEAR without giving a first reward", () => { const game = ready(); game.members = game.members.map((m) => ({ ...m, abilities: abilities(1) })); game.songs = game.songs.map((s) => ({ ...s, songStats: abilities(0) })); const result = perform(game)!; expect(result.performance.isClear).toBe(false); expect(result.reward).toBeNull(); });
+  it("clears exactly at 90% and fails one point below", () => {
+    const game = ready(); game.leaderMemberId = "yuna";
+    game.members = game.members.map((m) => ({ ...m, abilities: abilities(35 / 1.06) }));
+    game.songs[0] = { ...game.songs[0], songType: "VOCAL", songStats: abilities(0) };
+    const exact = simulateTokyoDomeLive(game, game.songs[0].id)!;
+    expect(exact.audience).toBe(exact.clearThreshold);
+    expect(exact.isClear).toBe(true);
+    game.members = game.members.map((m) => ({ ...m, abilities: abilities(35 / 1.06 - 1 / 550 / 1.06) }));
+    expect(simulateTokyoDomeLive(game, game.songs[0].id)?.isClear).toBe(false);
+  });
+  it("grants the first reward once and derives CLEAR", () => { const first = perform()!; expect(first.reward).toMatchObject({ fanBonus: 5000, activityPointBonus: 50 }); expect(isTokyoDomeCompleted(first.game)).toBe(true); expect(perform(first.game)?.reward).toBeNull(); });
+  it("completes roadmap and keeps normal and Dome lives available", () => { const game = { ...perform()!.game, tourProgress: { completedStopIds: [...TOUR_STOP_IDS], soldOutStopIds: [], leg1Completed: true } }; expect(Object.values(getGrowthRoadmap(game)).every((stage) => stage === "complete")).toBe(true); expect(getNextGoal(game, [])).toBe("夢のステージ達成！"); expect(canPerformLive(game, game.songs[0])).toBe(true); expect(perform(game)).not.toBeNull(); });
+  it("uses performance ID to prevent retry duplication", async () => { store.set("game", ready()); await commit("a"); const saved = store.get("game"); expect((await commit("a"))?.alreadyApplied).toBe(true); expect(store.get("game")).toEqual(saved); });
+  it("prevents duplicate rewards across devices and reload", async () => { store.set("game", ready()); await commit("a"); expect((await commit("b"))?.reward).toBeNull(); store.set("game", ready()); expect((await commit("c"))?.reward).toBeNull(); expect(store.has(`ledger/${TOKYO_DOME_REWARD_KEY}`)).toBe(true); });
+  it("checks the current transaction conditions", async () => { store.set("game", { ...ready(), fans: 0 }); expect(await commit("stale")).toBeNull(); expect(store.has("performance/stale")).toBe(false); });
+  it("rejects unknown songs or invalid leaders", () => { expect(perform(ready(), "unknown")).toBeNull(); expect(perform({ ...ready(), leaderMemberId: "missing" })).toBeNull(); });
+  it("keeps a short growth interval after representative arena CLEAR", () => {
+    const game = { ...ready(), fans: 37000, claimedTourRewardKeys: [MAJOR_DEBUT_REWARD_KEY] };
+    const prelude = prepareArenaPerformance(game, "prelude", SONGS[0].id, 1, "arena-prelude")!;
+    const arena = prepareArenaPerformance(prelude.game, "arena", SONGS[0].id, 2, "arena-first")!;
+    expect(arena.game.fans).toBe(71266);
+    expect(arena.performance.fanGain).toBe(17008);
+    expect(canStartTokyoDomeLive(arena.game)).toBe(false);
+    const repeat = prepareArenaPerformance(arena.game, "repeat", SONGS[0].id, 3, "arena-first")!;
+    expect(canStartTokyoDomeLive(repeat.game)).toBe(true);
+    expect(TOKYO_DOME_LIVE.firstClearReward).toEqual({ fans: 5000, activityPoints: 50 });
+  });
+  it("renders all six choices, conditions and replay after CLEAR", () => {
+    const markup = renderToStaticMarkup(createElement(TokyoDomePanel, { game: perform()!.game, onPerform: async () => null, onOpenFormation: () => {} }));
+    SONGS.forEach((song) => expect(markup).toContain(song.title));
+    expect(markup).toContain("夢のステージ達成！");
+    expect(markup).toContain("東京ドームライブに挑戦！");
+    expect(markup).toContain("75,000");
+  });
+});

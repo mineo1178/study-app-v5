@@ -1,3 +1,4 @@
+import { isTokyoDomeCompleted } from "./tokyo-dome-progression";
 import { isArenaCompleted } from "./arena-progression";
 import { runTransaction, type Firestore } from "firebase/firestore";
 import { MAJOR_DEBUT_LIVE, MAJOR_DEBUT_REWARD_KEY } from "./config";
@@ -17,7 +18,7 @@ export type MajorDebutResult = MajorDebutCommit & { alreadyApplied: boolean };
 const progress = (game: ProducerGameState) => game.tourProgress ?? { completedStopIds: [], soldOutStopIds: [], leg1Completed: false };
 export const isMajorDebutChapterUnlocked = (game: ProducerGameState) => isNationalTourCompleted(progress(game));
 export const isMajorDebutCompleted = (game: ProducerGameState) => game.claimedTourRewardKeys?.includes(MAJOR_DEBUT_REWARD_KEY) === true;
-export const getGrowthRoadmap = (game: ProducerGameState) => { const tourComplete = isMajorDebutChapterUnlocked(game); const debutComplete = isMajorDebutCompleted(game); return { nationalTour: tourComplete ? "complete" as const : "current" as const, majorDebut: !tourComplete ? "locked" as const : debutComplete ? "complete" as const : "current" as const, arena: isArenaCompleted(game) ? "complete" as const : debutComplete ? "current" as const : "locked" as const, tokyoDome: isArenaCompleted(game) ? "next" as const : "locked" as const }; };
+export const getGrowthRoadmap = (game: ProducerGameState) => { const tourComplete = isMajorDebutChapterUnlocked(game); const debutComplete = isMajorDebutCompleted(game); return { nationalTour: tourComplete ? "complete" as const : "current" as const, majorDebut: !tourComplete ? "locked" as const : debutComplete ? "complete" as const : "current" as const, arena: isArenaCompleted(game) ? "complete" as const : debutComplete ? "current" as const : "locked" as const, tokyoDome: isTokyoDomeCompleted(game) ? "complete" as const : isArenaCompleted(game) ? "next" as const : "locked" as const }; };
 export const canStartMajorDebutLive = (game: ProducerGameState) => isMajorDebutChapterUnlocked(game) && game.songs.some((song) => song.id === "beyond-the-dream" && song.status === "completed") && game.fans >= MAJOR_DEBUT_LIVE.requiredFans && getActiveMembers(game).length === MAJOR_DEBUT_LIVE.requiredMembers;
 
 export const simulateMajorDebutLive = (game: ProducerGameState, songId: string, live: { capacity: number; clearRate: number; affinities: readonly string[] } = MAJOR_DEBUT_LIVE): MajorDebutSimulation | null => {

@@ -41,6 +41,26 @@ export const getElapsedSeconds = (
   return task.currentDuration + Math.max(0, Math.floor((now - task.sessionStartTime) / 1000));
 };
 
+// 更新時刻は表示のheartbeatでも変わるため、排他制御は開始時刻で決める。
+export const getLatestRunningTask = <T extends Pick<StudyTaskLike, "id" | "isRunning" | "sessionStartTime">>(tasks: T[]) =>
+  tasks.filter((task) => task.isRunning && task.sessionStartTime !== null)
+    .sort((a, b) => (b.sessionStartTime ?? 0) - (a.sessionStartTime ?? 0) || a.id.localeCompare(b.id))[0];
+
+export const getPausedTaskUpdates = (task: StudyTaskLike, now: number) => ({
+  isRunning: false,
+  currentDuration: getElapsedSeconds(task, now),
+  sessionStartTime: null,
+  lastActivityAt: now,
+  lastUpdatedAt: now,
+  pendingSync: true,
+});
+
+export const getDuplicateTimerUpdates = (tasks: StudyTaskLike[], now: number) => {
+  const latest = getLatestRunningTask(tasks);
+  return tasks.filter((task) => task.isRunning && task.sessionStartTime !== null && task.id !== latest?.id)
+    .map((task) => ({ id: task.id, updates: getPausedTaskUpdates(task, now) }));
+};
+
 export const getCreditedStudyMinutes = (
   recordedDuration: number,
   reviewFlags: SessionReviewFlag[] = [],

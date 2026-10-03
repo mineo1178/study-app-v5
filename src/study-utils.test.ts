@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   getElapsedSeconds,
+  getLatestRunningTask,
+  getDuplicateTimerUpdates,
+  getPausedTaskUpdates,
   getCreditedStudyMinutes,
   getSessionReviewFlags,
   getStudyDuration,
@@ -23,6 +26,33 @@ const task = (overrides: Partial<StudyTaskLike> = {}): StudyTaskLike => ({
 });
 
 describe("timer helpers", () => {
+  it.each([60, 180, 299, 300, 301, 601])("continues for %i seconds and saves the real duration on manual pause", (seconds) => {
+    const running = task({ isRunning: true, sessionStartTime: 1000 });
+    expect(getLatestRunningTask([running])).toBe(running);
+    expect(getElapsedSeconds(running, 1000 + seconds * 1000)).toBe(seconds);
+    expect(getDuplicateTimerUpdates([running], 1000 + seconds * 1000)).toEqual([]);
+    const paused = { ...running, ...getPausedTaskUpdates(running, 1000 + seconds * 1000) };
+    expect(paused.isRunning).toBe(false);
+    expect(getElapsedSeconds(paused, 9999999)).toBe(seconds);
+    expect(getCreditedStudyMinutes(seconds)).toBe(seconds < 600 ? 0 : 10);
+  });
+
+  it("keeps the newly started timer even when an older timer has a newer heartbeat", () => {
+    const older = { ...task({ id: "old", isRunning: true, sessionStartTime: 1000 }), lastUpdatedAt: 190000 };
+    const newer = { ...task({ id: "new", isRunning: true, sessionStartTime: 181000 }), lastUpdatedAt: 181000 };
+    expect(getLatestRunningTask([older, newer])).toBe(newer);
+    expect(getDuplicateTimerUpdates([older, newer], 190000).map((update) => update.id)).toEqual(["old"]);
+    const paused = getPausedTaskUpdates(older, 181000);
+    expect(paused).toMatchObject({ isRunning: false, currentDuration: 180, pendingSync: true });
+    expect(getLatestRunningTask([{ ...older, ...paused }, newer])).toBe(newer);
+  });
+
+  it("uses elapsed wall time across hidden, unmount and reload without ticks", () => {
+    const running = task({ isRunning: true, sessionStartTime: 1000 });
+    const restored = JSON.parse(JSON.stringify(running));
+    expect(getElapsedSeconds(restored, 302000)).toBe(301);
+    expect(getLatestRunningTask([restored])?.isRunning).toBe(true);
+  });
   it("calculates elapsed time while running and preserves it while paused", () => {
     expect(
       getElapsedSeconds(

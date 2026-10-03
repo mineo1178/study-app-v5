@@ -1,3 +1,5 @@
+import { commitTokyoDomePerformance, prepareTokyoDomePerformance, type TokyoDomeResult } from "./game/tokyo-dome";
+import { getStudyRewardPreview } from "./game/study-reward-preview";
 import { commitArenaPerformance, prepareArenaPerformance, type ArenaResult } from "./game/arena";
 import type { ArenaLiveId } from "./game/arena-progression";
 import React, {
@@ -75,6 +77,8 @@ import {
 } from "firebase/firestore";
 import {
   getElapsedSeconds,
+  getDuplicateTimerUpdates,
+  getPausedTaskUpdates,
   getCreditedStudyMinutes,
   getSessionReviewFlags,
   LONG_BACKGROUND_SECONDS,
@@ -153,7 +157,7 @@ if (hasFirebaseConfig) {
 // ==========================================
 
 const FAMILY_ID = "oomine-study-2026";
-const APP_VERSION = "v1.79";
+const APP_VERSION = "v1.80";
 
 // Firestore Path 固定（変更禁止）
 // 実DB構造:
@@ -1750,7 +1754,7 @@ const ActiveStudyTimerPanel = ({ tasks }: { tasks: Task[] }) => {
   );
 };
 
-const TodayStudyTimeline = ({ tasks }: { tasks: Task[] }) => {
+const TodayStudyTimeline = ({ tasks, game, gacha }: { tasks: Task[]; game: ProducerGameState; gacha: GachaState }) => {
   const [now, setNow] = useState(Date.now());
   const [showDetails, setShowDetails] = useState(false);
   const todayLabel = new Date().toLocaleDateString("ja-JP", {
@@ -1763,6 +1767,9 @@ const TodayStudyTimeline = ({ tasks }: { tasks: Task[] }) => {
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
   }, []);
+
+  const rewardMinute = Math.floor(now / 60000);
+  const rewardPreview = useMemo(() => getStudyRewardPreview(tasks, tasks.flatMap((task) => task.history), game.claimedSessionIds, gacha, rewardMinute * 60000), [tasks, game.claimedSessionIds, gacha, rewardMinute]);
 
   const activeRunningTask = useMemo(() => {
     return [...tasks]
@@ -1987,6 +1994,12 @@ const TodayStudyTimeline = ({ tasks }: { tasks: Task[] }) => {
 
   return (
     <div className="bg-white rounded-3xl p-4 md:p-7 lg:p-8 shadow-md border border-slate-200 overflow-hidden">
+      <section className="mb-5 rounded-2xl bg-amber-50 border border-amber-200 p-4" aria-label="次のごほうびまで">
+        <h2 className="font-black text-amber-900">次のごほうびまで</h2>
+        <p className="mt-1 text-sm">今日のごほうび対象：{rewardPreview.todayMinutes}分（学習中は見込み）</p>
+        {rewardPreview.rewards.map((reward) => <p key={reward.id} className="mt-2 text-sm font-bold text-amber-900">{reward.id.startsWith("gacha") ? "🎫" : reward.id.startsWith("item") ? "🎁" : "✨"} {reward.remaining > 0 ? "あと" + reward.remaining + "分で" : ""}{reward.text}</p>)}
+        {rewardPreview.capped && <p className="mt-2 text-xs">この記録の活動P対象は上限まで達成！ 勉強は続けられるよ。</p>}
+      </section>
       <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-3 md:gap-4 mb-5 md:mb-6 min-w-0">
         <div className="min-w-0">
           <h2 className="text-sm md:text-base lg:text-lg font-black text-slate-800 flex items-center gap-1.5 md:gap-2">
@@ -2155,6 +2168,8 @@ const TodayStudyTimeline = ({ tasks }: { tasks: Task[] }) => {
 
 const DailyView = ({
   tasks,
+  game,
+  gachaState,
   cycleStatus,
   deleteUnitTasks,
   setAddModalOpen,
@@ -2342,7 +2357,7 @@ const DailyView = ({
 
             <ActiveStudyTimerPanel tasks={tasks} />
 
-            <TodayStudyTimeline tasks={tasks} />
+            <TodayStudyTimeline tasks={tasks} game={game} gacha={gachaState} />
 
             <h3 className="font-bold text-slate-500 text-xs md:text-sm lg:text-base pl-1 md:pl-2">
               学習回ごとの詳細
@@ -3482,39 +3497,7 @@ export default function App() {
     const interval = setInterval(() => {
       const now = Date.now();
       const currentTasks = tasksRef.current;
-      const runningTasks = currentTasks.filter(
-        (t) => t.isRunning && t.sessionStartTime,
-      );
-      if (runningTasks.length === 0) return;
-
-      const latestRunningTask = [...runningTasks].sort(
-        (a, b) =>
-          (toMillis(b.lastUpdatedAt) || b.sessionStartTime || 0) -
-          (toMillis(a.lastUpdatedAt) || a.sessionStartTime || 0),
-      )[0];
-
-      const updatesToSync: { id: string; updates: Partial<Task> }[] = [];
-
-      runningTasks.forEach((t) => {
-        const shouldForceStopBecauseDuplicated = t.id !== latestRunningTask.id;
-
-        if (shouldForceStopBecauseDuplicated) {
-          const elapsed = t.sessionStartTime
-            ? Math.max(0, Math.floor((now - t.sessionStartTime) / 1000))
-            : 0;
-          updatesToSync.push({
-            id: t.id,
-            updates: {
-              isRunning: false,
-              currentDuration: t.currentDuration + elapsed,
-              sessionStartTime: null,
-              lastActivityAt: now,
-              lastUpdatedAt: now,
-              pendingSync: true,
-            },
-          });
-        }
-      });
+      const updatesToSync = getDuplicateTimerUpdates(currentTasks, now);
 
       if (updatesToSync.length === 0) return;
 
@@ -3951,6 +3934,32 @@ export default function App() {
     }
   };
 
+  const performTokyoDome = async (songId: string): Promise<TokyoDomeResult | null> => {
+    const performanceId = `tokyo-dome-performance-${crypto.randomUUID?.() || Date.now()}`;
+    const performedAt = Date.now();
+    if (isSampleMode || !auth?.currentUser || !getSafeDb()) {
+      const prepared = prepareTokyoDomePerformance(game, performanceId, songId, performedAt);
+      if (!prepared) return null;
+      const result = { ...prepared, alreadyApplied: false };
+      setGame(result.game);
+      setPerformances((current) => [result.performance, ...current.filter((performance) => performance.performanceId !== result.performance.performanceId)].slice(0, 5));
+      return result;
+    }
+    const dbInstance = getSafeDb()!;
+    try {
+      const result = await commitTokyoDomePerformance({ database: dbInstance, root: FIRESTORE_ROOT, performanceId, songId, performedAt });
+      if (!result) return null;
+      setGame(result.game);
+      setPerformances((current) => [result.performance, ...current.filter((performance) => performance.performanceId !== result.performance.performanceId)].slice(0, 5));
+      setSyncState("synced");
+      return result;
+    } catch (error) {
+      console.error("tokyo dome performance failed", error);
+      setSyncState("offline");
+      throw error;
+    }
+  };
+
   const startSparkleBattle = async (songId: string, stage = 1) => {
     const isNova = stage >= 3; const novaStage = stage - 3; const song = game.songs.find((item) => item.id === songId); const canStart = stage === 4 ? canStartNovaStage2(game) : isNova ? canStartNovaStage1(game, performances) : stage === 2 ? canStartSparkleStage2(game, performances) : canStartRivalBattle(game, performances); if (!song || song.status !== "completed" || !canStart) return;
     const stageConfig = isNova ? NOVA_STAGES[novaStage] : SPARKLE_STAGES[stage - 1]; const battleId = stageConfig.battleId;
@@ -3970,32 +3979,12 @@ export default function App() {
   const pauseAllOtherTasks = useCallback(
     async (currentTaskId: string) => {
       const now = Date.now();
-      let tasksToPause: Task[] = [];
-
-      setTasks((prev) => {
-        tasksToPause = prev.filter(
-          (t) => t.isRunning && t.id !== currentTaskId,
-        );
-        if (tasksToPause.length === 0) return prev;
-
-        return prev.map((t) => {
-          if (t.isRunning && t.id !== currentTaskId) {
-            const elapsed = t.sessionStartTime
-              ? Math.floor((now - t.sessionStartTime) / 1000)
-              : 0;
-            return {
-              ...t,
-              isRunning: false,
-              currentDuration: t.currentDuration + elapsed,
-              sessionStartTime: null,
-              lastActivityAt: now,
-              lastUpdatedAt: now,
-              pendingSync: true,
-            };
-          }
-          return t;
-        });
-      });
+      const tasksToPause = tasksRef.current.filter((t) => t.isRunning && t.id !== currentTaskId);
+      const pausedUpdates = new Map(tasksToPause.map((t) => [t.id, getPausedTaskUpdates(t, now)]));
+      setTasks((prev) => prev.map((t) => {
+        const updates = pausedUpdates.get(t.id);
+        return updates ? { ...t, ...updates } : t;
+      }));
 
       if (tasksToPause.length > 0) {
         const dbInstance = getSafeDb();
@@ -4253,6 +4242,8 @@ export default function App() {
       <main className="flex-1 overflow-y-auto overscroll-contain no-scrollbar flex flex-col pb-24 md:pb-32 lg:pb-40">
         {activeTab === "daily" ? (
           <DailyView
+            game={game}
+            gachaState={gachaState}
             tasks={tasks}
             updateLocalTask={updateLocalTask}
             syncTaskToCloud={syncTaskToCloud}
@@ -4315,6 +4306,7 @@ export default function App() {
             onPerform={performFirstLive}
             onRivalBattle={startSparkleBattle}
             onPerformTour={performTour}
+            onPerformTokyoDome={performTokyoDome}
             onPerformArena={performArena}
             onPerformMajorDebut={performMajorDebut}
           />
