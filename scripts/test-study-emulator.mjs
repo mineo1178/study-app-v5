@@ -22,7 +22,8 @@ const isListening = () => new Promise((resolve) => {
 if (await isListening()) throw new Error(`localhost:${port}は使用中です。既存サービスは停止しません。`);
 const logPath = join(tmpdir(), `study-v182-emulator-${Date.now()}.log`);
 const log = openSync(logPath, "w");
-const emulator = spawn("java", ["-jar", jar, "--host", "127.0.0.1", "--port", String(port), "--project_id", "demo-study-v182", "--single_project_mode", "true"], { cwd: root, windowsHide: true, stdio: ["ignore", log, log] });
+// Rules validation errors in the emulator require its bundled English messages.
+const emulator = spawn("java", ["-Duser.language=en", "-Duser.country=US", "-jar", jar, "--host", "127.0.0.1", "--port", String(port), "--project_id", "demo-study-v182", "--single_project_mode", "true", "--rules", join(root, "firestore.rules")], { cwd: root, windowsHide: true, stdio: ["ignore", log, log] });
 let startupError;
 emulator.on("error", (error) => { startupError = error; });
 try {

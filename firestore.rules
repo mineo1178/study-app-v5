@@ -1,0 +1,58 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isFamilyMember(familyId) {
+      return isSignedIn()
+        && get(/databases/$(database)/documents/families/$(familyId)).data.memberUids is list
+        && request.auth.uid in get(/databases/$(database)/documents/families/$(familyId)).data.memberUids;
+    }
+
+    match /families/{familyId} {
+      allow read: if isFamilyMember(familyId);
+      allow update: if isFamilyMember(familyId)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['activeStudyTaskId'])
+        && (request.resource.data.activeStudyTaskId == null || request.resource.data.activeStudyTaskId is string);
+      allow create, delete: if false;
+
+      match /tasks/{taskId} {
+        allow read, create, update, delete: if isFamilyMember(familyId);
+      }
+      match /tests/{testId} {
+        allow read, create, update, delete: if isFamilyMember(familyId);
+      }
+      match /rewardLedger/{rewardKey} {
+        allow read, create: if isFamilyMember(familyId);
+      }
+      match /game/idol-produce {
+        allow read, create, update: if isFamilyMember(familyId);
+
+        match /weeks/{weekId} {
+          allow read, create: if isFamilyMember(familyId);
+        }
+        match /performances/{performanceId} {
+          allow read, create: if isFamilyMember(familyId);
+        }
+        match /rivalBattles/{battleId} {
+          allow read, create: if isFamilyMember(familyId);
+        }
+        match /gacha/state {
+          allow read, create, update: if isFamilyMember(familyId);
+        }
+        match /gachaWeeks/{weekId} {
+          allow read, create: if isFamilyMember(familyId);
+        }
+        match /gachaDraws/{drawId} {
+          allow read, create: if isFamilyMember(familyId);
+        }
+        match /gachaExchanges/{exchangeId} {
+          allow read, create: if isFamilyMember(familyId);
+        }
+      }
+    }
+  }
+}

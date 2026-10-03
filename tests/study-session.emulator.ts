@@ -3,6 +3,7 @@ import { initializeApp, deleteApp, type FirebaseApp } from "firebase/app";
 import { collection, connectFirestoreEmulator, disableNetwork, doc, enableNetwork, getDocFromServer, getDocsFromServer, getFirestore, setDoc, terminate, Timestamp, type Firestore } from "firebase/firestore";
 import { commitStudySessionOperation, drainStudySessionOperations, getStudySessionId, type SessionTask, type StudySessionOperation } from "../src/study-session";
 import { getSessionActivityPoints, getUnclaimedRewards } from "../src/game/rewards";
+import { seedFamily } from "./emulator-admin";
 
 const endpoint = process.env.FIRESTORE_EMULATOR_HOST;
 if (!endpoint || !/^127\.0\.0\.1:\d+$/.test(endpoint)) throw new Error("FIRESTORE_EMULATOR_HOST must be an explicit localhost emulator endpoint");
@@ -11,7 +12,11 @@ const projectId = "demo-study-v182";
 const apps: FirebaseApp[] = [];
 const clients: Firestore[] = [];
 let fixtureNumber = 0;
-const fixture = () => `families/test-${Date.now()}-${fixtureNumber++}/tasks`;
+const fixture = async () => {
+  const familyId = `test-${Date.now()}-${fixtureNumber++}`;
+  await seedFamily(familyId, ["session-client-0", "session-client-1"], { familyName: { stringValue: "fixture" } });
+  return `families/${familyId}/tasks`;
+};
 const task = (id: string, overrides: Partial<SessionTask> = {}): SessionTask => ({ id, unit: "第1回", subject: "math", status: "in_progress", currentDuration: 0, sessionStartTime: null, isRunning: false, history: [], lastUpdatedAt: 1, ...overrides });
 const operation = (current: SessionTask, kind: StudySessionOperation["kind"], operationId: string, at: number): StudySessionOperation => ({ taskId: current.id, kind, operationId, at, sessionId: getStudySessionId(current) });
 const read = async (client: number, path: string, id: string) => (await getDocFromServer(doc(clients[client], path, id))).data() as SessionTask;
@@ -23,7 +28,7 @@ describe("two independent Firestore clients", () => {
       const app = initializeApp({ projectId, apiKey: "emulator-only" }, `study-test-${i}-${Date.now()}`);
       apps.push(app);
       const db = getFirestore(app);
-      connectFirestoreEmulator(db, "127.0.0.1", port);
+      connectFirestoreEmulator(db, "127.0.0.1", port, { mockUserToken: { sub: `session-client-${i}` } });
       clients.push(db);
     }
   });
@@ -32,8 +37,7 @@ describe("two independent Firestore clients", () => {
     await Promise.all(apps.map((app) => deleteApp(app)));
   });
   it("A START then B START leaves only B active", async () => {
-    const path = fixture(); const a = task("a"); const b = task("b");
-    await setDoc(collection(clients[0], path).parent!, { familyName: "fixture" });
+    const path = await fixture(); const a = task("a"); const b = task("b");
     await Promise.all([setDoc(doc(clients[0], path, "a"), a), setDoc(doc(clients[1], path, "b"), b)]);
     await commit(0, path, operation(a, "start", "a-start", 1000));
     await commit(1, path, operation(b, "start", "b-start", 601000));
@@ -43,7 +47,7 @@ describe("two independent Firestore clients", () => {
     expect((await getDocFromServer(collection(clients[0], path).parent!)).data()).toMatchObject({ familyName: "fixture", activeStudyTaskId: "b" });
   });
   it("A START then B START then delayed A STOP preserves B's session", async () => {
-    const path = fixture(); const a = task("a"); const b = task("b");
+    const path = await fixture(); const a = task("a"); const b = task("b");
     await Promise.all([setDoc(doc(clients[0], path, "a"), a), setDoc(doc(clients[1], path, "b"), b)]);
     await commit(0, path, operation(a, "start", "a-start", 1000));
     const stale = await read(0, path, "a");
@@ -60,7 +64,7 @@ describe("two independent Firestore clients", () => {
     expect(await read(0, path, "b")).toEqual(activeBefore);
   });
   it("A START then B STOP saves the session and A observes no ghost timer", async () => {
-    const path = fixture(); const a = task("a");
+    const path = await fixture(); const a = task("a");
     await setDoc(doc(clients[0], path, "a"), a);
     await commit(0, path, operation(a, "start", "start", 1000));
     const bView = await read(1, path, "a");
@@ -72,7 +76,7 @@ describe("two independent Firestore clients", () => {
     expect((await getDocFromServer(collection(clients[0], path).parent!)).data()?.activeStudyTaskId).toBeNull();
   });
   it("rejects delayed STOP and pause after a new session starts", async () => {
-    const path = fixture(); const a = task("a");
+    const path = await fixture(); const a = task("a");
     await setDoc(doc(clients[0], path, "a"), a);
     await commit(0, path, operation(a, "start", "old", 1000));
     const stale = await read(0, path, "a");
@@ -84,14 +88,14 @@ describe("two independent Firestore clients", () => {
     expect(await read(0, path, "a")).toMatchObject({ sessionId: "new", isRunning: true, history: [] });
   });
   it("serializes simultaneous START on different tasks to the newer start", async () => {
-    const path = fixture(); const a = task("a"); const b = task("b");
+    const path = await fixture(); const a = task("a"); const b = task("b");
     await Promise.all([setDoc(doc(clients[0], path, "a"), a), setDoc(doc(clients[1], path, "b"), b)]);
     await Promise.all([commit(0, path, operation(a, "start", "a-start", 1000)), commit(1, path, operation(b, "start", "b-start", 2000))]);
     const saved = (await getDocsFromServer(collection(clients[0], path))).docs.map((item) => item.data());
     expect(saved.filter((item) => item.isRunning).map((item) => item.id)).toEqual(["b"]);
   });
   it("saves simultaneous STOP once without losing an earlier history entry", async () => {
-    const path = fixture(); const a = task("a", { isRunning: true, sessionStartTime: 1000, sessionId: "active", history: [{ id: "earlier", duration: 60 }] });
+    const path = await fixture(); const a = task("a", { isRunning: true, sessionStartTime: 1000, sessionId: "active", history: [{ id: "earlier", duration: 60 }] });
     await setDoc(doc(clients[0], path, "a"), a);
     const results = await Promise.all([commit(0, path, operation(a, "save", "stop-a", 601000)), commit(1, path, operation(a, "save", "stop-b", 602000))]);
     expect(results.map((result) => result.status).sort()).toEqual(["applied", "duplicate"]);
@@ -100,7 +104,7 @@ describe("two independent Firestore clients", () => {
     expect(saved.history.filter((entry) => entry.id === "active")).toHaveLength(1);
   });
   it("replays an acknowledged STOP without resetting a subsequent session", async () => {
-    const path = fixture(); const a = task("a", { isRunning: true, sessionStartTime: 1000, sessionId: "old" });
+    const path = await fixture(); const a = task("a", { isRunning: true, sessionStartTime: 1000, sessionId: "old" });
     await setDoc(doc(clients[0], path, "a"), a);
     const stop = operation(a, "save", "stop", 601000);
     await commit(0, path, stop);
@@ -109,7 +113,7 @@ describe("two independent Firestore clients", () => {
     expect(await read(0, path, "a")).toMatchObject({ sessionId: "new", isRunning: true });
   });
   it("replays an offline operation queue in order without resurrecting an old session", async () => {
-    const path = fixture(); const a = task("a");
+    const path = await fixture(); const a = task("a");
     await setDoc(doc(clients[0], path, "a"), a);
     const start = operation(a, "start", "offline-start", 1000);
     const stop: StudySessionOperation = { ...operation(a, "save", "offline-stop", 601000), sessionId: start.operationId };
@@ -127,21 +131,21 @@ describe("two independent Firestore clients", () => {
     expect(await read(0, path, "a")).toMatchObject({ sessionId: "device-b", isRunning: true, history: [] });
   });
   it("resolves identical-time START by task ID on both clients", async () => {
-    const path = fixture(); const a = task("a"); const b = task("b");
+    const path = await fixture(); const a = task("a"); const b = task("b");
     await Promise.all([setDoc(doc(clients[0], path, "a"), a), setDoc(doc(clients[1], path, "b"), b)]);
     await Promise.all([commit(0, path, operation(a, "start", "a-start", 1000)), commit(1, path, operation(b, "start", "b-start", 1000))]);
     const saved = (await getDocsFromServer(collection(clients[1], path))).docs.map((item) => item.data());
     expect(saved.filter((item) => item.isRunning).map((item) => item.id)).toEqual(["a"]);
   });
   it("does not admit two simultaneous STARTs on the same task", async () => {
-    const path = fixture(); const a = task("a");
+    const path = await fixture(); const a = task("a");
     await setDoc(doc(clients[0], path, "a"), a);
     const results = await Promise.all([commit(0, path, operation(a, "start", "start-a", 1000)), commit(1, path, operation(a, "start", "start-b", 1001))]);
     expect(results.map((result) => result.status).sort()).toEqual(["applied", "conflict"]);
     expect((await read(1, path, "a")).isRunning).toBe(true);
   });
   it("retries a committed STOP after response loss without adding a second history", async () => {
-    const path = fixture(); const a = task("a", { isRunning: true, sessionStartTime: 1000, sessionId: "active" });
+    const path = await fixture(); const a = task("a", { isRunning: true, sessionStartTime: 1000, sessionId: "active" });
     await setDoc(doc(clients[0], path, "a"), a);
     const stop = operation(a, "save", "stop", 601000);
     let queue = [stop];
@@ -161,7 +165,7 @@ describe("two independent Firestore clients", () => {
     expect(getUnclaimedRewards(entries, ["active"])).toBe(0);
   });
   it("supports legacy Timestamp starts and missing optional history or status fields", async () => {
-    const path = fixture();
+    const path = await fixture();
     await setDoc(doc(clients[0], path, "a"), { isRunning: true, currentDuration: 0, sessionStartTime: Timestamp.fromMillis(1000) });
     const legacyView = task("a", { isRunning: true, sessionStartTime: 1000 });
     expect((await commit(1, path, operation(legacyView, "save", "legacy-stop", 601000))).status).toBe("applied");
@@ -170,7 +174,7 @@ describe("two independent Firestore clients", () => {
     expect(saved.history).toEqual([expect.objectContaining({ id: "legacy-a-1000", duration: 600, creditedDuration: 600 })]);
   });
   it("keeps one active timer when another device creates a task during START", async () => {
-    const path = fixture(); const a = task("a"); const b = task("b");
+    const path = await fixture(); const a = task("a"); const b = task("b");
     await setDoc(doc(clients[0], path, "a"), a);
     const startingA = commit(0, path, operation(a, "start", "a-start", 1000));
     await setDoc(doc(clients[1], path, "b"), b);
