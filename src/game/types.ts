@@ -62,6 +62,7 @@ export type WeeklyResult = {
 };
 
 export type StudyHistoryLike = {
+  reviewStatus?: "not_required" | "pending" | "confirmed";
   id: string;
   creditedDuration?: number;
   duration: number;

@@ -1,14 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
 import { getElapsedSeconds } from "../study-utils";
 import { shortenDeviceTestId, type DeviceTestEvent } from "../device-test";
+import { getIdleDeadline, STUDY_IDLE_MS, type StudyObservation } from "../study-idle";
 
-type DiagnosticTask = {
+type DiagnosticTask = StudyObservation & {
   id: string;
   currentDuration: number;
   sessionStartTime: number | null;
   sessionId?: string;
   isRunning: boolean;
   lastUpdatedAt: number;
+  history?: { reviewStatus?: string }[];
 };
 
 const formatTimestamp = (value?: number | null) =>
@@ -103,12 +105,19 @@ export const DeviceTestPanel = ({
     ["cloud active", shortenDeviceTestId(activeStudyTaskId)],
     ["active match", activeMatch],
     ["restore", restoreState],
+    ["idle threshold", `${STUDY_IDLE_MS / 60000} min`],
+    ["last activity", formatTimestamp(task?.lastUserActivityAt)],
+    ["idle deadline", task?.isRunning ? formatTimestamp(getIdleDeadline(task)) : "-"],
+    ["hidden since", formatTimestamp(task?.hiddenSince)],
+    ["background review", String(!!task?.backgroundReviewRequired)],
+    ["review pending", String(tasks.reduce((sum, item) => sum + (item.history ?? []).filter((entry) => entry.reviewStatus === "pending").length, 0))],
+    ["review confirmed", String(tasks.reduce((sum, item) => sum + (item.history ?? []).filter((entry) => entry.reviewStatus === "confirmed").length, 0))],
   ];
 
   return (
     <aside className="fixed inset-x-2 top-2 z-[70] mx-auto max-h-[72vh] max-w-lg overflow-y-auto rounded-xl border border-emerald-400 bg-slate-950/95 p-3 font-mono text-[11px] text-slate-100 shadow-2xl">
       <div className="mb-2 flex items-center justify-between">
-        <strong className="text-emerald-300">v1.84 DEVICE TEST</strong>
+        <strong className="text-emerald-300">v1.86 DEVICE TEST</strong>
         <button type="button" onClick={() => setIsOpen(false)} className="rounded bg-slate-700 px-2 py-1 font-bold">
           閉じる
         </button>

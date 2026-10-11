@@ -10,9 +10,9 @@ export const getMonthlyGoalMinutes = (date: Date) => {
 };
 export const getWeeklyGoalMinutes = (date = new Date()) => Math.round(getMonthlyGoalMinutes(date) / 4.35);
 export const startOfWeek = (date = new Date()) => { const d = new Date(date); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() - ((d.getDay() + 6) % 7)); return d; };
-export const getWeekStudyMinutes = (entries: { duration: number; creditedDuration?: number; endAt?: number }[], now = new Date()) => {
+export const getWeekStudyMinutes = (entries: { duration: number; creditedDuration?: number; endAt?: number; reviewStatus?: string }[], now = new Date()) => {
   const start = startOfWeek(now).getTime();
-  return entries.filter((entry) => (entry.endAt ?? 0) >= start).reduce((sum, entry) => sum + Math.floor((entry.creditedDuration ?? entry.duration) / 60), 0);
+  return entries.filter((entry) => entry.reviewStatus !== "pending" && (entry.endAt ?? 0) >= start).reduce((sum, entry) => sum + Math.floor((entry.creditedDuration ?? entry.duration) / 60), 0);
 };
 export const getRivalBattle = (minutes: number, goalMinutes: number) => {
   const rate = goalMinutes ? minutes / goalMinutes : 0;

@@ -8,7 +8,9 @@ export type DeviceTestEventType =
   | "RESTORE"
   | "RETRY"
   | "ONLINE"
-  | "OFFLINE";
+  | "OFFLINE"
+  | "REVIEW_PENDING"
+  | "REVIEW_CONFIRMED";
 
 export type DeviceTestEvent = {
   id: string;

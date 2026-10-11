@@ -2,10 +2,10 @@ import { ACTIVITY_POINT_MINUTES, LESSON_COST, LESSON_GAIN, MEMBER_JOIN_COST, THI
 import { calculateBoostedPoints } from "./test-bonus";
 import type { ProducerGameState, StudyHistoryLike } from "./types";
 
-export const getSessionActivityPoints = (entry: StudyHistoryLike) => Math.floor((entry.creditedDuration ?? entry.duration) / 60 / ACTIVITY_POINT_MINUTES);
+export const getSessionActivityPoints = (entry: StudyHistoryLike) => entry.reviewStatus === "pending" ? 0 : Math.floor((entry.creditedDuration ?? entry.duration) / 60 / ACTIVITY_POINT_MINUTES);
 export const getUnclaimedRewards = (entries: StudyHistoryLike[], claimed: string[]) => entries.filter((entry) => !claimed.includes(entry.id)).reduce((sum, entry) => sum + getSessionActivityPoints(entry), 0);
 export const claimRewards = (game: ProducerGameState, entries: StudyHistoryLike[], boostPercent = 0) => {
-  const newEntries = entries.filter((entry) => !game.claimedSessionIds.includes(entry.id));
+  const newEntries = entries.filter((entry) => entry.reviewStatus !== "pending" && !game.claimedSessionIds.includes(entry.id));
   const basePoints = newEntries.reduce((sum, entry) => sum + getSessionActivityPoints(entry), 0);
   const reward = calculateBoostedPoints(basePoints, boostPercent, game.boostRemainder || 0);
   return { ...game, activityPoints: game.activityPoints + reward.totalPoints, boostRemainder: reward.remainder, claimedSessionIds: [...game.claimedSessionIds, ...newEntries.map((entry) => entry.id)] };

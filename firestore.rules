@@ -25,6 +25,62 @@ service cloud.firestore {
       match /tests/{testId} {
         allow read, create, update, delete: if isFamilyMember(familyId);
       }
+      match /dailyCalculations/{uid}/days/{dateKey} {
+        function ownCalculation() {
+          return isFamilyMember(familyId) && request.auth.uid == uid;
+        }
+        function score(value) { return value is int && value >= 0 && value <= 7; }
+        function seconds(value) { return value is int && value >= 0 && value <= 14400; }
+        function dayShape(data) {
+          return data.keys().hasOnly(['dateKey', 'attemptCount', 'firstScore', 'firstElapsedSeconds', 'latestScore', 'latestElapsedSeconds', 'bestScore', 'latestAttemptId'])
+            && data.dateKey == dateKey && dateKey.matches('^[0-9]{4}-[0-9]{2}-[0-9]{2}$')
+            && data.attemptCount is int && data.attemptCount > 0
+            && score(data.firstScore) && score(data.latestScore) && score(data.bestScore)
+            && seconds(data.firstElapsedSeconds) && seconds(data.latestElapsedSeconds)
+            && data.latestAttemptId is string;
+        }
+        function latestMatches(data) {
+          let attempt = getAfter(/databases/$(database)/documents/families/$(familyId)/dailyCalculations/$(uid)/days/$(dateKey)/attempts/$(data.latestAttemptId)).data;
+          return attempt.attemptNo == data.attemptCount && attempt.dateKey == dateKey
+            && attempt.score == data.latestScore && attempt.elapsedSeconds == data.latestElapsedSeconds;
+        }
+        allow read: if isFamilyMember(familyId);
+        allow create: if ownCalculation() && dayShape(request.resource.data) && latestMatches(request.resource.data)
+          && request.resource.data.attemptCount == 1
+          && request.resource.data.firstScore == request.resource.data.latestScore
+          && request.resource.data.bestScore == request.resource.data.latestScore
+          && request.resource.data.firstElapsedSeconds == request.resource.data.latestElapsedSeconds;
+        allow update: if ownCalculation() && dayShape(request.resource.data) && latestMatches(request.resource.data)
+          && request.resource.data.attemptCount == resource.data.attemptCount + 1
+          && request.resource.data.firstScore == resource.data.firstScore
+          && request.resource.data.firstElapsedSeconds == resource.data.firstElapsedSeconds
+          && request.resource.data.bestScore == (resource.data.bestScore > request.resource.data.latestScore ? resource.data.bestScore : request.resource.data.latestScore);
+        allow delete: if false;
+        match /attempts/{attemptId} {
+          function validAttempt(data) {
+            return data.keys().hasOnly(['id', 'dateKey', 'score', 'elapsedSeconds', 'startedAt', 'finishedAt', 'attemptNo', 'maxScore', 'attemptType', 'createdAt', 'taskId', 'taskLabel'])
+              && (!('taskId' in data) || (data.taskId is string && data.taskId.size() > 0 && data.taskId.size() <= 200
+                && get(/databases/$(database)/documents/families/$(familyId)/tasks/$(data.taskId)).data.subject == 'math'
+                && get(/databases/$(database)/documents/families/$(familyId)/tasks/$(data.taskId)).data.category == '計算'))
+              && (!('taskLabel' in data) || ('taskId' in data && data.taskLabel is string && data.taskLabel.size() > 0 && data.taskLabel.size() <= 300))
+              && data.id == attemptId && data.dateKey == dateKey && data.dateKey is string
+              && score(data.score) && seconds(data.elapsedSeconds) && data.maxScore == 7
+              && data.attemptNo is int && data.attemptNo > 0
+              && data.attemptType == (data.attemptNo == 1 ? 'first' : 'redo')
+              && data.startedAt is number && data.startedAt >= 0 && data.finishedAt is number && data.finishedAt >= data.startedAt
+              && data.createdAt is number && data.createdAt >= 0;
+          }
+          function sequenceMatches(data) {
+            let day = /databases/$(database)/documents/families/$(familyId)/dailyCalculations/$(uid)/days/$(dateKey);
+            return data.attemptNo == (exists(day) ? get(day).data.attemptCount + 1 : 1)
+              && getAfter(day).data.attemptCount == data.attemptNo
+              && getAfter(day).data.latestAttemptId == attemptId;
+          }
+          allow read: if isFamilyMember(familyId);
+          allow create: if ownCalculation() && validAttempt(request.resource.data) && sequenceMatches(request.resource.data);
+          allow update, delete: if false;
+        }
+      }
       match /rewardLedger/{rewardKey} {
         allow read, create: if isFamilyMember(familyId);
       }

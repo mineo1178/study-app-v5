@@ -1,5 +1,14 @@
 import { commitTokyoDomePerformance, prepareTokyoDomePerformance, type TokyoDomeResult } from "./game/tokyo-dome";
 import { getStudyRewardPreview } from "./game/study-reward-preview";
+import { DailyCalculation, CalculationInput } from "./components/DailyCalculation";
+import { isCalculationTask } from "./daily-calculation-view";
+import type { CalculationAttempt } from "./daily-calculation";
+import { StudyReview } from "./components/StudyReview";
+import { useStudyObserver } from "./use-study-observer";
+import type { StudyObservation } from "./study-idle";
+import { getIdleDeadline } from "./study-idle";
+import type { ReviewReason } from "./study-idle";
+import type { StudyHistoryEntry } from "./study-utils";
 import { commitArenaPerformance, prepareArenaPerformance, type ArenaResult } from "./game/arena";
 import type { ArenaLiveId } from "./game/arena-progression";
 import React, {
@@ -67,6 +76,7 @@ import {
   doc,
   setDoc,
   getDocs,
+  getDocsFromServer,
   onSnapshot,
   updateDoc,
   deleteDoc,
@@ -95,7 +105,7 @@ import { canRecruitThirdMember, claimRewards, getSessionActivityPoints, getUncla
 import type { ProducerGameState } from "./game/types";
 import { getNextBonusGap, getTestBoost, type TestKind } from "./game/test-bonus";
 import { calculateBoostedPoints, getHighestBoost } from "./game/test-bonus";
-import { createWeeklyResult, getUnfinalizedWeeks, mergeWeeklyResults } from "./game/weekly";
+import { createWeeklyResult, getUnfinalizedWeeks, hasPendingStudyReviewForWeek, mergeWeeklyResults } from "./game/weekly";
 import { commitStudySessionOperation, createStudySessionOperation, drainStudySessionOperations, getStudySessionId, prepareStudySessionOperation, type StudySessionOperation } from "./study-session";
 import type { WeeklyResult } from "./game/types";
 import type { Performance, RivalBattleRecord } from "./game/types";
@@ -161,7 +171,7 @@ if (hasFirebaseConfig) {
 // ==========================================
 
 const FAMILY_ID = "oomine-study-2026";
-const APP_VERSION = "v1.84";
+const APP_VERSION = "v1.86";
 
 // Firestore Path 固定（変更禁止）
 // 実DB構造:
@@ -223,7 +233,7 @@ interface SubjectConfig {
   hex: string;
 }
 
-interface Task {
+interface Task extends StudyObservation {
   id: string;
   unit: string;
   subject: Subject;
@@ -239,7 +249,7 @@ interface Task {
   lastUpdatedAt: number;
   pendingSync?: boolean;
   currentMemo: string;
-  history: {
+  history: (StudyHistoryEntry & {
     id: string;
     date: string;
     duration: number;
@@ -248,8 +258,9 @@ interface Task {
     endAt?: number;
     creditedDuration?: number;
     reviewFlags?: SessionReviewFlag[];
-  }[];
+  })[];
   sessionReviewFlags?: SessionReviewFlag[];
+  sessionReviewReasons?: ReviewReason[];
   createdAt: string;
 }
 
@@ -600,7 +611,7 @@ const StrictTimer = React.memo(
       return getElapsedSeconds(task);
     }, [task]);
 
-    // タイマーは紙の教材に集中している間も継続する。無操作による停止はしない。
+    // 表示更新。操作・無操作の監視は画面全体のobserverで行う。
     useEffect(() => {
       setLocalSeconds(getElapsedSeconds(task));
       if (isRunning) {
@@ -631,7 +642,7 @@ const StrictTimer = React.memo(
 
         const startTime = Date.now();
         const operation = createStudySessionOperation(task, "start", startTime);
-        reviewFlagsRef.current = [];
+        reviewFlagsRef.current = task.currentDuration > 0 ? task.sessionReviewFlags ?? [] : [];
         hiddenAtRef.current = null;
 
         updateLocalTask(task.id, {
@@ -641,7 +652,9 @@ const StrictTimer = React.memo(
         lastActivityAt: startTime,
         lastUpdatedAt: startTime,
         pendingSync: true,
-        sessionReviewFlags: [],
+        sessionReviewFlags: task.currentDuration > 0 ? task.sessionReviewFlags ?? [] : [],
+        lastUserActivityAt: startTime,
+        hiddenSince: null,
         status:
           task.status === "not_started" || task.status === "completed"
             ? "in_progress"
@@ -654,7 +667,7 @@ const StrictTimer = React.memo(
         sessionStartTime: startTime,
         lastActivityAt: startTime,
         lastUpdatedAt: startTime,
-        sessionReviewFlags: [],
+        sessionReviewFlags: reviewFlagsRef.current,
         status:
           task.status === "not_started" || task.status === "completed"
             ? "in_progress"
@@ -666,27 +679,10 @@ const StrictTimer = React.memo(
     };
 
     const handlePauseClick = () => {
-      const accurateSecs = getAccurateSeconds();
       const now = Date.now();
       const operation = createStudySessionOperation(task, "pause", now);
-
-      updateLocalTask(task.id, {
-        isRunning: false,
-        currentDuration: accurateSecs,
-        sessionStartTime: null,
-        sessionId: operation.sessionId,
-        lastActivityAt: now,
-        lastUpdatedAt: now,
-        pendingSync: true,
-      });
-
       syncTaskToCloud(task.id, {
         __studyOperation: operation,
-        isRunning: false,
-        currentDuration: accurateSecs,
-        sessionStartTime: null,
-        lastActivityAt: now,
-        lastUpdatedAt: now,
       });
     };
 
@@ -695,25 +691,11 @@ const StrictTimer = React.memo(
       finishInFlightRef.current = true;
       setIsSaving(true);
       const finalDuration = getAccurateSeconds(); // 古いlocalSecondsではなく正確な時間を再計算
-      const now = Date.now();
       const reviewFlags = getSessionReviewFlags(finalDuration, reviewFlagsRef.current);
-
-      updateLocalTask(task.id, {
-        isRunning: false,
-        currentDuration: finalDuration,
-        sessionStartTime: null,
-        lastActivityAt: now,
-        lastUpdatedAt: now,
-        pendingSync: true,
-        sessionReviewFlags: reviewFlags,
-      });
       try {
         await onSaveRecord({
           ...task,
           sessionId: getStudySessionId(task),
-          currentDuration: finalDuration,
-          isRunning: false,
-          sessionStartTime: null,
           sessionReviewFlags: reviewFlags,
         });
       } finally {
@@ -1282,6 +1264,8 @@ const TaskDetailModal = ({
   onSaveRecord,
   onDelete,
   pauseAllOtherTasks,
+  calculationInput,
+  calculationRunning,
 }: any) => {
   if (!task) return null;
   const conf = SUBJECT_CONFIG[task.subject as Subject];
@@ -1373,10 +1357,11 @@ const TaskDetailModal = ({
             </div>
           </div>
 
-          <div className="space-y-2 md:space-y-3 bg-white p-4 md:p-5 lg:p-6 rounded-2xl md:rounded-3xl border border-slate-200 shadow-sm">
+          {calculationInput}
+          <fieldset disabled={calculationRunning} className="space-y-2 md:space-y-3 bg-white p-4 md:p-5 lg:p-6 rounded-2xl md:rounded-3xl border border-slate-200 shadow-sm">
             <label className="text-[10px] md:text-[11px] lg:text-xs font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1 md:gap-2">
               <Clock className="w-3 h-3 md:w-4 md:h-4 lg:w-5 lg:h-5" />{" "}
-              計測タイマー (不正防止対応)
+              {isCalculationTask(task) ? "学習時間の記録（計算の計測中はお休み）" : "計測タイマー (不正防止対応)"}
             </label>
             <StrictTimer
               task={task}
@@ -1385,7 +1370,7 @@ const TaskDetailModal = ({
               onSaveRecord={onSaveRecord}
               pauseAllOtherTasks={pauseAllOtherTasks}
             />
-          </div>
+          </fieldset>
 
           <div className="space-y-2 md:space-y-3">
             <label className="text-[10px] md:text-[11px] lg:text-xs font-bold text-slate-400 uppercase tracking-wider px-1 md:px-2">
@@ -1443,6 +1428,7 @@ const TaskDetailModal = ({
                         <span className="text-xs md:text-sm lg:text-base font-bold text-blue-600 font-mono flex items-center gap-1 md:gap-1.5">
                           <Clock className="w-2.5 h-2.5 md:w-3.5 md:h-3.5 lg:w-4 lg:h-4" />
                           {formatTime(h.duration)}
+                          {h.reviewStatus === "pending" && <span>確認待ち</span>}
                         </span>
                       </div>
                       {h.memo && (
@@ -1501,7 +1487,7 @@ const SubjectSection = ({
     (acc: number, curr: Task) =>
       acc +
       curr.currentDuration +
-      curr.history.reduce((hAcc, h) => hAcc + h.duration, 0),
+      curr.history.reduce((hAcc, h) => hAcc + (h.reviewStatus === "pending" ? 0 : h.duration), 0),
     0,
   );
   const completedCount = subjTasks.filter(
@@ -1634,6 +1620,7 @@ type TodayTimelineSession = {
   startAt: number;
   endAt: number;
   isRunning?: boolean;
+  reviewPending?: boolean;
 };
 
 const ActiveStudyTimerPanel = ({ tasks }: { tasks: Task[] }) => {
@@ -1656,7 +1643,7 @@ const ActiveStudyTimerPanel = ({ tasks }: { tasks: Task[] }) => {
   const conf = SUBJECT_CONFIG[runningTask.subject];
   const currentSeconds = getElapsedSeconds(runningTask, now);
   const historyTotalSeconds = runningTask.history.reduce(
-    (sum, h) => sum + h.duration,
+    (sum, h) => sum + (h.reviewStatus === "pending" ? 0 : h.duration),
     0,
   );
   const cumulativeSeconds = historyTotalSeconds + currentSeconds;
@@ -1756,6 +1743,7 @@ const TodayStudyTimeline = ({ tasks, game, gacha }: { tasks: Task[]; game: Produ
           unit: task.unit,
           category: task.category,
           duration: h.duration,
+          reviewPending: h.reviewStatus === "pending",
           startAt,
           endAt,
         });
@@ -1789,6 +1777,7 @@ const TodayStudyTimeline = ({ tasks, game, gacha }: { tasks: Task[]; game: Produ
     const normalized: TodayTimelineSession[] = [];
 
     sessions.forEach((session) => {
+      if (session.reviewPending) return;
       const startAt = Math.min(session.startAt, session.endAt);
       const endAt = Math.max(session.startAt, session.endAt);
       if (endAt - startAt < 1000) return;
@@ -1856,6 +1845,7 @@ const TodayStudyTimeline = ({ tasks, game, gacha }: { tasks: Task[]; game: Produ
   }, [sessions]);
 
   const totalSeconds = displaySessions.reduce((sum, s) => sum + s.duration, 0);
+  const pendingSessions = sessions.filter((session) => session.reviewPending);
 
   const range = useMemo(() => {
     const minute = 60 * 1000;
@@ -1963,7 +1953,7 @@ const TodayStudyTimeline = ({ tasks, game, gacha }: { tasks: Task[]; game: Produ
           <p className="text-[10px] md:text-xs lg:text-sm font-bold text-slate-400 mt-1">
             何時にどの教科を勉強したかを、実績時間に合わせた横軸で表示します
           </p>
-          {sessions.length !== displaySessions.length && (
+          {sessions.length - pendingSessions.length !== displaySessions.length && (
             <p className="text-[10px] md:text-xs font-bold text-amber-500 mt-1">
               重複していた時間帯は、後から始めた記録を優先して表示しています
             </p>
@@ -1982,6 +1972,7 @@ const TodayStudyTimeline = ({ tasks, game, gacha }: { tasks: Task[]; game: Produ
         </div>
       </div>
 
+      {pendingSessions.map((session) => <p key={session.id} className="mb-2 rounded-xl bg-amber-50 p-3 text-sm font-bold">{SUBJECT_CONFIG[session.subject].label} / {session.title} / {formatTime(session.duration)}：確認待ち</p>)}
       {displaySessions.length === 0 ? (
         <div className="text-center py-8 md:py-10 bg-slate-50 rounded-2xl border border-dashed border-slate-200">
           <div className="text-sm md:text-base font-bold text-slate-400">
@@ -2688,7 +2679,7 @@ const TestsView = ({ tests, onSaveTest, onDeleteTest }: any) => {
   );
 };
 
-const AchievementsView = ({ tasks }: { tasks: Task[] }) => {
+const AchievementsView = ({ tasks, calculationRecords }: { tasks: Task[]; calculationRecords: React.ReactNode }) => {
   const [dateRange, setDateRange] = useState({
     start: new Date(Date.now() - 14 * 24 * 60 * 60 * 1000)
       .toISOString()
@@ -2732,6 +2723,7 @@ const AchievementsView = ({ tasks }: { tasks: Task[] }) => {
 
     tasks.forEach((task) => {
       task.history.forEach((h) => {
+        if (h.reviewStatus === "pending") return;
         const [m, d] = h.date.split("/").map(Number);
         const hDate = new Date(new Date().getFullYear(), m - 1, d);
         if (new Date().getMonth() < 3 && m > 9)
@@ -2866,6 +2858,7 @@ const AchievementsView = ({ tasks }: { tasks: Task[] }) => {
       </div>
 
       <div className="flex-1 overflow-y-auto px-3 py-4 md:px-6 md:py-6 lg:px-8 lg:py-8 space-y-4 md:space-y-6 lg:space-y-8 pb-20 md:pb-32">
+        {calculationRecords}
         <div className="bg-white p-3 md:p-5 lg:p-6 rounded-2xl md:rounded-3xl shadow-sm border border-slate-200 h-52 md:h-80 lg:h-[28rem] shrink-0">
           <h3 className="text-[10px] md:text-sm lg:text-base font-bold text-slate-500 mb-1 md:mb-3 flex items-center gap-1 md:gap-1.5">
             <BarChart2 className="w-3 h-3 md:w-4 md:h-4 lg:w-5 lg:h-5" />{" "}
@@ -3194,6 +3187,8 @@ export default function App() {
   const [deviceRestoreState, setDeviceRestoreState] = useState("not checked");
 
   const [activeTab, setActiveTab] = useState("daily");
+  const [calculationRunning, setCalculationRunning] = useState(false);
+  const [sampleCalculationAttempts, setSampleCalculationAttempts] = useState<CalculationAttempt[]>([]);
   const [tasks, setTasks] = useState<Task[]>([]);
   const [tests, setTests] = useState<TestResult[]>([]);
   const [game, setGame] = useState<ProducerGameState>(createInitialGameState);
@@ -3476,6 +3471,7 @@ export default function App() {
   // ==========================================
 
   const updateLocalTask = useCallback((id: string, updates: Partial<Task>) => {
+    tasksRef.current = tasksRef.current.map((task) => task.id === id ? { ...task, ...updates } : task);
     setTasks((prev) =>
       prev.map((t) => (t.id === id ? { ...t, ...updates } : t)),
     );
@@ -3514,6 +3510,10 @@ export default function App() {
 
   const syncTaskToCloud = useCallback(
     async (id: string, cloudUpdates: any) => {
+      if (cloudUpdates.__studyOperation?.kind === "pause") {
+        const local = prepareStudySessionOperation(tasksRef.current, cloudUpdates.__studyOperation);
+        local.updates.forEach((updates, taskId) => updateLocalTask(taskId, { ...updates, pendingSync: !isSampleMode } as Partial<Task>));
+      }
       const dbInstance = getSafeDb();
       if (!dbInstance || !auth?.currentUser || isSampleMode) return;
       if (cloudUpdates.__studyOperation) {
@@ -3526,12 +3526,14 @@ export default function App() {
             : currentTask && currentTask.currentDuration > 0
               ? "RESUME"
               : "START";
-        recordDeviceTestEvent({
+        if (operation.kind !== "observe") recordDeviceTestEvent({
           type: eventType,
           taskId: operation.taskId,
           sessionId: operation.kind === "start" ? operation.operationId : operation.sessionId,
         });
         const queued = getPendingSessionOperations();
+        const tail = queued.at(-1);
+        if (operation.kind === "observe" && !operation.visibility && queued.length > 1 && tail?.kind === "observe" && !tail.visibility && tail.taskId === operation.taskId && tail.sessionId === operation.sessionId) queued.pop();
         if (!queued.some((item) => item.operationId === operation.operationId)) setCache(CACHE_KEY_SESSION_OPERATIONS, [...queued, operation]);
         try {
           await flushStudySessionOperations();
@@ -3616,6 +3618,8 @@ export default function App() {
       window.removeEventListener("pageshow", retryPageShow);
     };
   }, [flushPendingTaskUpdates, recordDeviceTestEvent]);
+
+  useStudyObserver(tasksRef, updateLocalTask, syncTaskToCloud);
 
   // グローバルタイマー制御：稼働中タイマーは常に最新1件だけに補正する。
   useEffect(() => {
@@ -3717,10 +3721,12 @@ export default function App() {
   };
 
   const saveHistoryRecord = async (task: Task) => {
-    if (task.currentDuration === 0) return;
-    const operation = createStudySessionOperation(task, "save");
+    const latest = tasksRef.current.find((item) => item.id === task.id);
+    if (!latest || getStudySessionId(latest) !== getStudySessionId(task) || getElapsedSeconds(latest) === 0) return;
+    const current = { ...latest, sessionReviewFlags: Array.from(new Set([...(latest.sessionReviewFlags ?? []), ...(task.sessionReviewFlags ?? [])])) };
+    const operation = createStudySessionOperation(current, "save");
     // STOPとhistory追加を分割しない。クラウド上の最新historyに一度だけ追加する。
-    const local = prepareStudySessionOperation([task], operation);
+    const local = prepareStudySessionOperation([current], operation);
     const updates = local.updates.get(task.id);
     if (updates) updateLocalTask(task.id, { ...updates, pendingSync: !isSampleMode } as Partial<Task>);
     if (!isSampleMode) await syncTaskToCloud(task.id, { __studyOperation: operation });
@@ -3728,9 +3734,30 @@ export default function App() {
   };
 
   const allStudyEntries = useMemo(
-    () => tasks.flatMap((task) => task.history.map((entry) => ({ ...entry, id: entry.id || `${task.id}-${entry.endAt || entry.date}` }))),
+    () => tasks.flatMap((task) => task.history.filter((entry) => entry.reviewStatus !== "pending").map((entry) => ({ ...entry, taskId: task.id, id: entry.id || `${task.id}-${entry.endAt || entry.date}` }))),
     [tasks],
   );
+  const pendingReviews = useMemo(() => tasks.flatMap((task) => task.history.filter((entry) => entry.reviewStatus === "pending").map((entry) => ({ taskId: task.id, subject: SUBJECT_CONFIG[task.subject].label, title: task.title, entry }))), [tasks]);
+  const confirmStudyTime = async (taskId: string, sessionId: string, seconds: number) => {
+    const operation: StudySessionOperation = { operationId: crypto.randomUUID(), kind: "confirm", taskId, sessionId, at: Date.now(), confirmedDurationSeconds: seconds };
+    const task = tasksRef.current.find((item) => item.id === taskId);
+    if (!task) throw new Error("記録が見つかりません。");
+    if (isSampleMode) {
+      const result = prepareStudySessionOperation([task], operation);
+      const updates = result.updates.get(taskId);
+      if (updates) updateLocalTask(taskId, updates as Partial<Task>);
+      return;
+    }
+    if (!db || !auth?.currentUser) throw new Error("接続を確認してね。");
+    await flushStudySessionOperations();
+    const result = await commitStudySessionOperation(db, getTasksCol(db), operation);
+    if (result.status === "conflict" || result.status === "missing") throw new Error("記録を確認してね。");
+    const saved = result.tasks.find((item) => item.id === taskId);
+    const confirmed = saved?.history.find((entry) => entry.id === sessionId);
+    const latestLocal = tasksRef.current.find((item) => item.id === taskId);
+    if (confirmed && latestLocal) updateLocalTask(taskId, { history: latestLocal.history.map((entry) => entry.id === sessionId ? { ...entry, ...confirmed } : entry) });
+    recordDeviceTestEvent({ type: "REVIEW_CONFIRMED", taskId, sessionId, detail: `${confirmed?.duration ?? seconds}s` });
+  };
   const currentBoostPercent = useMemo(() => {
     const kinds: Record<string, TestKind> = { curriculum: "カリテ", kumiwake: "組分け", hantei: "判定" };
     const boosts = Object.entries(kinds).map(([type, kind]) => {
@@ -3754,7 +3781,9 @@ export default function App() {
         const gameSnapshot = await transaction.get(gameRef);
         const current = gameSnapshot.exists() ? gameSnapshot.data() as ProducerGameState : createInitialGameState();
         const ledgerSnapshots = await Promise.all(entries.map((entry) => transaction.get(getRewardLedgerDoc(dbInstance, entry.id))));
-        const unclaimed = entries.filter((_, index) => !ledgerSnapshots[index].exists());
+        const sourceSnapshots = await Promise.all([...new Set(entries.map((entry) => entry.taskId))].map((id) => transaction.get(getTaskDoc(dbInstance, id))));
+        const persistedEntries = sourceSnapshots.flatMap((snapshot) => ((snapshot.data()?.history ?? []) as Task["history"]).map((entry) => ({ ...entry, id: entry.id || `${snapshot.id}-${toMillis(entry.endAt) || entry.date}` })));
+        const unclaimed = entries.filter((entry, index) => !ledgerSnapshots[index].exists() && persistedEntries.some((saved) => saved.id === entry.id && saved.reviewStatus !== "pending" && saved.duration === entry.duration && saved.creditedDuration === entry.creditedDuration));
         const basePoints = unclaimed.reduce((total, entry) => total + getSessionActivityPoints(entry), 0);
         const boosted = calculateBoostedPoints(basePoints, currentBoostPercent, current.boostRemainder || 0);
         for (const [index, entry] of unclaimed.entries()) {
@@ -3775,13 +3804,15 @@ export default function App() {
     if (dates.length === 0) return;
     if (isSampleMode || !auth?.currentUser || !getSafeDb()) {
       let nextGame = game;
-      const finalized = dates.map((date) => {
+      const finalized: WeeklyResult[] = [];
+      for (const date of dates) {
+        if (hasPendingStudyReviewForWeek(tasksRef.current.flatMap((task) => task.history), date)) break;
         const result = createWeeklyResult(nextGame, allStudyEntries, date);
         nextGame = { ...nextGame, fans: result.fanAfter };
         const reward = calculateWeeklyGachaReward(result.achievementRate, result.endAt);
         if (reward) setGachaState((current) => grantWeeklyGachaReward(current, reward));
-        return result;
-      });
+        finalized.push(result);
+      }
       setGame(nextGame);
       setWeeklyResults((current) => mergeWeeklyResults(current, finalized));
       return;
@@ -3789,6 +3820,8 @@ export default function App() {
     const dbInstance = getSafeDb()!;
     try {
       const finalized: WeeklyResult[] = [];
+      await flushStudySessionOperations();
+      const taskRefs = (await getDocsFromServer(getTasksCol(dbInstance))).docs.map((item) => item.ref);
       for (const date of dates) {
         const weekId = createWeeklyResult(game, allStudyEntries, date).weekId;
         const result = await runTransaction(dbInstance, async (transaction) => {
@@ -3796,21 +3829,33 @@ export default function App() {
           if (existing.exists()) return existing.data() as WeeklyResult;
           const gameRef = getGameDoc(dbInstance); const gameSnapshot = await transaction.get(gameRef);
           const current = gameSnapshot.exists() ? gameSnapshot.data() as ProducerGameState : createInitialGameState();
-          const week = createWeeklyResult(current, allStudyEntries, date);
+          const taskSnapshots = await Promise.all(taskRefs.map((ref) => transaction.get(ref)));
+          const weekBounds = createWeeklyResult(current, [], date);
+          if (taskSnapshots.some((snapshot) => {
+            const task = normalizeTask({ ...snapshot.data(), id: snapshot.id } as Task);
+            const deadline = getIdleDeadline(task);
+            return task.isRunning && deadline <= Date.now() && deadline >= weekBounds.startAt && deadline <= weekBounds.endAt;
+          })) return null;
+          const history = taskSnapshots.flatMap((snapshot) => (snapshot.data()?.history ?? []) as Task["history"]);
+          if (hasPendingStudyReviewForWeek(history, date)) return null;
+          const persistedEntries = history.filter((entry) => entry.reviewStatus !== "pending");
+          const week = createWeeklyResult(current, persistedEntries, date);
           const reward = calculateWeeklyGachaReward(week.achievementRate, week.endAt); const gachaWeekRef = getGachaWeekDoc(dbInstance, week.weekId); const gachaRef = getGachaStateDoc(dbInstance); const [gachaWeekSnapshot, gachaSnapshot] = await Promise.all([transaction.get(gachaWeekRef), transaction.get(gachaRef)]);
           transaction.set(weekRef, week); transaction.set(gameRef, { ...current, fans: week.fanAfter });
           if (week.endAt >= GACHA_FEATURE_START_DATE && !gachaWeekSnapshot.exists()) { const gacha = grantWeeklyGachaReward(normalizeGachaState(gachaSnapshot.exists() ? gachaSnapshot.data() as Partial<GachaState> : undefined), reward); const gachaWeek: GachaWeek = { weekId: week.weekId, targetMinutes: week.targetMinutes, creditedMinutes: week.actualMinutes, achievementRate: week.achievementRate, reward, grantedAt: Date.now() }; transaction.set(gachaWeekRef, gachaWeek); transaction.set(gachaRef, gacha); }
           return week;
         });
+        if (!result) break;
         finalized.push(result);
       }
+      if (!finalized.length) return;
       const latest = finalized[finalized.length - 1];
       setGame((current) => ({ ...current, fans: latest.fanAfter }));
       setWeeklyResults((current) => mergeWeeklyResults(current, finalized));
       const gachaSnapshot = await getDoc(getGachaStateDoc(dbInstance));
       if (gachaSnapshot.exists()) setGachaState(normalizeGachaState(gachaSnapshot.data() as Partial<GachaState>));
     } catch { setSyncState("offline"); }
-  }, [allStudyEntries, game, isSampleMode, weeklyResults]);
+  }, [allStudyEntries, game, isSampleMode, weeklyResults, flushStudySessionOperations]);
 
   useEffect(() => {
     let cancelled = false;
@@ -4304,6 +4349,7 @@ export default function App() {
       </header>
 
       <main className="flex-1 overflow-y-auto overscroll-contain no-scrollbar flex flex-col pb-24 md:pb-32 lg:pb-40">
+        <StudyReview records={pendingReviews} onConfirm={confirmStudyTime} />
         {activeTab === "daily" ? (
           <DailyView
             game={game}
@@ -4375,7 +4421,7 @@ export default function App() {
             onPerformMajorDebut={performMajorDebut}
           />
         ) : (
-          <AchievementsView tasks={tasks} />
+          <AchievementsView tasks={tasks} calculationRecords={<DailyCalculation key={`${user?.uid ?? "sample"}-${isSampleMode}`} db={db} familyId={FAMILY_ID} uid={isSampleMode ? "sample" : user!.uid} sample={isSampleMode} sampleAttempts={sampleCalculationAttempts} />} />
         )}
       </main>
 
@@ -4455,6 +4501,12 @@ export default function App() {
           updateLocalTask={updateLocalTask}
           syncTaskToCloud={syncTaskToCloud}
           onSaveRecord={saveHistoryRecord}
+          calculationRunning={calculationRunning}
+          calculationInput={(() => {
+            const task = tasks.find(item => item.id === detailTaskId);
+            if (!task || !isCalculationTask(task)) return null;
+            return <CalculationInput key={`${user?.uid ?? "sample"}-${isSampleMode}-${task.id}`} db={db} familyId={FAMILY_ID} uid={isSampleMode ? "sample" : user!.uid} sample={isSampleMode} sampleAttempts={sampleCalculationAttempts} onSampleSave={attempt => setSampleCalculationAttempts(current => current.some(item => item.id === attempt.id) ? current : [...current, attempt])} diagnostic={DEVICE_TEST_ENABLED} onRunningChange={setCalculationRunning} taskId={task.id} taskLabel={`${task.unit} / 計算${task.title}`} blocked={tasks.some(item => item.isRunning) || task.currentDuration > 0} />;
+          })()}
           onDelete={() => {
             setConfirmModalData({
               title: "タスクの削除",

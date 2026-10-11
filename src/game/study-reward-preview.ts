@@ -25,6 +25,6 @@ export const getStudyRewardPreview = (tasks: PreviewTask[], entries: StudyHistor
   }
   if (Object.values(gacha.itemInventory).some((count) => count > 0)) candidates.push({ id: "item-ready", remaining: 0, text: "アイテムでメンバーを育てられるよ！" });
   const day = (time: number) => new Date(time).toLocaleDateString("en-CA", { timeZone: "Asia/Tokyo" });
-  const todayMinutes = entries.filter((entry) => entry.endAt && day(entry.endAt) === day(now)).reduce((total, entry) => total + Math.floor((entry.creditedDuration ?? entry.duration) / 60), 0);
+  const todayMinutes = entries.filter((entry) => entry.reviewStatus !== "pending" && entry.endAt && day(entry.endAt) === day(now)).reduce((total, entry) => total + Math.floor((entry.creditedDuration ?? entry.duration) / 60), 0);
   return { todayMinutes: todayMinutes + credited, rewards: candidates.sort((a, b) => a.remaining - b.remaining).slice(0, 3), capped: seconds >= MAX_CREDITED_STUDY_SECONDS && !flags.length };
 };

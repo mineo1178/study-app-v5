@@ -11,6 +11,10 @@ export const LONG_SESSION_SECONDS = 120 * 60;
 export const LONG_BACKGROUND_SECONDS = 30 * 60;
 
 export type StudyHistoryEntry = {
+  reviewStatus?: "not_required" | "pending" | "confirmed";
+  reviewReasons?: ("idle" | "background")[];
+  recordedDuration?: number;
+  confirmedDurationSeconds?: number;
   duration: number;
   date?: string;
   startAt?: number;
@@ -119,7 +123,7 @@ export const getSessionReviewFlags = (
   );
 
 export const getStudyDuration = (task: StudyTaskLike) =>
-  task.currentDuration + task.history.reduce((total, entry) => total + entry.duration, 0);
+  task.currentDuration + task.history.reduce((total, entry) => total + (entry.reviewStatus === "pending" ? 0 : entry.duration), 0);
 
 export const getTaskStats = (tasks: StudyTaskLike[]) => {
   if (tasks.length === 0) return { progress: 0, totalTime: 0 };
