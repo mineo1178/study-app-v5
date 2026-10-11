@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest";
 import { calculationAttemptLabel, calculationDayState, calculationStorageKey, getCalculationElapsedSeconds, getJstDateKey, MAX_CALCULATION_SECONDS, summarizeCalculation, validateCalculationDraft, type CalculationAttempt, type CalculationDay } from "./daily-calculation";
 const attempt = (attemptNo: number, score = 3, elapsedSeconds = 260): CalculationAttempt => ({ id: `attempt-${attemptNo}`, dateKey: "2026-10-10", score, maxScore: 7, elapsedSeconds, startedAt: Date.parse("2026-10-10T00:00:00+09:00"), finishedAt: Date.parse("2026-10-10T00:10:00+09:00"), attemptNo, attemptType: attemptNo === 1 ? "first" : "redo", createdAt: 1 });
 describe("daily calculation records", () => {
+  it.each([[999, 0], [1000, 1], [1999, 1], [2000, 2]])("counts whole seconds at %sms without counting timer callbacks", (milliseconds, expected) => {
+    expect(getCalculationElapsedSeconds(0, 1234, 1234 + milliseconds)).toBe(expected);
+    expect(getCalculationElapsedSeconds(150, 1234, 1234 + milliseconds)).toBe(150 + expected);
+  });
   it("uses a monotonic anchor, keeps running beyond 15 minutes and never adds repeated ticks twice", () => {
     expect(getCalculationElapsedSeconds(0, 1000, 1000 + 16 * 60000)).toBe(960);
     expect(getCalculationElapsedSeconds(30, 1000, 16000)).toBe(45);
