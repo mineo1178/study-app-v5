@@ -171,7 +171,7 @@ if (hasFirebaseConfig) {
 // ==========================================
 
 const FAMILY_ID = "oomine-study-2026";
-const APP_VERSION = "v1.86.1";
+const APP_VERSION = "v1.86.2";
 
 // Firestore Path 固定（変更禁止）
 // 実DB構造:
@@ -599,12 +599,15 @@ const StrictTimer = React.memo(
   }) => {
     const [localSeconds, setLocalSeconds] = useState(task.currentDuration);
     const [isSaving, setIsSaving] = useState(false);
+    const [saveError, setSaveError] = useState("");
     const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const startInFlightRef = useRef(false);
     const finishInFlightRef = useRef(false);
     const hiddenAtRef = useRef<number | null>(null);
     const reviewFlagsRef = useRef<SessionReviewFlag[]>(task.sessionReviewFlags || []);
     const isRunning = task.isRunning;
+    const savedAfterRetry = !!saveError && !task.pendingSync && task.currentDuration === 0 && task.history.some((entry) => entry.id === getStudySessionId(task));
+    const savePending = getPendingSessionOperations().some((operation) => operation.kind === "save" && operation.taskId === task.id && operation.sessionId === getStudySessionId(task));
 
     // 正確な現在秒数を計算するヘルパー（バックグラウンド等で表示が遅延しても正しい秒数を得る）
     const getAccurateSeconds = useCallback(() => {
@@ -634,7 +637,8 @@ const StrictTimer = React.memo(
 
     const handlePlay = async (e?: React.MouseEvent) => {
       e?.stopPropagation();
-      if (task.isRunning || startInFlightRef.current || isSaving) return;
+      if (task.isRunning || startInFlightRef.current || isSaving || savePending) return;
+      setSaveError("");
       startInFlightRef.current = true;
       // タイマー排他制御：他のタイマーをすべてストップさせる
       try {
@@ -690,6 +694,7 @@ const StrictTimer = React.memo(
       if (finishInFlightRef.current || isSaving || localSeconds === 0) return;
       finishInFlightRef.current = true;
       setIsSaving(true);
+      setSaveError("");
       const finalDuration = getAccurateSeconds(); // 古いlocalSecondsではなく正確な時間を再計算
       const reviewFlags = getSessionReviewFlags(finalDuration, reviewFlagsRef.current);
       try {
@@ -698,6 +703,8 @@ const StrictTimer = React.memo(
           sessionId: getStudySessionId(task),
           sessionReviewFlags: reviewFlags,
         });
+      } catch {
+        setSaveError("保存できなかったよ。時間はこの端末に残っているので、通信を確認してもう一度保存してね。");
       } finally {
         finishInFlightRef.current = false;
         setIsSaving(false);
@@ -726,6 +733,7 @@ const StrictTimer = React.memo(
                 onClick={handlePlay}
                 aria-label="学習タイマーを開始"
                 title="学習タイマーを開始"
+                disabled={isSaving || savePending}
                 className="w-12 h-12 md:w-14 md:h-14 lg:w-16 lg:h-16 flex items-center justify-center rounded-full bg-blue-600 text-white shadow-lg active:scale-95 hover:bg-blue-700 transition-all"
               >
                 <Play
@@ -739,6 +747,7 @@ const StrictTimer = React.memo(
                 onClick={handlePauseClick}
                 aria-label="学習タイマーを一時停止"
                 title="学習タイマーを一時停止"
+                disabled={isSaving}
                 className="w-12 h-12 md:w-14 md:h-14 lg:w-16 lg:h-16 flex items-center justify-center rounded-full bg-amber-500 text-white shadow-lg active:scale-95 hover:bg-amber-600 transition-all"
               >
                 <Pause
@@ -759,6 +768,10 @@ const StrictTimer = React.memo(
           <History className="w-[18px] h-[18px] md:w-5 md:h-5 lg:w-6 lg:h-6" />{" "}
           {isSaving ? "記録を保存中..." : "計測を終了して記録を保存"}
         </button>
+        {task.pendingSync && <p role="status" className="text-sm text-amber-700">通信を待っているよ。まだ保存は完了していないよ。</p>}
+        {savePending && <p className="text-sm">途中の記録を先に保存してから、次の計測を始めよう。</p>}
+        {saveError && !savedAfterRetry && <p role="alert" className="text-sm text-red-600">{saveError}</p>}
+        {savedAfterRetry && <p role="status" className="text-sm text-green-700">通信が戻ったので、記録を保存したよ。</p>}
       </div>
     );
   },
@@ -3477,17 +3490,19 @@ export default function App() {
     );
   }, []);
 
-  const sessionFlushRef = useRef<Promise<void> | null>(null);
+  const sessionFlushRef = useRef<Promise<Map<string, string>> | null>(null);
   const flushStudySessionOperations = useCallback(() => {
     if (sessionFlushRef.current) return sessionFlushRef.current;
     const database = getSafeDb();
-    if (!database || !auth?.currentUser || isSampleMode) return Promise.resolve();
+    if (!database || !auth?.currentUser || isSampleMode) return Promise.resolve(new Map<string, string>());
     const work = async () => {
+      const results = new Map<string, string>();
       const hadPendingOperations = getPendingSessionOperations().length > 0;
       await drainStudySessionOperations(getPendingSessionOperations,
         (remaining) => setCache(CACHE_KEY_SESSION_OPERATIONS, remaining),
         (operation) => commitStudySessionOperation(database, getTasksCol(database), operation),
         (operation, result, remaining) => {
+          results.set(operation.operationId, result.status);
           const pendingIds = new Set(remaining.map((item) => item.taskId));
           setTasks((current) => current.filter((task) => result.status !== "missing" || task.id !== operation.taskId || pendingIds.has(task.id)).map((task) => {
             if (pendingIds.has(task.id)) return task;
@@ -3500,6 +3515,7 @@ export default function App() {
       if (DEVICE_TEST_ENABLED && hadPendingOperations) {
         setLastSync(new Date().toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" }));
       }
+      return results;
     };
     sessionFlushRef.current = work().catch((error) => {
       setSyncState("offline");
@@ -3509,13 +3525,16 @@ export default function App() {
   }, [isSampleMode]);
 
   const syncTaskToCloud = useCallback(
-    async (id: string, cloudUpdates: any) => {
+    async (id: string, cloudUpdates: any, requireConfirmation = false) => {
       if (cloudUpdates.__studyOperation?.kind === "pause") {
         const local = prepareStudySessionOperation(tasksRef.current, cloudUpdates.__studyOperation);
         local.updates.forEach((updates, taskId) => updateLocalTask(taskId, { ...updates, pendingSync: !isSampleMode } as Partial<Task>));
       }
       const dbInstance = getSafeDb();
-      if (!dbInstance || !auth?.currentUser || isSampleMode) return;
+      if (!dbInstance || !auth?.currentUser || isSampleMode) {
+        if (requireConfirmation && !isSampleMode) throw new Error("接続を確認してね。");
+        return;
+      }
       if (cloudUpdates.__studyOperation) {
         const operation = cloudUpdates.__studyOperation as StudySessionOperation;
         const currentTask = tasksRef.current.find((task) => task.id === operation.taskId);
@@ -3536,9 +3555,13 @@ export default function App() {
         if (operation.kind === "observe" && !operation.visibility && queued.length > 1 && tail?.kind === "observe" && !tail.visibility && tail.taskId === operation.taskId && tail.sessionId === operation.sessionId) queued.pop();
         if (!queued.some((item) => item.operationId === operation.operationId)) setCache(CACHE_KEY_SESSION_OPERATIONS, [...queued, operation]);
         try {
-          await flushStudySessionOperations();
-          if (getPendingSessionOperations().some((item) => item.operationId === operation.operationId)) await flushStudySessionOperations();
-        } catch { /* 操作は順序付きキューに保持する。 */ }
+          let results = await flushStudySessionOperations();
+          if (getPendingSessionOperations().some((item) => item.operationId === operation.operationId)) results = await flushStudySessionOperations();
+          if (requireConfirmation && !["applied", "duplicate"].includes(results.get(operation.operationId) ?? "")) throw new Error("記録はまだ保存されていません。");
+        } catch (error) {
+          // 自動再送では保全して待つ。利用者の保存操作には未完了を伝える。
+          if (requireConfirmation) throw error;
+        }
         return;
       }
       if (isLegacyTimerUpdate(cloudUpdates)) { setSyncState("offline"); return; }
@@ -3722,14 +3745,20 @@ export default function App() {
 
   const saveHistoryRecord = async (task: Task) => {
     const latest = tasksRef.current.find((item) => item.id === task.id);
-    if (!latest || getStudySessionId(latest) !== getStudySessionId(task) || getElapsedSeconds(latest) === 0) return;
+    if (!latest || getStudySessionId(latest) !== getStudySessionId(task) || getElapsedSeconds(latest) === 0) throw new Error("記録を確認してね。");
     const current = { ...latest, sessionReviewFlags: Array.from(new Set([...(latest.sessionReviewFlags ?? []), ...(task.sessionReviewFlags ?? [])])) };
-    const operation = createStudySessionOperation(current, "save");
+    const operation = getPendingSessionOperations().find((item) => item.kind === "save" && item.taskId === task.id && item.sessionId === getStudySessionId(current)) ?? createStudySessionOperation(current, "save");
     // STOPとhistory追加を分割しない。クラウド上の最新historyに一度だけ追加する。
     const local = prepareStudySessionOperation([current], operation);
     const updates = local.updates.get(task.id);
-    if (updates) updateLocalTask(task.id, { ...updates, pendingSync: !isSampleMode } as Partial<Task>);
-    if (!isSampleMode) await syncTaskToCloud(task.id, { __studyOperation: operation });
+    if (isSampleMode) {
+      if (updates) updateLocalTask(task.id, updates as Partial<Task>);
+    } else {
+      // 保存完了までは秒数とメモを残す。失敗後の再試行も同じSTOP時刻を使う。
+      const paused = prepareStudySessionOperation([current], { ...operation, kind: "pause" }).updates.get(task.id);
+      updateLocalTask(task.id, { ...paused, pendingSync: true } as Partial<Task>);
+      await syncTaskToCloud(task.id, { __studyOperation: operation }, true);
+    }
     setDetailTaskId(null);
   };
 
