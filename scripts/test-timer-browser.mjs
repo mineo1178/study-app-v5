@@ -29,6 +29,10 @@ await context.route("**/*", route => {
   external.push({ host: url.hostname, path: url.pathname }); return route.abort();
 });
 const page = await context.newPage(); page.setDefaultTimeout(15000);
+let diagnosticWrites = 0;
+page.on("request", request => { if (new URL(request.url()).port === "8086" && /documents:commit|\/Write\//.test(request.url())) diagnosticWrites++; });
+const diagnostics = () => page.evaluate(async () => (await import("/src/device-test.ts")).getDiagnosticHistory());
+const diagnosticEvent = async fields => (await diagnostics()).some(entry => Object.entries(fields).every(([key, value]) => entry[key] === value));
 page.on("pageerror", error => errors.push(error.message));
 page.on("request", request => { const url = new URL(request.url()); if (url.port === "8086" && request.method() === "POST") firestorePostPaths.add(url.pathname); });
 const invoke = (method, ...args) => page.evaluate(async ({ method, args }) => (await import("/tests/timer-client.ts"))[method](...args), { method, args });
@@ -53,14 +57,32 @@ const saveCalculation = async score => {
   await page.getByText("結果を保存したよ！", { exact: true }).waitFor();
   return seconds;
 };
+const setStaleCalculationTime = async seconds => {
+  const response = await fetch(`${endpoint}/families/${family}/tasks/calc-⑦?updateMask.fieldPaths=currentDuration&updateMask.fieldPaths=lastUpdatedAt`, {
+    method: "PATCH", headers: { Authorization: "Bearer owner", "Content-Type": "application/json" },
+    body: JSON.stringify({ fields: { currentDuration: { integerValue: String(seconds) }, lastUpdatedAt: { integerValue: String(Date.now()) } } }),
+  });
+  assert.equal(response.status, 200, "Dedicated demo stale-time fixture patch failed");
+};
 try {
   await page.goto(`${base}/tests/timer-setup.html`, { waitUntil: "networkidle" });
   assert.equal(await invoke("login", accounts[0].email, password), accounts[0].uid);
   await invoke("seed");
   await page.goto(base, { waitUntil: "domcontentloaded" }); await page.locator("select").first().selectOption({ label: "第1回" });
+  await setStaleCalculationTime(13);
+  await page.getByText("⑦", { exact: true }).click();
+  await waitFor(() => diagnosticEvent({ type: "BUTTON", source: "calculation_7", button: "START", code: "UNSAVED_TIME", disabled: true }), "Calculation unsaved-time disabled reason missing");
+  assert.equal(await startCalculation().isDisabled(), true);
+  assert.ok(!await diagnosticEvent({ type: "CLICK", source: "calculation_7", button: "START" }));
+  await close().click(); await setStaleCalculationTime(0);
   await page.getByText("基本問題", { exact: true }).click();
+  await waitFor(() => diagnosticEvent({ type: "BUTTON", source: "study", button: "STOP", disabled: true, code: "ZERO_TIME" }), "Disabled zero-time reason not recorded without click");
   await startStudy().evaluate(button => { button.click(); button.click(); });
   await waitFor(async () => (await task()).isRunning, "START did not persist");
+  await close().click(); await page.getByText("①", { exact: true }).click();
+  assert.equal(await startCalculation().isDisabled(), true);
+  await waitFor(() => diagnosticEvent({ type: "BUTTON", source: "calculation_1", button: "START", code: "OTHER_TIMER", disabled: true }), "Calculation other-timer disabled reason missing");
+  await close().click(); await page.getByText("基本問題", { exact: true }).click();
   await page.waitForTimeout(2200);
   await page.getByRole("button", { name: "学習タイマーを一時停止", exact: true }).click();
   await waitFor(async () => !(await task()).isRunning && (await task()).currentDuration >= 2, "STOP did not persist");
@@ -68,6 +90,9 @@ try {
   await waitFor(async () => (await task()).history.length === 1, "history did not persist");
   await close().waitFor({ state: "hidden" });
   results.push("normal START/double click/count up/STOP/history: authenticated Emulator PASS");
+  assert.ok(await diagnosticEvent({ type: "CLICK", source: "study", button: "STOP" }));
+  assert.ok(await diagnosticEvent({ type: "HANDLER", source: "study", button: "STOP" }));
+  assert.ok(await diagnosticEvent({ type: "SAVE_SUCCESS", source: "study" }));
   await page.getByText("基本問題", { exact: true }).click(); await startStudy().click();
   await waitFor(async () => (await task()).isRunning, "Second START missing"); await page.waitForTimeout(2200);
   await members([accounts[1].uid]);
@@ -78,6 +103,8 @@ try {
   assert.equal(refusedSave.retryMessage, true, "Rules-denied SAVE must explain retry");
   const retained = (await queue()).find(operation => operation.kind === "save");
   assert.ok(retained); assert.equal(await startStudy().isDisabled(), true, "Do not resume while STOP is waiting to save");
+  await waitFor(() => diagnosticEvent({ type: "BUTTON", source: "study", button: "START", disabled: true, code: "SAVE_PENDING" }), "Pending save disabled reason missing");
+  assert.ok(await diagnosticEvent({ type: "SAVE_FAILURE", source: "study", code: "permission-denied", retry: true }));
   await page.reload(); await page.locator("select").first().selectOption({ label: "第1回" });
   await page.getByText("基本問題", { exact: true }).click();
   assert.equal((await queue()).find(operation => operation.kind === "save").operationId, retained.operationId);
@@ -102,6 +129,7 @@ try {
   assert.equal(await close().isVisible(), true); assert.equal(await saveStudy().isDisabled(), true);
   assert.equal(await startStudy().isDisabled(), true);
   assert.equal(await page.getByText("記録を保存中...", { exact: true }).isVisible(), true);
+  await waitFor(() => diagnosticEvent({ type: "BUTTON", source: "study", button: "START", disabled: true, code: "SAVING" }), "Saving disabled reason missing");
   await page.waitForTimeout(1000); assert.equal(await close().isVisible(), true, "Closed before commit acknowledgement");
   releaseCommit(); await page.unrouteAll({ behavior: "wait" });
   await waitFor(async () => (await task()).history.length === 3, "Delayed save did not finish once");
@@ -126,6 +154,7 @@ try {
     await startCalculation().tap();
     assert.equal(await calculationSeconds(), 0);
     assert.equal(await startStudy().isDisabled(), true, "Normal START must be blocked only while calculation runs");
+    await waitFor(() => diagnosticEvent({ type: "BUTTON", source: "study", button: "START", disabled: true, code: "OTHER_TIMER" }), "Inherited fieldset disabled reason missing");
     await page.waitForTimeout(2100);
     await waitFor(async () => await calculationSeconds() >= 2, "Calculation counter did not reach two seconds");
     measured.push([score, await saveCalculation(score), "calc-①"]);
@@ -200,7 +229,9 @@ try {
   results.push("Offline STOP/SAVE retains queue and shows error; online replay saves once without adding reward");
 
   // UID changes are genuine Auth changes; calculations are keyed by UID.
+  await page.evaluate(async () => (await import("/src/device-test.ts")).recordDiagnostic({ type: "GUARD", source: "auth", code: "cancelled" }));
   await invoke("login", accounts[1].email, password); await page.waitForTimeout(1000);
+  assert.ok(!await diagnosticEvent({ type: "GUARD", source: "auth", code: "cancelled" }), "Old UID diagnostic session survived Auth switch");
   assert.equal((await read()).attempts.length, 0);
   await page.getByRole("button", { name: "学習", exact: true }).tap(); await page.locator("select").first().selectOption({ label: "第1回" });
   await page.getByText("①", { exact: true }).click(); assert.equal(await calculationSeconds(), 0); assert.equal(await startCalculation().innerText(), "計算をはじめる"); await close().tap();
@@ -237,6 +268,45 @@ try {
   }, { email: accounts[2].email, password });
   await outsiderContext.close();
   results.push("Authenticated nonmember cannot read test family through Web SDK and Rules");
+
+  // Storage failure is diagnostic-only; timers and transaction acknowledgement still work.
+  await page.getByRole("button", { name: "学習", exact: true }).click();
+  await page.locator("select").first().selectOption({ label: "第1回" });
+  await page.getByText("基本問題", { exact: true }).click();
+  await page.evaluate(() => {
+    const original = Storage.prototype.setItem;
+    Storage.prototype.setItem = function(key, value) { if (key.startsWith("study-device-diagnostics")) throw new DOMException("quota", "QuotaExceededError"); return original.call(this, key, value); };
+  });
+  await startStudy().tap(); await page.waitForTimeout(1200); await saveStudy().tap();
+  await close().waitFor({ state: "hidden" });
+  assert.ok(await diagnosticEvent({ type: "SAVE_SUCCESS", source: "study" }));
+  results.push("Diagnostics quota failure: authenticated START/STOP/save remains functional");
+  await page.reload();
+  await page.waitForTimeout(500);
+  const writesBefore = diagnosticWrites;
+  await page.evaluate(async () => {
+    const diagnostic = await import("/src/device-test.ts");
+    diagnostic.recordDiagnostic({ type: "BUTTON", source: "study", button: "START", code: "NONE", detail: "PRIVATE-MARKER email token signerKey", taskId: "PRIVATE-MARKER", sessionId: "PRIVATE-MARKER" });
+  });
+  await page.waitForTimeout(100);
+  assert.equal(diagnosticWrites, writesBefore, "Diagnostic event added Firestore writes");
+  const exported = await page.evaluate(async () => (await import("/src/device-test.ts")).exportDiagnostics("v1.86.3", navigator.userAgent));
+  assert.ok(!/PRIVATE-MARKER|taskId|sessionId|signerKey|passwordHash|email|token|memberUids/.test(exported));
+  for (const account of accounts) { assert.ok(!exported.includes(account.uid)); assert.ok(!exported.includes(account.email)); }
+  assert.ok(JSON.parse(exported).events.length <= 50);
+  results.push("Strict allowlist export: no UID/email/token/document/free text; event adds zero Firestore writes");
+  await page.goto(`${base}/?deviceTest=1`, { waitUntil: "domcontentloaded" });
+  await context.grantPermissions(["clipboard-read", "clipboard-write"], { origin: base });
+  for (const width of [320, 390]) {
+    await page.setViewportSize({ width, height: 844 });
+    await page.getByRole("button", { name: "安全な診断情報をコピー" }).click();
+    const copied = await page.getByLabel("コピー用診断情報").inputValue();
+    assert.equal(JSON.parse(copied).version, "v1.86.3");
+    assert.deepEqual(JSON.parse(await page.evaluate(() => navigator.clipboard.readText())), JSON.parse(copied));
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
+    await page.screenshot({ path: `.timer-browser-results.local/diagnostics-${width}.png`, fullPage: true });
+  }
+  results.push("Existing deviceTest panel: actual clipboard copy and 320px/390px layout PASS");
   assert.deepEqual(errors, []);
   // Firebase Auth can request its Google helper even with Auth Emulator.
   // Every external request is aborted above, including any unexpected host.

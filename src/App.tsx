@@ -123,7 +123,9 @@ import { commitTourPerformance, prepareTourPerformance, type TourPerformanceResu
 import type { TourStopId } from "./game/tour/types";
 import { commitMajorDebutPerformance, prepareMajorDebutPerformance, type MajorDebutResult } from "./game/major-debut";
 import { DeviceTestPanel } from "./components/DeviceTestPanel";
-import { appendDeviceTestEvent, isDeviceTestEnabled, type DeviceTestEvent, type DeviceTestEventType } from "./device-test";
+import { configureDiagnostics, diagnosticReasonText, isDeviceTestEnabled, normalizeDiagnosticError, recordDiagnostic, scopedDiagnosticRecorder, type DeviceTestEventType } from "./device-test";
+import { DiagnosticButton } from "./components/DiagnosticButton";
+import { useTimerDiagnostics } from "./use-timer-diagnostics";
 
 // ==========================================
 // Firebase Initialization (Vite + Vercel)
@@ -171,7 +173,7 @@ if (hasFirebaseConfig) {
 // ==========================================
 
 const FAMILY_ID = "oomine-study-2026";
-const APP_VERSION = "v1.86.2";
+const APP_VERSION = "v1.86.3";
 
 // Firestore Path 固定（変更禁止）
 // 実DB構造:
@@ -217,7 +219,6 @@ const CACHE_KEY_TESTS = `study-app-v5-${FAMILY_ID}-tests`;
 const CACHE_KEY_PENDING_TASK_UPDATES = `study-app-v5-${FAMILY_ID}-pending-task-updates`;
 const CACHE_KEY_SESSION_OPERATIONS = `study-app-v5-${FAMILY_ID}-session-operations`;
 const CACHE_KEY_GAME = `study-app-v5-${FAMILY_ID}-idol-game`;
-const CACHE_KEY_DEVICE_TEST_HISTORY = `study-app-v5-${FAMILY_ID}-device-test-history`;
 const DEVICE_TEST_ENABLED = typeof window !== "undefined" && isDeviceTestEnabled(window.location.search);
 
 type Subject = "math" | "japanese" | "science" | "social";
@@ -590,12 +591,14 @@ const StrictTimer = React.memo(
     syncTaskToCloud,
     onSaveRecord,
     pauseAllOtherTasks,
+    calculationRunning = false,
   }: {
     task: Task;
     updateLocalTask: (id: string, updates: Partial<Task>) => void;
     syncTaskToCloud: (id: string, cloudUpdates: any) => void;
     onSaveRecord: (task: Task) => Promise<void>;
     pauseAllOtherTasks: (id: string) => Promise<void>;
+    calculationRunning?: boolean;
   }) => {
     const [localSeconds, setLocalSeconds] = useState(task.currentDuration);
     const [isSaving, setIsSaving] = useState(false);
@@ -608,6 +611,9 @@ const StrictTimer = React.memo(
     const isRunning = task.isRunning;
     const savedAfterRetry = !!saveError && !task.pendingSync && task.currentDuration === 0 && task.history.some((entry) => entry.id === getStudySessionId(task));
     const savePending = getPendingSessionOperations().some((operation) => operation.kind === "save" && operation.taskId === task.id && operation.sessionId === getStudySessionId(task));
+    const transition = useTimerDiagnostics("study", isSaving ? "saving" : savedAfterRetry ? "saved" : saveError ? "retryable" : isRunning ? "running" : task.currentDuration > 0 ? "paused" : task.history.some(entry => entry.reviewStatus === "pending") ? "review_pending" : "idle");
+    const startReason = calculationRunning ? "OTHER_TIMER" : isSaving ? "SAVING" : savePending ? "SAVE_PENDING" : "NONE";
+    const stopReason = calculationRunning ? "OTHER_TIMER" : isSaving ? "SAVING" : localSeconds === 0 ? "ZERO_TIME" : "NONE";
 
     // 正確な現在秒数を計算するヘルパー（バックグラウンド等で表示が遅延しても正しい秒数を得る）
     const getAccurateSeconds = useCallback(() => {
@@ -637,7 +643,8 @@ const StrictTimer = React.memo(
 
     const handlePlay = async (e?: React.MouseEvent) => {
       e?.stopPropagation();
-      if (task.isRunning || startInFlightRef.current || isSaving || savePending) return;
+      if (task.isRunning || startInFlightRef.current || isSaving || savePending) { recordDiagnostic({ type: "GUARD", source: "study", button: "START", code: startInFlightRef.current ? "BUSY" : task.isRunning ? "WRONG_PHASE" : isSaving ? "SAVING" : "SAVE_PENDING" }); return; }
+      recordDiagnostic({ type: "HANDLER", source: "study", button: "START" });
       setSaveError("");
       startInFlightRef.current = true;
       // タイマー排他制御：他のタイマーをすべてストップさせる
@@ -683,6 +690,7 @@ const StrictTimer = React.memo(
     };
 
     const handlePauseClick = () => {
+      recordDiagnostic({ type: "HANDLER", source: "study", button: "PAUSE" });
       const now = Date.now();
       const operation = createStudySessionOperation(task, "pause", now);
       syncTaskToCloud(task.id, {
@@ -691,19 +699,28 @@ const StrictTimer = React.memo(
     };
 
     const handleStopAndSave = async () => {
-      if (finishInFlightRef.current || isSaving || localSeconds === 0) return;
+      const log = scopedDiagnosticRecorder();
+      if (finishInFlightRef.current || isSaving || localSeconds === 0) { recordDiagnostic({ type: "GUARD", source: "study", button: "STOP", code: finishInFlightRef.current ? "BUSY" : isSaving ? "SAVING" : "ZERO_TIME" }); return; }
+      recordDiagnostic({ type: "HANDLER", source: "study", button: "STOP" });
+      transition("stopping");
       finishInFlightRef.current = true;
       setIsSaving(true);
       setSaveError("");
       const finalDuration = getAccurateSeconds(); // 古いlocalSecondsではなく正確な時間を再計算
       const reviewFlags = getSessionReviewFlags(finalDuration, reviewFlagsRef.current);
       try {
+        transition("saving");
+        recordDiagnostic({ type: "SAVE_START", source: "study" });
         await onSaveRecord({
           ...task,
           sessionId: getStudySessionId(task),
           sessionReviewFlags: reviewFlags,
         });
-      } catch {
+        log({ type: "SAVE_SUCCESS", source: "study" });
+        transition("saved", log);
+      } catch (error) {
+        log({ type: "SAVE_FAILURE", source: "study", code: normalizeDiagnosticError(error), retry: true });
+        transition("failed", log); transition("retryable", log);
         setSaveError("保存できなかったよ。時間はこの端末に残っているので、通信を確認してもう一度保存してね。");
       } finally {
         finishInFlightRef.current = false;
@@ -728,7 +745,7 @@ const StrictTimer = React.memo(
           </div>
           <div className="flex items-center gap-2 md:gap-3 lg:gap-4 pr-2 md:pr-3">
             {!isRunning ? (
-              <button
+              <DiagnosticButton source="study" action="START" reason={startReason} inheritedDisabled={calculationRunning}
                 type="button"
                 onClick={handlePlay}
                 aria-label="学習タイマーを開始"
@@ -740,9 +757,9 @@ const StrictTimer = React.memo(
                   className="ml-1 w-5 h-5 md:w-6 md:h-6 lg:w-8 lg:h-8"
                   fill="currentColor"
                 />
-              </button>
+              </DiagnosticButton>
             ) : (
-              <button
+              <DiagnosticButton source="study" action="PAUSE" reason={calculationRunning ? "OTHER_TIMER" : isSaving ? "SAVING" : "NONE"} inheritedDisabled={calculationRunning}
                 type="button"
                 onClick={handlePauseClick}
                 aria-label="学習タイマーを一時停止"
@@ -754,12 +771,12 @@ const StrictTimer = React.memo(
                   className="w-5 h-5 md:w-6 md:h-6 lg:w-8 lg:h-8"
                   fill="currentColor"
                 />
-              </button>
+              </DiagnosticButton>
             )}
           </div>
         </div>
 
-        <button
+        <DiagnosticButton source="study" action="STOP" reason={stopReason} inheritedDisabled={calculationRunning}
           type="button"
           onClick={handleStopAndSave}
           disabled={localSeconds === 0 || isSaving}
@@ -767,7 +784,8 @@ const StrictTimer = React.memo(
         >
           <History className="w-[18px] h-[18px] md:w-5 md:h-5 lg:w-6 lg:h-6" />{" "}
           {isSaving ? "記録を保存中..." : "計測を終了して記録を保存"}
-        </button>
+        </DiagnosticButton>
+        {startReason !== "NONE" && <p role="status" className="text-sm">{diagnosticReasonText(startReason)}</p>}
         {task.pendingSync && <p role="status" className="text-sm text-amber-700">通信を待っているよ。まだ保存は完了していないよ。</p>}
         {savePending && <p className="text-sm">途中の記録を先に保存してから、次の計測を始めよう。</p>}
         {saveError && !savedAfterRetry && <p role="alert" className="text-sm text-red-600">{saveError}</p>}
@@ -1378,6 +1396,7 @@ const TaskDetailModal = ({
             </label>
             <StrictTimer
               task={task}
+              calculationRunning={calculationRunning}
               updateLocalTask={updateLocalTask}
               syncTaskToCloud={syncTaskToCloud}
               onSaveRecord={onSaveRecord}
@@ -3186,11 +3205,6 @@ export default function App() {
   );
   const [isSampleMode, setIsSampleMode] = useState(false);
   const [gachaStartsLater] = useState(() => Date.now() < GACHA_FEATURE_START_DATE);
-  const [deviceTestHistory, setDeviceTestHistory] = useState<DeviceTestEvent[]>(() => {
-    if (!DEVICE_TEST_ENABLED) return [];
-    const cached = getCache(CACHE_KEY_DEVICE_TEST_HISTORY);
-    return Array.isArray(cached) ? cached : [];
-  });
   const [deviceOnline, setDeviceOnline] = useState(() => typeof navigator === "undefined" || navigator.onLine);
   const [deviceVisibility, setDeviceVisibility] = useState<DocumentVisibilityState>(() =>
     typeof document === "undefined" ? "visible" : document.visibilityState,
@@ -3223,7 +3237,6 @@ export default function App() {
   } | null>(null);
 
   const tasksRef = useRef<Task[]>([]);
-  const deviceTestHistoryRef = useRef(deviceTestHistory);
   const deviceRestoreLoggedRef = useRef(false);
   const retryMountLoggedRef = useRef(false);
 
@@ -3233,19 +3246,28 @@ export default function App() {
     sessionId?: string;
     detail?: string;
   }) => {
-    if (!DEVICE_TEST_ENABLED) return;
-    const next = appendDeviceTestEvent(deviceTestHistoryRef.current, event);
-    deviceTestHistoryRef.current = next;
-    setCache(CACHE_KEY_DEVICE_TEST_HISTORY, next);
-    setDeviceTestHistory(next);
+    recordDiagnostic({ type: event.type, source: "study" });
   }, []);
+
+  useEffect(() => {
+    try { localStorage.removeItem(`study-app-v5-${FAMILY_ID}-device-test-history`); } catch { /* Remove legacy free-text diagnostics only. */ }
+  }, []);
+
+  useEffect(() => {
+    if (isAuthChecking) return;
+    let active = true;
+    const session = user ? `${user.uid}:${user.metadata.lastSignInTime ?? ""}` : "signed-out";
+    void configureDiagnostics(`${location.origin}:${firebaseConfig.projectId}:${FAMILY_ID}:${isSampleMode ? "sample" : session}`).then(() => {
+      if (active) recordDiagnostic({ type: "AUTH", source: "auth", code: isSampleMode ? "SAMPLE" : user ? "AUTHENTICATED" : "SIGNED_OUT" });
+    });
+    return () => { active = false; };
+  }, [user, isSampleMode, isAuthChecking]);
 
   useEffect(() => {
     tasksRef.current = tasks;
   }, [tasks]);
 
   useEffect(() => {
-    if (!DEVICE_TEST_ENABLED) return;
     const handleOnline = () => {
       setDeviceOnline(true);
       recordDeviceTestEvent({ type: "ONLINE" });
@@ -3269,11 +3291,15 @@ export default function App() {
     if (!DEVICE_TEST_ENABLED || !user || isSampleMode) return;
     const database = getSafeDb();
     if (!database) return;
+    const log = scopedDiagnosticRecorder();
     return onSnapshot(doc(database, ...FIRESTORE_ROOT), (snapshot) => {
+      const members = snapshot.data()?.memberUids;
+      log({ type: "READ_SUCCESS", source: "family", code: Array.isArray(members) && members.includes(user.uid) ? "MEMBER_ALLOWED" : "MEMBER_DENIED" });
       const value = snapshot.data()?.activeStudyTaskId;
       setCloudActiveStudyTaskId(typeof value === "string" ? value : null);
       setActiveStudyTaskReadError(false);
-    }, () => {
+    }, (error) => {
+      log({ type: "READ_FAILURE", source: "family", code: normalizeDiagnosticError(error) });
       setActiveStudyTaskReadError(true);
     });
   }, [user, isSampleMode]);
@@ -3290,6 +3316,8 @@ export default function App() {
     }
 
     const unsubscribe = onAuthStateChanged(auth, (u) => {
+      // Clear the previous diagnostic session before mounting the next user's timers/listeners.
+      void configureDiagnostics(`${location.origin}:${firebaseConfig.projectId}:${FAMILY_ID}:${u ? `${u.uid}:${u.metadata.lastSignInTime ?? ""}` : "signed-out"}`);
       setUser(u);
       setIsAuthChecking(false);
     });
@@ -3326,6 +3354,7 @@ export default function App() {
 
   const fetchData = useCallback(
     async (isSilent = false) => {
+      const log = scopedDiagnosticRecorder();
       const dbInstance = getSafeDb();
       if (!dbInstance || !auth?.currentUser || isSampleMode) {
         if (!dbInstance && !isSilent)
@@ -3338,8 +3367,10 @@ export default function App() {
       if (!isSilent) setSyncState("syncing");
 
       try {
+        recordDiagnostic({ type: "READ_START", source: "study" });
         const taskSnap = await getDocs(query(getTasksCol(dbInstance)));
         const testSnap = await getDocs(query(getTestsCol(dbInstance)));
+        log({ type: "READ_SUCCESS", source: "study", code: "READ_ALLOWED" });
 
         const fetchedTasks = taskSnap.docs.map((doc) => {
           const data = doc.data();
@@ -3374,6 +3405,7 @@ export default function App() {
           }),
         );
       } catch (err) {
+        log({ type: "READ_FAILURE", source: "study", code: normalizeDiagnosticError(err) });
         console.error(err);
         setSyncState("offline");
         const ctTasks = getCache(CACHE_KEY_TASKS);
@@ -3419,13 +3451,14 @@ export default function App() {
   useEffect(() => {
     const dbInstance = getSafeDb();
     if (!dbInstance || !user || isSampleMode) return;
+    const log = scopedDiagnosticRecorder();
     return onSnapshot(query(getTasksCol(dbInstance)), { includeMetadataChanges: true }, (snapshot) => {
       if (snapshot.metadata.fromCache || snapshot.metadata.hasPendingWrites) return;
       const cloudTasks = snapshot.docs.map((item) => ({
         ...normalizeTask({ ...item.data(), id: item.id } as Task), pendingSync: false,
       }));
       setTasks((current) => mergeTasksFromCloud(current, cloudTasks));
-    }, () => setSyncState("offline"));
+    }, (error) => { log({ type: "READ_FAILURE", source: "study", code: normalizeDiagnosticError(error) }); setSyncState("offline"); });
   }, [user, isSampleMode]);
 
   useEffect(() => {
@@ -3495,6 +3528,7 @@ export default function App() {
     if (sessionFlushRef.current) return sessionFlushRef.current;
     const database = getSafeDb();
     if (!database || !auth?.currentUser || isSampleMode) return Promise.resolve(new Map<string, string>());
+    const log = scopedDiagnosticRecorder();
     const work = async () => {
       const results = new Map<string, string>();
       const hadPendingOperations = getPendingSessionOperations().length > 0;
@@ -3502,6 +3536,7 @@ export default function App() {
         (remaining) => setCache(CACHE_KEY_SESSION_OPERATIONS, remaining),
         (operation) => commitStudySessionOperation(database, getTasksCol(database), operation),
         (operation, result, remaining) => {
+          if (operation.kind === "save" || operation.kind === "confirm") log({ type: result.status === "applied" || result.status === "duplicate" ? "SAVE_SUCCESS" : "SAVE_FAILURE", source: "study", code: result.status === "conflict" ? "failed-precondition" : result.status === "missing" ? "not-found" : "NONE", retry: remaining.length > 0 });
           results.set(operation.operationId, result.status);
           const pendingIds = new Set(remaining.map((item) => item.taskId));
           setTasks((current) => current.filter((task) => result.status !== "missing" || task.id !== operation.taskId || pendingIds.has(task.id)).map((task) => {
@@ -3512,12 +3547,14 @@ export default function App() {
           if (result.status === "conflict") console.warn("Study session changed; stale operation ignored", operation.kind);
         });
       setSyncState("synced");
+      if (hadPendingOperations) log({ type: "QUEUE", source: "study", retry: getPendingSessionOperations().length > 0 });
       if (DEVICE_TEST_ENABLED && hadPendingOperations) {
         setLastSync(new Date().toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" }));
       }
       return results;
     };
     sessionFlushRef.current = work().catch((error) => {
+      log({ type: "SAVE_FAILURE", source: "study", code: normalizeDiagnosticError(error), retry: getPendingSessionOperations().length > 0 });
       setSyncState("offline");
       throw error;
     }).finally(() => { sessionFlushRef.current = null; });
@@ -3554,6 +3591,7 @@ export default function App() {
         const tail = queued.at(-1);
         if (operation.kind === "observe" && !operation.visibility && queued.length > 1 && tail?.kind === "observe" && !tail.visibility && tail.taskId === operation.taskId && tail.sessionId === operation.sessionId) queued.pop();
         if (!queued.some((item) => item.operationId === operation.operationId)) setCache(CACHE_KEY_SESSION_OPERATIONS, [...queued, operation]);
+        if (operation.kind !== "observe") recordDiagnostic({ type: "QUEUE", source: "study", retry: true });
         try {
           let results = await flushStudySessionOperations();
           if (getPendingSessionOperations().some((item) => item.operationId === operation.operationId)) results = await flushStudySessionOperations();
@@ -3767,25 +3805,34 @@ export default function App() {
     [tasks],
   );
   const pendingReviews = useMemo(() => tasks.flatMap((task) => task.history.filter((entry) => entry.reviewStatus === "pending").map((entry) => ({ taskId: task.id, subject: SUBJECT_CONFIG[task.subject].label, title: task.title, entry }))), [tasks]);
+  const hasPendingReview = pendingReviews.length > 0;
+  useEffect(() => { if (hasPendingReview) recordDiagnostic({ type: "REVIEW_PENDING", source: "study", state: "review_pending" }); }, [hasPendingReview]);
   const confirmStudyTime = async (taskId: string, sessionId: string, seconds: number) => {
-    const operation: StudySessionOperation = { operationId: crypto.randomUUID(), kind: "confirm", taskId, sessionId, at: Date.now(), confirmedDurationSeconds: seconds };
-    const task = tasksRef.current.find((item) => item.id === taskId);
-    if (!task) throw new Error("記録が見つかりません。");
-    if (isSampleMode) {
-      const result = prepareStudySessionOperation([task], operation);
-      const updates = result.updates.get(taskId);
-      if (updates) updateLocalTask(taskId, updates as Partial<Task>);
-      return;
-    }
-    if (!db || !auth?.currentUser) throw new Error("接続を確認してね。");
-    await flushStudySessionOperations();
-    const result = await commitStudySessionOperation(db, getTasksCol(db), operation);
-    if (result.status === "conflict" || result.status === "missing") throw new Error("記録を確認してね。");
-    const saved = result.tasks.find((item) => item.id === taskId);
-    const confirmed = saved?.history.find((entry) => entry.id === sessionId);
-    const latestLocal = tasksRef.current.find((item) => item.id === taskId);
-    if (confirmed && latestLocal) updateLocalTask(taskId, { history: latestLocal.history.map((entry) => entry.id === sessionId ? { ...entry, ...confirmed } : entry) });
-    recordDeviceTestEvent({ type: "REVIEW_CONFIRMED", taskId, sessionId, detail: `${confirmed?.duration ?? seconds}s` });
+    const log = scopedDiagnosticRecorder();
+    recordDiagnostic({ type: "HANDLER", source: "study", button: "SAVE", state: "review_pending" });
+    log({ type: "SAVE_START", source: "study", state: "saving" });
+    try {
+      const operation: StudySessionOperation = { operationId: crypto.randomUUID(), kind: "confirm", taskId, sessionId, at: Date.now(), confirmedDurationSeconds: seconds };
+      const task = tasksRef.current.find((item) => item.id === taskId);
+      if (!task) throw new Error("記録が見つかりません。");
+      if (isSampleMode) {
+        const result = prepareStudySessionOperation([task], operation);
+        const updates = result.updates.get(taskId);
+        if (updates) updateLocalTask(taskId, updates as Partial<Task>);
+        log({ type: "SAVE_SUCCESS", source: "study", state: "saved" });
+        return;
+      }
+      if (!db || !auth?.currentUser) throw new Error("接続を確認してね。");
+      await flushStudySessionOperations();
+      const result = await commitStudySessionOperation(db, getTasksCol(db), operation);
+      if (result.status === "conflict" || result.status === "missing") throw new Error("記録を確認してね。");
+      const saved = result.tasks.find((item) => item.id === taskId);
+      const confirmed = saved?.history.find((entry) => entry.id === sessionId);
+      const latestLocal = tasksRef.current.find((item) => item.id === taskId);
+      if (confirmed && latestLocal) updateLocalTask(taskId, { history: latestLocal.history.map((entry) => entry.id === sessionId ? { ...entry, ...confirmed } : entry) });
+      recordDeviceTestEvent({ type: "REVIEW_CONFIRMED", taskId, sessionId, detail: `${confirmed?.duration ?? seconds}s` });
+      log({ type: "SAVE_SUCCESS", source: "study", state: "saved" });
+    } catch (error) { log({ type: "SAVE_FAILURE", source: "study", code: normalizeDiagnosticError(error), state: "retryable", retry: true }); throw error; }
   };
   const currentBoostPercent = useMemo(() => {
     const kinds: Record<string, TestKind> = { curriculum: "カリテ", kumiwake: "組分け", hantei: "判定" };
@@ -4281,6 +4328,7 @@ export default function App() {
     <div className="flex flex-col h-screen w-full bg-slate-50 font-sans text-slate-900 max-w-[1600px] mx-auto shadow-2xl overflow-x-hidden relative">
       {DEVICE_TEST_ENABLED && (
         <DeviceTestPanel
+          version={APP_VERSION}
           tasks={tasks}
           syncState={syncState}
           lastSync={lastSync}
@@ -4290,7 +4338,6 @@ export default function App() {
           activeStudyTaskId={cloudActiveStudyTaskId}
           activeStudyTaskError={activeStudyTaskReadError}
           restoreState={deviceRestoreState}
-          history={deviceTestHistory}
         />
       )}
       {isSampleMode && (
@@ -4534,7 +4581,7 @@ export default function App() {
           calculationInput={(() => {
             const task = tasks.find(item => item.id === detailTaskId);
             if (!task || !isCalculationTask(task)) return null;
-            return <CalculationInput key={`${user?.uid ?? "sample"}-${isSampleMode}-${task.id}`} db={db} familyId={FAMILY_ID} uid={isSampleMode ? "sample" : user!.uid} sample={isSampleMode} sampleAttempts={sampleCalculationAttempts} onSampleSave={attempt => setSampleCalculationAttempts(current => current.some(item => item.id === attempt.id) ? current : [...current, attempt])} diagnostic={DEVICE_TEST_ENABLED} onRunningChange={setCalculationRunning} taskId={task.id} taskLabel={`${task.unit} / 計算${task.title}`} blocked={tasks.some(item => item.isRunning) || task.currentDuration > 0} />;
+            return <CalculationInput key={`${user?.uid ?? "sample"}-${isSampleMode}-${task.id}`} db={db} familyId={FAMILY_ID} uid={isSampleMode ? "sample" : user!.uid} sample={isSampleMode} sampleAttempts={sampleCalculationAttempts} onSampleSave={attempt => setSampleCalculationAttempts(current => current.some(item => item.id === attempt.id) ? current : [...current, attempt])} diagnostic={DEVICE_TEST_ENABLED} onRunningChange={setCalculationRunning} taskId={task.id} taskLabel={`${task.unit} / 計算${task.title}`} blocked={tasks.some(item => item.isRunning) || task.currentDuration > 0} blockedReason={tasks.some(item => item.isRunning) ? "OTHER_TIMER" : "UNSAVED_TIME"} />;
           })()}
           onDelete={() => {
             setConfirmModalData({

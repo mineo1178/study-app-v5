@@ -3,6 +3,9 @@ import { getDocs, limit, onSnapshot, orderBy, query, where, type Firestore } fro
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { calculationStorageKey, commitCalculationAttempt, formatCalculationTime, getCalculationAttempts, getCalculationDays, getCalculationElapsedSeconds, getJstDateKey, MAX_CALCULATION_SECONDS, type CalculationAttempt, type CalculationDay, type CalculationDraft } from "../daily-calculation";
 import { calculationTaskRecords, calculationStartLabel } from "../daily-calculation-view";
+import { calculationDiagnosticSource, diagnosticReasonText, normalizeDiagnosticError, recordDiagnostic, scopedDiagnosticRecorder, type DiagnosticCode } from "../device-test";
+import { DiagnosticButton } from "./DiagnosticButton";
+import { useTimerDiagnostics } from "../use-timer-diagnostics";
 
 type ActiveCalculation = { id: string; dateKey: string; startedAt: number; elapsedSeconds: number; phase: "running" | "paused" | "scoring"; score: number; finishedAt?: number };
 const readActive = (familyId: string, uid: string, taskId: string): ActiveCalculation | null => {
@@ -15,7 +18,7 @@ const readActive = (familyId: string, uid: string, taskId: string): ActiveCalcul
   } catch { return null; }
 };
 
-const CalculationStopwatch = ({ familyId, uid, sample, onSave, diagnostic, startLabel, taskId, taskLabel, blocked, onRunningChange }: { onRunningChange: (running: boolean) => void; taskId: string; taskLabel: string; blocked: boolean; familyId: string; uid: string; sample: boolean; onSave: (draft: CalculationDraft) => Promise<CalculationAttempt>; diagnostic: boolean; startLabel: string }) => {
+const CalculationStopwatch = ({ familyId, uid, sample, onSave, diagnostic, startLabel, taskId, taskLabel, blocked, blockedReason = "OTHER_TIMER", onRunningChange }: { onRunningChange: (running: boolean) => void; taskId: string; taskLabel: string; blocked: boolean; blockedReason?: DiagnosticCode; familyId: string; uid: string; sample: boolean; onSave: (draft: CalculationDraft) => Promise<CalculationAttempt>; diagnostic: boolean; startLabel: string }) => {
   const [active, setActive] = useState<ActiveCalculation | null>(() => sample ? null : readActive(familyId, uid, taskId));
   const [elapsed, setElapsed] = useState(active?.elapsedSeconds ?? 0);
   const [saving, setSaving] = useState(false);
@@ -25,6 +28,8 @@ const CalculationStopwatch = ({ familyId, uid, sample, onSave, diagnostic, start
   const busy = useRef(false);
   const current = useRef(active);
   const mounted = useRef(true);
+  const source = calculationDiagnosticSource(taskLabel);
+  const transition = useTimerDiagnostics(source, saving ? "saving" : saved ? "saved" : error && active?.phase === "scoring" ? "retryable" : active?.phase === "scoring" ? "review_pending" : active?.phase ?? "idle");
   const saveLocal = (value: ActiveCalculation | null) => {
     if (sample) return;
     try {
@@ -60,42 +65,48 @@ const CalculationStopwatch = ({ familyId, uid, sample, onSave, diagnostic, start
     return () => { tick(); mounted.current = false; onRunningChange(false); window.clearInterval(timer); window.removeEventListener("pagehide", tick); document.removeEventListener("visibilitychange", tick); };
   }, [familyId, uid, sample, taskId, onRunningChange]);
   const start = () => {
-    if (blocked || busy.current || (current.current && current.current.phase !== "paused")) return;
+    if (blocked || busy.current || (current.current && current.current.phase !== "paused")) { recordDiagnostic({ type: "GUARD", source, button: "START", code: blocked ? blockedReason : busy.current ? "BUSY" : "WRONG_PHASE" }); return; }
+    recordDiagnostic({ type: "HANDLER", source, button: active?.phase === "paused" ? "RESUME" : "START" });
     const now = Date.now();
     const value: ActiveCalculation = active?.phase === "paused" ? { ...active, phase: "running" } : { id: crypto.randomUUID(), dateKey: getJstDateKey(now), startedAt: now, elapsedSeconds: 0, score: 0, phase: "running" };
     anchor.current = { elapsed: value.elapsedSeconds, at: performance.now() };
     setElapsed(value.elapsedSeconds); change(value); setError(""); setSaved(false);
   };
   const finish = () => {
-    if (!active || current.current?.phase !== "running") return;
+    if (!active || current.current?.phase !== "running") { recordDiagnostic({ type: "GUARD", source, button: "STOP", code: "WRONG_PHASE" }); return; }
+    recordDiagnostic({ type: "HANDLER", source, button: "STOP" }); transition("stopping");
     const seconds = getCalculationElapsedSeconds(anchor.current.elapsed, anchor.current.at, performance.now());
     setElapsed(seconds);
     change({ ...active, elapsedSeconds: seconds, finishedAt: Math.max(active.startedAt, Date.now()), phase: "scoring" });
   };
   const save = async () => {
-    if (!active || active.phase !== "scoring" || busy.current) return;
+    const log = scopedDiagnosticRecorder();
+    if (!active || active.phase !== "scoring" || busy.current) { recordDiagnostic({ type: "GUARD", source, button: "SAVE", code: busy.current ? "BUSY" : "WRONG_PHASE" }); return; }
+    recordDiagnostic({ type: "HANDLER", source, button: "SAVE" }); transition("saving");
+    recordDiagnostic({ type: "SAVE_START", source });
     busy.current = true; setSaving(true); setError("");
-    try { await onSave({ id: active.id, dateKey: active.dateKey, score: active.score, elapsedSeconds: active.elapsedSeconds, startedAt: active.startedAt, finishedAt: active.finishedAt!, taskId, taskLabel }); change(null); setSaved(true); }
-    catch { setError("保存できなかったよ。記録は残っているので、もう一度保存してね。"); }
+    try { await onSave({ id: active.id, dateKey: active.dateKey, score: active.score, elapsedSeconds: active.elapsedSeconds, startedAt: active.startedAt, finishedAt: active.finishedAt!, taskId, taskLabel }); log({ type: "SAVE_SUCCESS", source }); transition("saved", log); change(null); setSaved(true); }
+    catch (error) { log({ type: "SAVE_FAILURE", source, code: normalizeDiagnosticError(error), retry: true }); transition("failed", log); transition("retryable", log); setError("保存できなかったよ。記録は残っているので、もう一度保存してね。"); }
     finally { busy.current = false; setSaving(false); }
   };
   return <section className="rounded-3xl bg-white p-5 shadow-sm">
     <h2 className="text-xl font-black">計算の結果を記録</h2><p className="mt-2 text-sm">計算時間は学習時間・活動Pには重ねて加えないよ。画面を閉じると計測はお休みするよ。</p>{blocked && <p role="status" className="mt-2">先に学習タイマーを終了して、途中の学習記録を保存してね。</p>}
     <p role="status" className="mt-3 text-center font-bold">{saving ? "結果を保存中…" : error ? "記録を確認して、もう一度ためしてね。" : saved ? "結果を保存したよ！" : active?.phase === "running" ? "計測中" : active?.phase === "scoring" ? "計測終了。得点を選んで結果を確認してね。" : active?.phase === "paused" ? "計測をお休み中" : "準備ができたら計算をはじめよう"}</p>
     <p className="my-4 text-center font-mono text-4xl font-black" aria-live="off">{formatCalculationTime(elapsed)}</p>
-    {!active && <button className="w-full rounded-2xl bg-blue-600 p-5 text-xl font-black text-white" disabled={blocked} onClick={start}>{startLabel}</button>}
-    {active?.phase === "paused" && <><p className="mb-3">画面を開き直したので、計測をお休みしているよ。続きから再開してね。</p><button className="w-full rounded-2xl bg-blue-600 p-4 font-bold text-white" disabled={blocked} onClick={start}>計測を再開</button></>}
-    {active?.phase === "running" && <button className="w-full rounded-2xl bg-emerald-600 p-5 text-xl font-black text-white" onClick={finish}>計算を終了して結果を記録</button>}
-    {active?.phase === "scoring" && <div className="space-y-4"><p className="text-lg font-bold">得点 {active.score}/7 ・ 所要時間 {formatCalculationTime(active.elapsedSeconds)}</p><div className="grid grid-cols-4 gap-2">{Array.from({ length: 8 }, (_, score) => <button key={score} aria-pressed={active.score === score} disabled={saving} className={`rounded-xl p-3 text-xl font-black ${active.score === score ? "bg-blue-600 text-white" : "bg-slate-100"}`} onClick={() => change({ ...active, score })}>{score}</button>)}</div><button disabled={saving} className="w-full rounded-2xl bg-blue-600 p-4 font-bold text-white disabled:opacity-50" onClick={() => void save()}>{saving ? "保存中…" : "この結果を保存"}</button></div>}
+    {!active && <DiagnosticButton source={source} action="START" reason={blocked ? blockedReason : "NONE"} className="w-full rounded-2xl bg-blue-600 p-5 text-xl font-black text-white" disabled={blocked} onClick={start}>{startLabel}</DiagnosticButton>}
+    {active?.phase === "paused" && <><p className="mb-3">画面を開き直したので、計測をお休みしているよ。続きから再開してね。</p><DiagnosticButton source={source} action="RESUME" reason={blocked ? blockedReason : "NONE"} className="w-full rounded-2xl bg-blue-600 p-4 font-bold text-white" disabled={blocked} onClick={start}>計測を再開</DiagnosticButton></>}
+    {active?.phase === "running" && <DiagnosticButton source={source} action="STOP" reason="NONE" className="w-full rounded-2xl bg-emerald-600 p-5 text-xl font-black text-white" onClick={finish}>計算を終了して結果を記録</DiagnosticButton>}
+    {active?.phase === "scoring" && <div className="space-y-4"><p className="text-lg font-bold">得点 {active.score}/7 ・ 所要時間 {formatCalculationTime(active.elapsedSeconds)}</p><div className="grid grid-cols-4 gap-2">{Array.from({ length: 8 }, (_, score) => <button key={score} aria-pressed={active.score === score} disabled={saving} className={`rounded-xl p-3 text-xl font-black ${active.score === score ? "bg-blue-600 text-white" : "bg-slate-100"}`} onClick={() => change({ ...active, score })}>{score}</button>)}</div><DiagnosticButton source={source} action="SAVE" reason={saving ? "SAVING" : "NONE"} disabled={saving} className="w-full rounded-2xl bg-blue-600 p-4 font-bold text-white disabled:opacity-50" onClick={() => void save()}>{saving ? "保存中…" : "この結果を保存"}</DiagnosticButton></div>}
     {active && <p className="mt-3 text-sm">記録する日：{active.dateKey}（始めた日）</p>}
     {error && <p className="mt-3" role="alert">{error}</p>}
-    {diagnostic && <pre className="mt-3 overflow-hidden whitespace-pre-wrap break-all text-xs">{JSON.stringify({ activeCalculation: active?.id ?? null, dateKey: active?.dateKey, startedAt: active?.startedAt, elapsed }, null, 2)}</pre>}
+    {blocked && <p role="status" className="mt-2 text-sm">{diagnosticReasonText(blockedReason)}</p>}
+    {diagnostic && <p className="mt-3 text-xs">端末診断に計算の状態コードを記録しています。</p>}
   </section>;
 };
 
 type CalculationProps = { db: Firestore | null; familyId: string; uid: string; sample: boolean; sampleAttempts: CalculationAttempt[] };
 
-export const CalculationInput = ({ db, familyId, uid, sample, sampleAttempts, onSampleSave, diagnostic, taskId, taskLabel, blocked, onRunningChange }: CalculationProps & { onRunningChange: (running: boolean) => void; onSampleSave: (attempt: CalculationAttempt) => void; diagnostic: boolean; taskId: string; taskLabel: string; blocked: boolean }) => {
+export const CalculationInput = ({ db, familyId, uid, sample, sampleAttempts, onSampleSave, diagnostic, taskId, taskLabel, blocked, blockedReason, onRunningChange }: CalculationProps & { onRunningChange: (running: boolean) => void; onSampleSave: (attempt: CalculationAttempt) => void; diagnostic: boolean; taskId: string; taskLabel: string; blocked: boolean; blockedReason?: DiagnosticCode }) => {
   const [attempts, setAttempts] = useState<CalculationAttempt[]>([]);
   const [today, setToday] = useState(getJstDateKey);
   const [loading, setLoading] = useState(!sample);
@@ -103,9 +114,12 @@ export const CalculationInput = ({ db, familyId, uid, sample, sampleAttempts, on
   useEffect(() => { const timer = window.setInterval(() => setToday(getJstDateKey()), 1000); return () => clearInterval(timer); }, []);
   useEffect(() => {
     if (!db || sample) return;
+    const log = scopedDiagnosticRecorder();
+    recordDiagnostic({ type: "READ_START", source: "calculation" });
     return onSnapshot(query(getCalculationAttempts(db, familyId, uid, today), orderBy("attemptNo")), snapshot => {
       setAttempts(snapshot.docs.map(item => item.data() as CalculationAttempt)); setLoading(false); setError("");
-    }, () => { setLoading(false); setError("記録を読み込めなかったよ。保存済みの記録を確認するため、画面を開き直してね。"); });
+      log({ type: "READ_SUCCESS", source: "calculation", code: "READ_ALLOWED" });
+    }, (error) => { log({ type: "READ_FAILURE", source: "calculation", code: normalizeDiagnosticError(error) }); setLoading(false); setError("記録を読み込めなかったよ。保存済みの記録を確認するため、画面を開き直してね。"); });
   }, [db, familyId, uid, sample, today]);
   const record = calculationTaskRecords(sample ? sampleAttempts : attempts).find(item => item.taskId === taskId && item.dateKey === today);
   const save = async (draft: CalculationDraft) => {
@@ -122,7 +136,7 @@ export const CalculationInput = ({ db, familyId, uid, sample, sampleAttempts, on
   return <div className="space-y-3">
     {loading && <p role="status">記録を読み込み中…</p>}{error && <p role="alert">{error}</p>}
     {/* History loading does not control the local timer; saving uses a transaction. */}
-    <CalculationStopwatch familyId={familyId} uid={uid} sample={sample} onSave={save} diagnostic={diagnostic} taskId={taskId} taskLabel={taskLabel} onRunningChange={onRunningChange} blocked={blocked} startLabel={calculationStartLabel(record)} />
+    <CalculationStopwatch familyId={familyId} uid={uid} sample={sample} onSave={save} diagnostic={diagnostic} taskId={taskId} taskLabel={taskLabel} onRunningChange={onRunningChange} blocked={blocked} blockedReason={blockedReason} startLabel={calculationStartLabel(record)} />
     {record && <p className="font-bold">今日の最新 {record.latestScore}/7 ・ {formatCalculationTime(record.latestElapsedSeconds)} / 解き直し{record.attemptCount - 1}回 / {record.bestScore === 7 ? "7/7達成" : "チャレンジ中"}</p>}
     <p className="text-sm">保存した結果とグラフは「実績 → 計算の記録」で見られるよ。7/7になった後も何度でも挑戦できるよ。</p>
   </div>;
