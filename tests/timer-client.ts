@@ -1,5 +1,5 @@
 import { getApp, getApps, initializeApp } from "firebase/app";
-import { connectAuthEmulator, getAuth, signInWithEmailAndPassword } from "firebase/auth";
+import { connectAuthEmulator, getAuth, signInWithEmailAndPassword, signOut, beforeAuthStateChanged, onAuthStateChanged, updateCurrentUser, type User } from "firebase/auth";
 import { collection, connectFirestoreEmulator, doc, getDocFromServer, getDocsFromServer, getFirestore, writeBatch } from "firebase/firestore";
 import { getCalculationAttempts, getJstDateKey } from "../src/daily-calculation";
 import { createInitialGameState } from "../src/game/config";
@@ -16,7 +16,9 @@ if (fresh) {
   connectFirestoreEmulator(db, "127.0.0.1", 8086);
 }
 const root = `families/${FAMILY}`;
-export const login = async (email: string, password: string) => (await signInWithEmailAndPassword(auth, email, password)).user.uid;
+const signedInUsers = new Map<string, User>();
+export const login = async (email: string, password: string) => { const {user} = await signInWithEmailAndPassword(auth, email, password); signedInUsers.set(user.uid, user); return user.uid; };
+export const switchCachedUser = async (uid: string) => { const user = signedInUsers.get(uid); if (!user) throw new Error("Emulator fixture user not cached"); await updateCurrentUser(auth, user); };
 export const seed = async () => {
   if (!auth.currentUser || !(await getDocFromServer(doc(db, root))).data()?.memberUids.includes(auth.currentUser.uid)) throw new Error("Membership required");
   if (!(await getDocsFromServer(collection(db, root, "tasks"))).empty) throw new Error("Fresh emulator required; never overwrite history");
@@ -44,3 +46,6 @@ export const familyAccessDenied = async () => {
   try { await read(); return false; }
   catch (error) { return (error as { code?: string }).code === "permission-denied"; }
 };
+
+export { auth, beforeAuthStateChanged, onAuthStateChanged };
+export const logout = () => signOut(auth);

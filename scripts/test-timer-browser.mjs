@@ -46,7 +46,7 @@ const waitFor = async (predicate, message) => {
 const close = () => page.getByRole("button", { name: "タスク詳細を閉じる", exact: true });
 const startStudy = () => page.getByRole("button", { name: "学習タイマーを開始", exact: true });
 const saveStudy = () => page.getByRole("button", { name: /計測を終了して記録を保存|記録を保存中/ });
-const queue = () => page.evaluate(() => JSON.parse(localStorage.getItem("study-app-v5-hotfix-study-family-session-operations") || "[]"));
+const queue = () => page.evaluate(async () => { const {auth} = await import("/tests/timer-client.ts"); return JSON.parse(localStorage.getItem("study-app-v5-hotfix-study-family-session-operations:demo-study-hotfix:" + auth.currentUser.uid) || "[]"); });
 const startCalculation = () => page.getByRole("button", { name: /^(計算をはじめる|解き直しをする|もう一度挑戦する|計測を再開)$/ });
 const calculationSeconds = async () => { const [m, s] = (await page.locator("p[aria-live=off]").innerText()).split(":").map(Number); return m * 60 + s; };
 const saveCalculation = async score => {
@@ -105,10 +105,14 @@ try {
   assert.ok(retained); assert.equal(await startStudy().isDisabled(), true, "Do not resume while STOP is waiting to save");
   await waitFor(() => diagnosticEvent({ type: "BUTTON", source: "study", button: "START", disabled: true, code: "SAVE_PENDING" }), "Pending save disabled reason missing");
   assert.ok(await diagnosticEvent({ type: "SAVE_FAILURE", source: "study", code: "permission-denied", retry: true }));
+  // Re-verify membership on reload, while only SAVE remains unavailable.
+  await members(accounts.slice(0, 2).map(account => account.uid));
+  await page.route("**/documents:commit*", route => route.abort());
   await page.reload(); await page.locator("select").first().selectOption({ label: "第1回" });
   await page.getByText("基本問題", { exact: true }).click();
   assert.equal((await queue()).find(operation => operation.kind === "save").operationId, retained.operationId);
   assert.equal(await startStudy().isDisabled(), true); assert.equal(await saveStudy().isDisabled(), false);
+  await page.unroute("**/documents:commit*");
   await members(accounts.slice(0, 2).map(account => account.uid));
   await saveStudy().evaluate(button => { button.click(); button.click(); });
   await waitFor(async () => (await task()).history.length === 2, "Retry did not persist history exactly once");
@@ -290,7 +294,7 @@ try {
   });
   await page.waitForTimeout(100);
   assert.equal(diagnosticWrites, writesBefore, "Diagnostic event added Firestore writes");
-  const exported = await page.evaluate(async () => (await import("/src/device-test.ts")).exportDiagnostics("v1.86.3", navigator.userAgent));
+  const exported = await page.evaluate(async () => (await import("/src/device-test.ts")).exportDiagnostics("v1.86.4", navigator.userAgent));
   assert.ok(!/PRIVATE-MARKER|taskId|sessionId|signerKey|passwordHash|email|token|memberUids/.test(exported));
   for (const account of accounts) { assert.ok(!exported.includes(account.uid)); assert.ok(!exported.includes(account.email)); }
   assert.ok(JSON.parse(exported).events.length <= 50);
@@ -301,7 +305,7 @@ try {
     await page.setViewportSize({ width, height: 844 });
     await page.getByRole("button", { name: "安全な診断情報をコピー" }).click();
     const copied = await page.getByLabel("コピー用診断情報").inputValue();
-    assert.equal(JSON.parse(copied).version, "v1.86.3");
+    assert.equal(JSON.parse(copied).version, "v1.86.4");
     assert.deepEqual(JSON.parse(await page.evaluate(() => navigator.clipboard.readText())), JSON.parse(copied));
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
     await page.screenshot({ path: `.timer-browser-results.local/diagnostics-${width}.png`, fullPage: true });

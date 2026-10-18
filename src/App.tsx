@@ -11,6 +11,8 @@ import type { ReviewReason } from "./study-idle";
 import type { StudyHistoryEntry } from "./study-utils";
 import { commitArenaPerformance, prepareArenaPerformance, type ArenaResult } from "./game/arena";
 import type { ArenaLiveId } from "./game/arena-progression";
+import { createSessionCache } from "./session-cache";
+import { useFamilySession, type FamilySession } from "./use-family-session";
 import React, {
   useState,
   useEffect,
@@ -66,10 +68,7 @@ import { initializeApp } from "firebase/app";
 import {
   getAuth,
   signInWithEmailAndPassword,
-  onAuthStateChanged,
-  signOut,
 } from "firebase/auth";
-import type { User } from "firebase/auth";
 import {
   getFirestore,
   collection,
@@ -154,15 +153,13 @@ const hasFirebaseConfig =
   !!firebaseConfig.projectId &&
   !!firebaseConfig.appId;
 
-let app = null;
 let auth: ReturnType<typeof getAuth> | null = null;
-let db: ReturnType<typeof getFirestore> | null = null;
 
 if (hasFirebaseConfig) {
   try {
-    app = initializeApp(firebaseConfig);
+    const app = initializeApp(firebaseConfig);
     auth = getAuth(app);
-    db = getFirestore(app);
+    getFirestore(app);
   } catch (e) {
     console.error("Firebase init error", e);
   }
@@ -173,7 +170,7 @@ if (hasFirebaseConfig) {
 // ==========================================
 
 const FAMILY_ID = "oomine-study-2026";
-const APP_VERSION = "v1.86.3";
+const APP_VERSION = "v1.86.4";
 
 // Firestore Path 固定（変更禁止）
 // 実DB構造:
@@ -181,15 +178,6 @@ const APP_VERSION = "v1.86.3";
 // families/oomine-study-2026/tests
 const FIRESTORE_ROOT = ["families", FAMILY_ID] as const;
 const { getGameDoc, getRewardLedgerDoc, getPerformancesCol, getPerformanceDoc } = createGameFirestoreRefs(FIRESTORE_ROOT);
-
-// Safe DB Wrapper
-const getSafeDb = () => {
-  if (!db) {
-    console.warn("Firestore not initialized");
-    return null;
-  }
-  return db;
-};
 
 // Firestore Path Helpers
 const getTasksCol = (database: any) =>
@@ -406,20 +394,6 @@ const formatTime = (seconds: number) => {
 // ==========================================
 // Local Storage Cache Helpers
 // ==========================================
-const getCache = (key: string) => {
-  try {
-    const d = localStorage.getItem(key);
-    return d ? JSON.parse(d) : null;
-  } catch {
-    return null;
-  }
-};
-const setCache = (key: string, val: any) => {
-  try {
-    localStorage.setItem(key, JSON.stringify(val));
-  } catch {}
-};
-
 const toMillis = (value: any): number => {
   if (!value) return 0;
   if (typeof value === "number") return value;
@@ -451,23 +425,6 @@ const mergeTasksFromCloud = (localTasks: Task[], cloudTasks: Task[]): Task[] => 
     .sort((a, b) => toMillis(b.lastUpdatedAt) - toMillis(a.lastUpdatedAt));
 };
 
-const getPendingTaskUpdates = (): Record<string, any> =>
-  getCache(CACHE_KEY_PENDING_TASK_UPDATES) || {};
-
-const queuePendingTaskUpdate = (id: string, updates: any) => {
-  const pending = getPendingTaskUpdates();
-  pending[id] = { ...(pending[id] || {}), ...updates };
-  setCache(CACHE_KEY_PENDING_TASK_UPDATES, pending);
-};
-
-const clearPendingTaskUpdate = (id: string) => {
-  const pending = getPendingTaskUpdates();
-  delete pending[id];
-  setCache(CACHE_KEY_PENDING_TASK_UPDATES, pending);
-};
-
-const getPendingSessionOperations = (): StudySessionOperation[] => getCache(CACHE_KEY_SESSION_OPERATIONS) || [];
-const getRetryQueueCount = () => Object.keys(getPendingTaskUpdates()).length + getPendingSessionOperations().length;
 const isLegacyTimerUpdate = (updates: Record<string, unknown>) =>
   ["isRunning", "sessionStartTime", "currentDuration", "history"].some((key) => key in updates);
 
@@ -610,7 +567,7 @@ const StrictTimer = React.memo(
     const reviewFlagsRef = useRef<SessionReviewFlag[]>(task.sessionReviewFlags || []);
     const isRunning = task.isRunning;
     const savedAfterRetry = !!saveError && !task.pendingSync && task.currentDuration === 0 && task.history.some((entry) => entry.id === getStudySessionId(task));
-    const savePending = getPendingSessionOperations().some((operation) => operation.kind === "save" && operation.taskId === task.id && operation.sessionId === getStudySessionId(task));
+    const savePending = React.useContext(SessionOperationsContext)().some((operation) => operation.kind === "save" && operation.taskId === task.id && operation.sessionId === getStudySessionId(task));
     const transition = useTimerDiagnostics("study", isSaving ? "saving" : savedAfterRetry ? "saved" : saveError ? "retryable" : isRunning ? "running" : task.currentDuration > 0 ? "paused" : task.history.some(entry => entry.reviewStatus === "pending") ? "review_pending" : "idle");
     const startReason = calculationRunning ? "OTHER_TIMER" : isSaving ? "SAVING" : savePending ? "SAVE_PENDING" : "NONE";
     const stopReason = calculationRunning ? "OTHER_TIMER" : isSaving ? "SAVING" : localSeconds === 0 ? "ZERO_TIME" : "NONE";
@@ -3191,9 +3148,47 @@ const LoginForm = ({
 // ==========================================
 // Main Application Entry
 // ==========================================
+const SessionOperationsContext = React.createContext<() => StudySessionOperation[]>(() => []);
+
 export default function App() {
-  const [user, setUser] = useState<User | null>(null);
-  const [isAuthChecking, setIsAuthChecking] = useState(true);
+  const gate = useFamilySession(auth, firebaseConfig, FAMILY_ID);
+  const [sample, setSample] = useState(!auth);
+  const logout = async () => { setSample(false); await gate.logout(); };
+  if (gate.status === "checking") return <div role="status" className="flex min-h-screen items-center justify-center">認証・所属を確認中...</div>;
+  if (gate.status === "denied" || gate.status === "error") return <div className="flex min-h-screen flex-col items-center justify-center gap-4 p-6" role="alert">
+    <p>{gate.status === "denied" ? "このアカウントでは利用できません。" : "所属を確認できませんでした。通信を確認して再試行してください。"}</p>
+    <button type="button" onClick={gate.retry}>再試行</button>
+    <button type="button" onClick={() => { void logout(); }}>ログアウト</button>
+  </div>;
+  if (!gate.session && !sample) return <LoginForm onLogin={async (email: string, pass: string) => {
+    if (auth) await signInWithEmailAndPassword(auth, email, pass);
+  }} onSampleMode={() => setSample(true)} />;
+  return <SessionApp key={gate.session?.generation ?? "sample"} session={gate.session} logout={logout} initialSample={!gate.session && sample} />;
+}
+
+function SessionApp({ session, logout, initialSample }: { session?: FamilySession; logout: () => Promise<void>; initialSample: boolean }) {
+  const user = session?.user ?? null;
+  const isAuthChecking = false;
+  const db = session?.database ?? null;
+  const getSafeDb = useCallback(() => session?.active() ? db : null, [db, session]);
+  const cache = useMemo(() => createSessionCache(firebaseConfig.projectId ?? "sample", FAMILY_ID, user?.uid ?? "sample"), [user]);
+  const getCache = cache.get;
+  const setCache = cache.set;
+  const { getPendingTaskUpdates, queuePendingTaskUpdate, clearPendingTaskUpdate, getPendingSessionOperations, getRetryQueueCount } = useMemo(() => {
+  const getPendingTaskUpdates = (): Record<string, any> => getCache(CACHE_KEY_PENDING_TASK_UPDATES) || {};
+  const queuePendingTaskUpdate = (id: string, updates: any) => {
+    const pending = getPendingTaskUpdates();
+    pending[id] = { ...(pending[id] || {}), ...updates };
+    setCache(CACHE_KEY_PENDING_TASK_UPDATES, pending);
+  };
+  const clearPendingTaskUpdate = (id: string) => {
+    const pending = getPendingTaskUpdates(); delete pending[id]; setCache(CACHE_KEY_PENDING_TASK_UPDATES, pending);
+  };
+  const getPendingSessionOperations = (): StudySessionOperation[] => getCache(CACHE_KEY_SESSION_OPERATIONS) || [];
+  const getRetryQueueCount = () => Object.keys(getPendingTaskUpdates()).length + getPendingSessionOperations().length;
+    return { getPendingTaskUpdates, queuePendingTaskUpdate, clearPendingTaskUpdate, getPendingSessionOperations, getRetryQueueCount };
+  }, [getCache, setCache]);
+  const [legacyPending, setLegacyPending] = useState(cache.legacyPending);
   const [syncState, setSyncState] = useState<"synced" | "syncing" | "offline">(
     "synced",
   );
@@ -3203,7 +3198,7 @@ export default function App() {
       minute: "2-digit",
     }),
   );
-  const [isSampleMode, setIsSampleMode] = useState(false);
+  const [isSampleMode, setIsSampleMode] = useState(initialSample);
   const [gachaStartsLater] = useState(() => Date.now() < GACHA_FEATURE_START_DATE);
   const [deviceOnline, setDeviceOnline] = useState(() => typeof navigator === "undefined" || navigator.onLine);
   const [deviceVisibility, setDeviceVisibility] = useState<DocumentVisibilityState>(() =>
@@ -3216,9 +3211,9 @@ export default function App() {
   const [activeTab, setActiveTab] = useState("daily");
   const [calculationRunning, setCalculationRunning] = useState(false);
   const [sampleCalculationAttempts, setSampleCalculationAttempts] = useState<CalculationAttempt[]>([]);
-  const [tasks, setTasks] = useState<Task[]>([]);
-  const [tests, setTests] = useState<TestResult[]>([]);
-  const [game, setGame] = useState<ProducerGameState>(createInitialGameState);
+  const [tasks, setTasks] = useState<Task[]>(initialSample ? INITIAL_TASKS : []);
+  const [tests, setTests] = useState<TestResult[]>(initialSample ? INITIAL_TESTS : []);
+  const [game, setGame] = useState<ProducerGameState>(() => getCache(CACHE_KEY_GAME) ?? createInitialGameState());
   const [weeklyResults, setWeeklyResults] = useState<WeeklyResult[]>([]);
   const [performances, setPerformances] = useState<Performance[]>([]);
   const [rivalBattles, setRivalBattles] = useState<RivalBattleRecord[]>([]);
@@ -3302,40 +3297,10 @@ export default function App() {
       log({ type: "READ_FAILURE", source: "family", code: normalizeDiagnosticError(error) });
       setActiveStudyTaskReadError(true);
     });
-  }, [user, isSampleMode]);
-
-  // Authentication & Initialization
-  useEffect(() => {
-    if (!auth) {
-      setIsSampleMode(true);
-      setTasks(INITIAL_TASKS);
-      setTests(INITIAL_TESTS);
-      setGame(createInitialGameState());
-      setIsAuthChecking(false);
-      return;
-    }
-
-    const unsubscribe = onAuthStateChanged(auth, (u) => {
-      // Clear the previous diagnostic session before mounting the next user's timers/listeners.
-      void configureDiagnostics(`${location.origin}:${firebaseConfig.projectId}:${FAMILY_ID}:${u ? `${u.uid}:${u.metadata.lastSignInTime ?? ""}` : "signed-out"}`);
-      setUser(u);
-      setIsAuthChecking(false);
-    });
-
-    return () => unsubscribe();
-  }, []);
+  }, [user, isSampleMode, getSafeDb]);
 
   const handleEmailLogin = async (email: string, pass: string) => {
-    if (!auth) return;
-    setIsAuthChecking(true);
-    try {
-      await signInWithEmailAndPassword(auth, email, pass);
-    } catch (e: any) {
-      setIsAuthChecking(false);
-      throw new Error(
-        "ログインに失敗しました。メールアドレスとパスワードを確認してください。",
-      );
-    }
+    if (auth) await signInWithEmailAndPassword(auth, email, pass);
   };
 
   const handleLogout = () => {
@@ -3344,10 +3309,7 @@ export default function App() {
       title: "ログアウト",
       message: "本当にログアウトしますか？",
       onConfirm: async () => {
-        await signOut(auth);
-        setTasks([]);
-        setTests([]);
-        setIsSampleMode(false);
+        await logout();
       },
     });
   };
@@ -3405,6 +3367,7 @@ export default function App() {
           }),
         );
       } catch (err) {
+        if (!session?.active()) return;
         log({ type: "READ_FAILURE", source: "study", code: normalizeDiagnosticError(err) });
         console.error(err);
         setSyncState("offline");
@@ -3417,7 +3380,7 @@ export default function App() {
         if (ctTests) setTests(ctTests);
       }
     },
-    [user, isSampleMode],
+    [isSampleMode, getCache, getSafeDb, setCache, session],
   );
 
   useEffect(() => {
@@ -3446,7 +3409,7 @@ export default function App() {
       if (ctTests) setTests(ctTests);
       fetchData();
     }
-  }, [user, fetchData, isSampleMode, recordDeviceTestEvent]);
+  }, [user, fetchData, isSampleMode, recordDeviceTestEvent, getCache]);
 
   useEffect(() => {
     const dbInstance = getSafeDb();
@@ -3459,7 +3422,7 @@ export default function App() {
       }));
       setTasks((current) => mergeTasksFromCloud(current, cloudTasks));
     }, (error) => { log({ type: "READ_FAILURE", source: "study", code: normalizeDiagnosticError(error) }); setSyncState("offline"); });
-  }, [user, isSampleMode]);
+  }, [user, isSampleMode, getSafeDb]);
 
   useEffect(() => {
     const loadGame = async () => {
@@ -3484,18 +3447,18 @@ export default function App() {
       } catch { setSyncState("offline"); }
     };
     loadGame();
-  }, [user, isSampleMode]);
+  }, [user, isSampleMode, getCache, getSafeDb]);
 
   useEffect(() => {
     setCache(CACHE_KEY_GAME, game);
-  }, [game]);
+  }, [game, setCache]);
 
   useEffect(() => {
     if (!isSampleMode && tasks.length > 0) {
       setCache(CACHE_KEY_TASKS, tasks);
       setCache(CACHE_KEY_TESTS, tests);
     }
-  }, [tasks, tests, isSampleMode]);
+  }, [tasks, tests, isSampleMode, setCache]);
 
   useEffect(() => {
     const persistRunningSnapshot = () => {
@@ -3510,7 +3473,7 @@ export default function App() {
       window.removeEventListener("pagehide", persistRunningSnapshot);
       window.removeEventListener("beforeunload", persistRunningSnapshot);
     };
-  }, []);
+  }, [setCache]);
 
   // ==========================================
   // Cloud Sync Optimizations
@@ -3559,7 +3522,7 @@ export default function App() {
       throw error;
     }).finally(() => { sessionFlushRef.current = null; });
     return sessionFlushRef.current;
-  }, [isSampleMode]);
+  }, [isSampleMode, getPendingSessionOperations, getSafeDb, setCache]);
 
   const syncTaskToCloud = useCallback(
     async (id: string, cloudUpdates: any, requireConfirmation = false) => {
@@ -3623,7 +3586,7 @@ export default function App() {
         setSyncState("offline");
       }
     },
-    [isSampleMode, updateLocalTask, flushStudySessionOperations, recordDeviceTestEvent],
+    [isSampleMode, updateLocalTask, flushStudySessionOperations, recordDeviceTestEvent, clearPendingTaskUpdate, getPendingSessionOperations, getPendingTaskUpdates, getSafeDb, queuePendingTaskUpdate, setCache],
   );
 
   const flushPendingTaskUpdates = useCallback(async () => {
@@ -3655,7 +3618,7 @@ export default function App() {
     } catch (e) {
       setSyncState("offline");
     }
-  }, [isSampleMode, updateLocalTask, flushStudySessionOperations]);
+  }, [isSampleMode, updateLocalTask, flushStudySessionOperations, clearPendingTaskUpdate, getPendingSessionOperations, getPendingTaskUpdates, getSafeDb]);
 
   useEffect(() => {
     const retry = (source: string) => {
@@ -3678,7 +3641,7 @@ export default function App() {
       window.removeEventListener("focus", retryFocus);
       window.removeEventListener("pageshow", retryPageShow);
     };
-  }, [flushPendingTaskUpdates, recordDeviceTestEvent]);
+  }, [flushPendingTaskUpdates, recordDeviceTestEvent, getRetryQueueCount]);
 
   useStudyObserver(tasksRef, updateLocalTask, syncTaskToCloud);
 
@@ -3931,7 +3894,7 @@ export default function App() {
       const gachaSnapshot = await getDoc(getGachaStateDoc(dbInstance));
       if (gachaSnapshot.exists()) setGachaState(normalizeGachaState(gachaSnapshot.data() as Partial<GachaState>));
     } catch { setSyncState("offline"); }
-  }, [allStudyEntries, game, isSampleMode, weeklyResults, flushStudySessionOperations]);
+  }, [allStudyEntries, game, isSampleMode, weeklyResults, flushStudySessionOperations, getSafeDb]);
 
   useEffect(() => {
     let cancelled = false;
@@ -4325,7 +4288,9 @@ export default function App() {
   }
 
   return (
-    <div className="flex flex-col h-screen w-full bg-slate-50 font-sans text-slate-900 max-w-[1600px] mx-auto shadow-2xl overflow-x-hidden relative">
+    <SessionOperationsContext.Provider value={getPendingSessionOperations}>
+    <div data-protected-session className="flex flex-col h-screen w-full bg-slate-50 font-sans text-slate-900 max-w-[1600px] mx-auto shadow-2xl overflow-x-hidden relative">
+      {legacyPending && !isSampleMode && <div role="alert" className="bg-amber-100 p-3 text-sm">この端末に以前の未保存記録があります。自分の記録か確認してから引き継いでください。<button type="button" onClick={() => setConfirmModalData({ title: "未保存記録の引き継ぎ", message: "以前の未保存記録が自分の記録であることを確認しましたか？", onConfirm: async () => { cache.adoptLegacy(); setLegacyPending(false); await fetchData(); await flushPendingTaskUpdates(); } })}>未保存記録を確認して引き継ぐ</button></div>}
       {DEVICE_TEST_ENABLED && (
         <DeviceTestPanel
           version={APP_VERSION}
@@ -4609,5 +4574,6 @@ export default function App() {
       />
 
     </div>
+    </SessionOperationsContext.Provider>
   );
 }
