@@ -28,7 +28,14 @@ const invoke = (method, ...args) => page.evaluate(async ({ method, args }) => (a
 const waitProtected = async () => { await page.locator("[data-protected-session]").waitFor(); const close = page.getByRole("complementary", {name:"端末診断"}).getByRole("button",{name:"閉じる",exact:true}); if (await close.isVisible()) await close.click(); };
 const installObservation = async () => page.evaluate(async accounts => {
   const { auth, beforeAuthStateChanged, onAuthStateChanged } = await import("/tests/timer-client.ts"); const trace = window.__authTrace = { phase: "A", observations: 0, leaks: 0, switches: 0 };
-  const sample = () => { trace.observations++; if (["C", "switching", "signed-out"].includes(trace.phase) && document.querySelector("[data-protected-session]")) { trace.leaks++; trace.lastLeak = trace.phase; } };
+  trace.encoreLeaks = 0;
+  const sample = () => {
+    trace.observations++;
+    if (["C", "switching", "signed-out"].includes(trace.phase)) {
+      if (document.querySelector("[data-protected-session]")) { trace.leaks++; trace.lastLeak = trace.phase; }
+      if (document.querySelector('[aria-label="東京ドームのアンコール"]')) trace.encoreLeaks++;
+    }
+  };
   beforeAuthStateChanged(auth, next => { if (next?.uid === auth.currentUser?.uid) return; trace.phase = "switching"; trace.switches++; sample(); });
   onAuthStateChanged(auth, user => { trace.phase = accounts.find(a => a.uid === user?.uid)?.role ?? "signed-out"; sample(); });
   new MutationObserver(sample).observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true });
@@ -115,7 +122,45 @@ try {
   await page.waitForTimeout(800); assert.equal((await invoke("read")).tasks.find(t=>t.id==="normal").history.length,1);
   assert.equal(await page.evaluate(key=>JSON.parse(localStorage.getItem(key)??"[]").length,keyA),0);
   results.push("legacy-pending-explicit-ownership-idempotent-retry");
-  await page.getByRole("button", {name:"プロデュース",exact:true}).click();
+  // Exercise an eligible encore with an old game event deliberately delivered
+  // after a new authorized session has rendered its current server game.
+  await page.clock.install({ time: new Date("2026-10-18T12:00:00+09:00") });
+  const fixture = await page.evaluate(async () => (await import("/tests/encore-client.ts")).fixture(Date.now()));
+  const encode = value => value === null ? { nullValue: null } : Array.isArray(value) ? { arrayValue: { values: value.map(encode) } } : typeof value === "object" ? { mapValue: { fields: Object.fromEntries(Object.entries(value).map(([k,v]) => [k,encode(v)])) } } : typeof value === "string" ? { stringValue: value } : typeof value === "boolean" ? { booleanValue: value } : { integerValue: String(value) };
+  const seed = async (path, value) => {
+    const response = await fetch(endpoint + "/families/" + family + "/" + path, { method: "PATCH", headers: { Authorization: "Bearer owner", "Content-Type": "application/json" }, body: JSON.stringify({ fields: encode(value).mapValue.fields }) });
+    assert.equal(response.status, 200);
+  };
+  await seed("tasks/encore-auth", fixture.task);
+  await seed("game/idol-produce", fixture.game);
+  const encore = () => page.getByRole("region", { name: "東京ドームのアンコール", exact: true });
+  const produce = async () => { await page.getByRole("button", {name:"プロデュース",exact:true}).click(); await encore().getByText(/今週 3／3日/).waitFor(); };
+  await produce();
+  if (process.env.AUTH_SESSION_CONTROL !== "1") {
+    await page.evaluate(() => { window.__encoreHoldEvents = true; window.__encoreEvents = []; });
+    const oldGame = structuredClone(fixture.game); oldGame.members[0].name = "OLD_ENCORE_SESSION_MARKER";
+    await seed("game/idol-produce", oldGame);
+    await page.waitForFunction(() => window.__encoreEvents.length > 0);
+    await page.evaluate(() => { window.__oldEncoreEvents = window.__encoreEvents.splice(0); window.__encoreHoldEvents = false; });
+    const newGame = structuredClone(fixture.game); newGame.members[0].name = "CURRENT_ENCORE_SESSION_MARKER";
+    await seed("game/idol-produce", newGame);
+    await login("B"); await waitProtected(); await produce();
+    await encore().getByRole("button", {name:"アンコールに応える",exact:true}).click();
+    await encore().getByText("CURRENT_ENCORE_SESSION_MARKER", {exact:true}).waitFor();
+    const lateCount = await page.evaluate(() => { const events = window.__oldEncoreEvents.splice(0); events.reverse().forEach(deliver => deliver()); return events.length; });
+    assert.ok(lateCount > 0);
+    await page.waitForTimeout(350);
+    assert.equal(await page.getByText("OLD_ENCORE_SESSION_MARKER", {exact:true}).count(), 0);
+    await encore().getByText("CURRENT_ENCORE_SESSION_MARKER", {exact:true}).waitFor();
+    results.push({ encoreLateEventsDelivered: lateCount, staleGameMarkers: 0 });
+  }
+  await login("C"); await page.getByText("このアカウントでは利用できません。", {exact:true}).waitFor();
+  assert.equal(await encore().count(), 0);
+  assert.equal(await page.evaluate(() => window.__encoreReads.active), 0);
+  await login("A"); await waitProtected(); await produce();
+  assert.equal(await page.evaluate(() => window.__encoreReads.active), 1);
+  assert.equal((await trace()).encoreLeaks, 0);
+  results.push("encore-family-A-B-C-A-refetch-without-reload");
   await login("C"); await page.getByText("このアカウントでは利用できません。", { exact: true }).waitFor();
   const traceBeforeReload = await trace(); assert.equal(traceBeforeReload.leaks,0); results.push("game-screen-C-isolation");
   await page.reload();

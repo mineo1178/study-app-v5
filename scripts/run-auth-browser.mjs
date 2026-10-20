@@ -23,10 +23,11 @@ try {
   for (let i = 0; !(await listening(8086)); i++) { if (i > 120 || emulator.exitCode !== null) throw new Error("Firestore startup failed"); await delay(250); }
   await auth.start();
   if (process.argv.includes("auth") && process.env.AUTH_SESSION_CONTROL !== "1") process.env.AUTH_SESSION_TEST = "1";
+  process.env.ENCORE_TEST_METRICS = "1";
   vite = await createServer({ logLevel: "error", configFile: join(root, "tests/vite-timer.config.ts") }); await vite.listen();
   const suites = process.argv.slice(2); if (!suites.length) suites.push("auth");
   for (const suite of suites) {
-    const file = { auth: "test-auth-browser.mjs", timer: "test-timer-browser.mjs", calculation: "test-calculation-browser.mjs" }[suite];
+    const file = { encore: "test-encore-browser.mjs", auth: "test-auth-browser.mjs", timer: "test-timer-browser.mjs", calculation: "test-calculation-browser.mjs" }[suite];
     if (!file) throw new Error("Unknown suite");
     const test = spawn(process.execPath, [join(root, "scripts", file)], { cwd: root, windowsHide: true, stdio: "inherit", env: { ...process.env, PLAYWRIGHT_MODULE_PATH: join(homedir(), ".cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright"), CALCULATION_BROWSER_URL: "http://127.0.0.1:5178" } });
     const code = await new Promise((resolve, reject) => { test.once("error", reject); test.once("exit", c => resolve(c ?? 1)); });

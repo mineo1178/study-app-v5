@@ -10,6 +10,12 @@ import {
 const testCrypto = globalThis.crypto;
 
 describe("device test diagnostics", () => {
+  it.each(["v1.87", "v1.86.3"])("exports the application version %s", version => {
+    expect(JSON.parse(exportDiagnostics(version, "Windows")).version).toBe(version);
+  });
+  it.each(["v1.87 private", "secret", "v1", "1.87"])("rejects invalid version metadata %s", version => {
+    expect(JSON.parse(exportDiagnostics(version, "Windows")).version).toBe("unknown");
+  });
   it("is enabled only by deviceTest=1", () => {
     expect(isDeviceTestEnabled("?deviceTest=1")).toBe(true);
     expect(isDeviceTestEnabled("?foo=x&deviceTest=1")).toBe(true);

@@ -98,6 +98,8 @@ import {
   removeTasksForUnit,
 } from "./study-utils";
 import { ProducerHome } from "./components/game/ProducerHome";
+import { useEncoreGame } from "./game/use-encore-game";
+import type { EncoreTask, EncoreReadStatus } from "./game/encore";
 import { createInitialGameState, normalizeGameState } from "./game/config";
 import { getWeeklyGoalMinutes, getWeekStudyMinutes } from "./game/progression";
 import { canRecruitThirdMember, claimRewards, getSessionActivityPoints, getUnclaimedRewards, getYunaRecruitmentStatus, joinNextMember, lessonMember, recruitThirdMember, recruitYuna } from "./game/rewards";
@@ -170,7 +172,7 @@ if (hasFirebaseConfig) {
 // ==========================================
 
 const FAMILY_ID = "oomine-study-2026";
-const APP_VERSION = "v1.86.4";
+const APP_VERSION = "v1.87";
 
 // Firestore Path 固定（変更禁止）
 // 実DB構造:
@@ -3210,6 +3212,8 @@ function SessionApp({ session, logout, initialSample }: { session?: FamilySessio
 
   const [activeTab, setActiveTab] = useState("daily");
   const [calculationRunning, setCalculationRunning] = useState(false);
+  const [encoreStudySource, setEncoreStudySource] = useState<{ status: EncoreReadStatus; tasks: EncoreTask[] } | null>(null);
+  const encoreGameSource = useEncoreGame(session, FAMILY_ID);
   const [sampleCalculationAttempts, setSampleCalculationAttempts] = useState<CalculationAttempt[]>([]);
   const [tasks, setTasks] = useState<Task[]>(initialSample ? INITIAL_TASKS : []);
   const [tests, setTests] = useState<TestResult[]>(initialSample ? INITIAL_TESTS : []);
@@ -3415,14 +3419,25 @@ function SessionApp({ session, logout, initialSample }: { session?: FamilySessio
     const dbInstance = getSafeDb();
     if (!dbInstance || !user || isSampleMode) return;
     const log = scopedDiagnosticRecorder();
-    return onSnapshot(query(getTasksCol(dbInstance)), { includeMetadataChanges: true }, (snapshot) => {
-      if (snapshot.metadata.fromCache || snapshot.metadata.hasPendingWrites) return;
+    let active = true;
+    const unsubscribe = onSnapshot(query(getTasksCol(dbInstance)), { includeMetadataChanges: true }, (snapshot) => {
+      if (!active || !session?.active()) return;
+      if (snapshot.metadata.fromCache || snapshot.metadata.hasPendingWrites) {
+        setEncoreStudySource({ status: "loading", tasks: [] });
+        return;
+      }
+      setEncoreStudySource({ status: "ready", tasks: snapshot.docs.map(item => item.data() as EncoreTask) });
       const cloudTasks = snapshot.docs.map((item) => ({
         ...normalizeTask({ ...item.data(), id: item.id } as Task), pendingSync: false,
       }));
       setTasks((current) => mergeTasksFromCloud(current, cloudTasks));
-    }, (error) => { log({ type: "READ_FAILURE", source: "study", code: normalizeDiagnosticError(error) }); setSyncState("offline"); });
-  }, [user, isSampleMode, getSafeDb]);
+    }, (error) => {
+      if (!active || !session?.active()) return;
+      setEncoreStudySource({ status: "error", tasks: [] });
+      log({ type: "READ_FAILURE", source: "study", code: normalizeDiagnosticError(error) }); setSyncState("offline");
+    });
+    return () => { active = false; unsubscribe(); };
+  }, [user, isSampleMode, getSafeDb, session]);
 
   useEffect(() => {
     const loadGame = async () => {
@@ -4430,6 +4445,13 @@ function SessionApp({ session, logout, initialSample }: { session?: FamilySessio
           />
         ) : activeTab === "produce" ? (
           <ProducerHome
+            encore={{
+              scope: `${FAMILY_ID}:${user?.uid ?? "sample"}:${session?.generation ?? "sample"}`,
+              status: isSampleMode ? "ready" : !deviceOnline || encoreStudySource?.status === "error" || encoreGameSource?.status === "error" ? "error" : encoreStudySource?.status === "ready" && encoreGameSource?.status === "ready" ? "ready" : "loading",
+              game: isSampleMode ? game : encoreGameSource?.game ?? createInitialGameState(),
+              tasks: isSampleMode ? tasks : encoreStudySource?.tasks ?? [],
+              timerRunning: calculationRunning || tasks.some(task => task.isRunning),
+            }}
             game={game}
             weeklyMinutes={getWeekStudyMinutes(allStudyEntries)}
             weeklyGoalMinutes={getWeeklyGoalMinutes()}

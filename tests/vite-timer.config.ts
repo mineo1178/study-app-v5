@@ -12,6 +12,28 @@ export default defineConfig({
     name: "timer-emulator-only",
     enforce: "pre",
     transform(source, id) {
+      if (process.env.ENCORE_TEST_METRICS === "1" && id.replace(/\\/g, "/").endsWith("/src/game/use-encore-game.ts")) {
+        const start = "    const unsubscribe = onSnapshot(";
+        const stop = "return () => { active = false; unsubscribe(); };";
+        if (!source.includes(start) || !source.includes(stop)) throw new Error("Encore read instrumentation mismatch");
+        const instrumented = source.replace(start, '    const metrics = ((globalThis as unknown as { __encoreReads?: { starts: number; active: number } }).__encoreReads ??= { starts: 0, active: 0 });\n    metrics.starts++; metrics.active++;\n' + start)
+          .replace(stop, "return () => { metrics.active--; active = false; unsubscribe(); };")
+          .replace("{ doc, onSnapshot }", "{ doc, onSnapshot as encoreSdkOnSnapshot }");
+        return `function onSnapshot(...args: any[]) {
+  (globalThis as any).__encoreFail = () => args[3]({ code: "unavailable" });
+  const cb = args[2];
+  args[2] = (...values: any[]) => {
+    const deliver = () => cb(...values);
+    if ((globalThis as any).__encoreHoldEvents) ((globalThis as any).__encoreEvents ??= []).push(deliver);
+    else deliver();
+  };
+  return (encoreSdkOnSnapshot as any)(...args);
+}
+` + instrumented;
+      }
+      if (process.env.ENCORE_TEST_METRICS === "1" && id.replace(/\\/g, "/").endsWith("/src/components/game/EncorePanel.tsx")) {
+        return source.replace("export function EncorePanel(context: EncoreContext) {", 'export function EncorePanel(context: EncoreContext) {\n  ((globalThis as unknown as { __encoreRenders?: unknown[] }).__encoreRenders ??= []).push({ scope: context.scope, status: context.status });');
+      }
       const path = id.replace(/\\/g, "/");
       if (process.env.AUTH_SESSION_TEST === "1" && path.endsWith("/src/use-family-session.ts")) {
         return source.replace('const snapshot = await getDocFromServer(doc(database, "families", family));', 'const snapshot = await getDocFromServer(doc(database, "families", family)); await (globalThis as any).__authDelay?.("membership");');

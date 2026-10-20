@@ -177,7 +177,7 @@ export const diagnosticDeviceSummary = (ua: string) => ({
   browser: /Edg\//.test(ua) ? "Edge" : /Firefox\//.test(ua) ? "Firefox" : /Chrome\/|CriOS\//.test(ua) ? "Chrome" : /Safari\//.test(ua) ? "Safari" : "other",
 });
 export const exportDiagnostics = (version: string, ua: string) => JSON.stringify({
-  schema: 2, version: /^v\d+\.\d+\.\d+$/.test(version) ? version : "unknown",
+  schema: 2, version: /^v\d+\.\d+(?:\.\d+)?$/.test(version) ? version : "unknown",
   status: { ...cleanStatus(status), online: typeof navigator === "undefined" || navigator.onLine },
   device: diagnosticDeviceSummary(ua), events: getDiagnosticHistory().map(entry => {
     const { id, ...event } = entry;

@@ -283,7 +283,7 @@ try {
   });
   await startStudy().tap(); await page.waitForTimeout(1200); await saveStudy().tap();
   await close().waitFor({ state: "hidden" });
-  assert.ok(await diagnosticEvent({ type: "SAVE_SUCCESS", source: "study" }));
+  await waitFor(() => diagnosticEvent({ type: "SAVE_SUCCESS", source: "study" }), "Quota test save acknowledgement diagnostic missing");
   results.push("Diagnostics quota failure: authenticated START/STOP/save remains functional");
   await page.reload();
   await page.waitForTimeout(500);
@@ -294,7 +294,7 @@ try {
   });
   await page.waitForTimeout(100);
   assert.equal(diagnosticWrites, writesBefore, "Diagnostic event added Firestore writes");
-  const exported = await page.evaluate(async () => (await import("/src/device-test.ts")).exportDiagnostics("v1.86.4", navigator.userAgent));
+  const exported = await page.evaluate(async () => (await import("/src/device-test.ts")).exportDiagnostics("v1.87", navigator.userAgent));
   assert.ok(!/PRIVATE-MARKER|taskId|sessionId|signerKey|passwordHash|email|token|memberUids/.test(exported));
   for (const account of accounts) { assert.ok(!exported.includes(account.uid)); assert.ok(!exported.includes(account.email)); }
   assert.ok(JSON.parse(exported).events.length <= 50);
@@ -305,7 +305,7 @@ try {
     await page.setViewportSize({ width, height: 844 });
     await page.getByRole("button", { name: "安全な診断情報をコピー" }).click();
     const copied = await page.getByLabel("コピー用診断情報").inputValue();
-    assert.equal(JSON.parse(copied).version, "v1.86.4");
+    assert.equal(JSON.parse(copied).version, "v1.87");
     assert.deepEqual(JSON.parse(await page.evaluate(() => navigator.clipboard.readText())), JSON.parse(copied));
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
     await page.screenshot({ path: `.timer-browser-results.local/diagnostics-${width}.png`, fullPage: true });
@@ -317,6 +317,7 @@ try {
   assert.ok(external.every(request => request.host === "www.google.com"), "Unexpected external request attempted");
 } finally {
   await mkdir(".timer-browser-results.local", { recursive: true });
+  await writeFile(".timer-browser-results.local/diagnostic-history.json", JSON.stringify(await diagnostics().catch(() => []), null, 2));
   await writeFile(".timer-browser-results.local/results.json", JSON.stringify({ results, errors, external, firestorePostPaths: [...firestorePostPaths] }, null, 2));
   await page.screenshot({ path: ".timer-browser-results.local/final.png", fullPage: true }).catch(() => {});
   await browser.close();

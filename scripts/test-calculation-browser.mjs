@@ -18,7 +18,7 @@ const browser = await chromium.launch({ headless: true, channel: process.env.PLA
 const results = [];
 const errors = [];
 const warnings = [];
-const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
+const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
 await mkdir(".calculation-browser-results.local", { recursive: true });
 await context.route("**/*", route => new URL(route.request().url()).hostname === "127.0.0.1" ? route.continue() : route.abort());
 const page = await context.newPage();
@@ -198,12 +198,13 @@ try {
       await waitFor(async () => await page.getByRole("button", { name: "もう一度挑戦する", exact: true }).isDisabled(), "App allowed parallel start");
       await page.getByRole("button", { name: "学習タイマーを一時停止", exact: true }).click();
     }
-    await page.getByRole("button", { name: "タスク詳細を閉じる", exact: true }).click();
+    await page.getByRole("button", { name: "タスク詳細を閉じる", exact: true }).tap();
   }
   results.push("real App: calculation ①–⑦ starts/counts/stops/saves; normal START blocked");
 } finally {
   await mkdir(".calculation-browser-results.local", { recursive: true });
   await writeFile(".calculation-browser-results.local/results.json", JSON.stringify({ results, errors, warnings }, null, 2));
+  await page.screenshot({ path: ".calculation-browser-results.local/final-v187.png", fullPage: true }).catch(() => {});
   await browser.close();
 }
 assert.deepEqual(errors, []);

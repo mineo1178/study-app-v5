@@ -1,3 +1,5 @@
+import { EncorePanel } from "./EncorePanel";
+import type { EncoreContext } from "../../game/encore";
 import { hasArenaSongs } from "../../game/arena-progression";
 import { useRef, useState } from "react";
 import { canStartTokyoDomeLive, getTokyoDomeAction, isTokyoDomeChapterUnlocked, isTokyoDomeCompleted, TOKYO_DOME_LIVE, TOKYO_DOME_REQUIRED_FANS } from "../../game/tokyo-dome-progression";
@@ -7,7 +9,7 @@ import { getLeaderSkill } from "../../game/leader-skills";
 import { SONGS } from "../../game/config";
 import type { ProducerGameState } from "../../game/types";
 
-export function TokyoDomePanel({ game, onPerform, onOpenFormation }: { game: ProducerGameState; onPerform: (songId: string) => Promise<TokyoDomeResult | null>; onOpenFormation: () => void }) {
+export function TokyoDomePanel({ encore, game, onPerform, onOpenFormation }: { encore?: EncoreContext; game: ProducerGameState; onPerform: (songId: string) => Promise<TokyoDomeResult | null>; onOpenFormation: () => void }) {
   const songs = game.songs.filter((song) => song.status === "completed" && SONGS.some((definition) => definition.id === song.id));
   const [songId, setSongId] = useState(songs[0]?.id ?? "");
   const [result, setResult] = useState<TokyoDomeResult | null>(null);
@@ -42,5 +44,6 @@ export function TokyoDomePanel({ game, onPerform, onOpenFormation }: { game: Pro
     {result?.reward && <div role="status" className="rounded-2xl border-2 border-amber-400 bg-amber-50 p-5 text-center"><h3 className="text-2xl font-black">夢のステージに立った！</h3><p className="mt-2">育てたアイドルたちと、東京ドームライブ成功！</p><p>でも活動はまだ続くよ。勉強とライブを楽しもう！</p></div>}
     {error && <p role="alert" className="text-sm font-bold text-rose-700">{error}</p>}
     {result && <div className="rounded-xl bg-amber-50 p-4 text-center"><p className="text-xl font-black">{result.performance.isClear ? "東京ドームライブ 大成功！" : "あと少し！ 曲や編成を見直してみよう！"}</p><p>{result.performance.audience.toLocaleString()} / {result.performance.capacity.toLocaleString()}人</p>{result.reward && <p className="font-bold">初回報酬：ファン +{result.reward.fanBonus.toLocaleString()}・活動P +{result.reward.activityPointBonus}</p>}</div>}
+    {encore && <EncorePanel {...encore} />}
   </section>;
 }
