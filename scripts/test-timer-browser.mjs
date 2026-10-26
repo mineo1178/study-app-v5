@@ -240,7 +240,9 @@ try {
   await page.getByRole("button", { name: "学習", exact: true }).tap(); await page.locator("select").first().selectOption({ label: "第1回" });
   await page.getByText("①", { exact: true }).click(); assert.equal(await calculationSeconds(), 0); assert.equal(await startCalculation().innerText(), "計算をはじめる"); await close().tap();
   await invoke("login", accounts[0].email, password); await page.waitForTimeout(1000); assert.equal((await read()).attempts.length, 10);
-  await page.reload(); assert.equal((await read()).attempts.length, 10);
+  await page.reload(); await page.locator("[data-protected-session]").waitFor();
+  // The fixture import and Auth persistence restoration must finish before taps.
+  assert.equal((await read()).attempts.length, 10); await page.waitForTimeout(1000);
   results.push("Actual Auth UID switch: own attempt/draft isolation, shared study/game preserved, reload restores original attempts");
   await page.getByRole("button", { name: "学習", exact: true }).tap(); await page.locator("select").first().selectOption({ label: "第1回" });
   await page.setViewportSize({ width: 320, height: 844 });
@@ -286,7 +288,16 @@ try {
   await waitFor(() => diagnosticEvent({ type: "SAVE_SUCCESS", source: "study" }), "Quota test save acknowledgement diagnostic missing");
   results.push("Diagnostics quota failure: authenticated START/STOP/save remains functional");
   await page.reload();
-  await page.waitForTimeout(500);
+  await page.locator("[data-protected-session]").waitFor();
+  // Session authorization and startup normalization can write after reload.
+  // Measure diagnostics only once those existing writes have settled.
+  let previousWrites = -1, stableSamples = 0;
+  await waitFor(async () => {
+    await page.waitForTimeout(300);
+    stableSamples = diagnosticWrites === previousWrites ? stableSamples + 1 : 0;
+    previousWrites = diagnosticWrites;
+    return stableSamples >= 5;
+  }, "Reload initialization did not settle before diagnostics measurement");
   const writesBefore = diagnosticWrites;
   await page.evaluate(async () => {
     const diagnostic = await import("/src/device-test.ts");
@@ -294,7 +305,7 @@ try {
   });
   await page.waitForTimeout(100);
   assert.equal(diagnosticWrites, writesBefore, "Diagnostic event added Firestore writes");
-  const exported = await page.evaluate(async () => (await import("/src/device-test.ts")).exportDiagnostics("v1.87", navigator.userAgent));
+  const exported = await page.evaluate(async () => (await import("/src/device-test.ts")).exportDiagnostics("v1.88", navigator.userAgent));
   assert.ok(!/PRIVATE-MARKER|taskId|sessionId|signerKey|passwordHash|email|token|memberUids/.test(exported));
   for (const account of accounts) { assert.ok(!exported.includes(account.uid)); assert.ok(!exported.includes(account.email)); }
   assert.ok(JSON.parse(exported).events.length <= 50);
@@ -305,7 +316,7 @@ try {
     await page.setViewportSize({ width, height: 844 });
     await page.getByRole("button", { name: "安全な診断情報をコピー" }).click();
     const copied = await page.getByLabel("コピー用診断情報").inputValue();
-    assert.equal(JSON.parse(copied).version, "v1.87");
+    assert.equal(JSON.parse(copied).version, "v1.88");
     assert.deepEqual(JSON.parse(await page.evaluate(() => navigator.clipboard.readText())), JSON.parse(copied));
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
     await page.screenshot({ path: `.timer-browser-results.local/diagnostics-${width}.png`, fullPage: true });

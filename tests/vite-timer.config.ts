@@ -6,6 +6,7 @@ import tailwindcss from "@tailwindcss/vite";
 // project/family. Production vite.config.ts and Firebase settings stay unchanged.
 export default defineConfig({
   envDir: "tests",
+  define: { "import.meta.env.VITE_REVIEW_STORAGE_ENABLED": JSON.stringify("true") },
   cacheDir: ".timer-browser-results.local/vite-cache",
   server: { host: "127.0.0.1", port: 5178, strictPort: true },
   plugins: [{

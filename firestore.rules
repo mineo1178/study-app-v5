@@ -25,6 +25,91 @@ service cloud.firestore {
       match /tests/{testId} {
         allow read, create, update, delete: if isFamilyMember(familyId);
       }
+      match /reviewUsers/{uid} {
+        function ownReview() { return isFamilyMember(familyId) && request.auth.uid == uid; }
+        function reviewId(v) { return v is string && v.matches('^[A-Za-z0-9_-]{1,100}$'); }
+        function reviewText(v, max) { return v is string && v.size() > 0 && v.size() <= max && !v.matches('\\s*'); }
+        function reviewChoice(v) { return reviewText(v, 300) && !v.matches('\\s[\\s\\S]*') && !v.matches('[\\s\\S]*\\s'); }
+        function subject(v) { return v in ['math', 'japanese', 'science', 'social']; }
+        function testKind(v) { return v in ['未指定', '判定', '組分け', 'カリテ', 'その他']; }
+        function questionShape(q, id) {
+          return q.keys().hasOnly(['id', 'version', 'subject', 'unit', 'prompt', 'choices', 'correctIndex', 'explanation', 'testKind', 'source'])
+            && q.id == id && reviewId(id) && reviewId(q.version) && subject(q.subject)
+            && reviewText(q.unit, 100) && reviewText(q.prompt, 1000) && reviewText(q.explanation, 1000)
+            && q.choices is list && q.choices.size() == 4
+            && reviewChoice(q.choices[0]) && reviewChoice(q.choices[1]) && reviewChoice(q.choices[2]) && reviewChoice(q.choices[3])
+            && q.choices.toSet().size() == 4 && q.correctIndex is int && q.correctIndex >= 0 && q.correctIndex <= 3
+            && testKind(q.testKind) && q.source is string && q.source.size() <= 300;
+        }
+        match /questions/{questionId} {
+          allow read: if ownReview();
+          allow create: if ownReview() && questionShape(request.resource.data, questionId);
+          allow update: if ownReview() && questionShape(request.resource.data, questionId) && request.resource.data.version != resource.data.version;
+          allow delete: if false;
+        }
+        match /weaknesses/{weaknessId} {
+          function ids(v) {
+            return v is list && v.size() <= 5 && v.toSet().size() == v.size()
+              && (v.size() < 1 || reviewId(v[0])) && (v.size() < 2 || reviewId(v[1]))
+              && (v.size() < 3 || reviewId(v[2])) && (v.size() < 4 || reviewId(v[3])) && (v.size() < 5 || reviewId(v[4]));
+          }
+          allow read: if ownReview();
+          allow create, update: if ownReview()
+            && request.resource.data.keys().hasOnly(['id', 'subject', 'unit', 'mistake', 'point', 'testKind', 'questionIds'])
+            && request.resource.data.id == weaknessId && reviewId(weaknessId) && subject(request.resource.data.subject)
+            && reviewText(request.resource.data.unit, 100) && reviewText(request.resource.data.mistake, 1000)
+            && reviewText(request.resource.data.point, 1000) && testKind(request.resource.data.testKind) && ids(request.resource.data.questionIds);
+          allow delete: if false;
+        }
+        function progressPath(qid) { return /databases/$(database)/documents/families/$(familyId)/reviewUsers/$(uid)/progress/$(qid); }
+        function attemptPath(id) { return /databases/$(database)/documents/families/$(familyId)/reviewUsers/$(uid)/attempts/$(id); }
+        match /attempts/{attemptId} {
+          function answerShape(a) {
+            let q = get(/databases/$(database)/documents/families/$(familyId)/reviewUsers/$(uid)/questions/$(a.questionId)).data;
+            return a.keys().hasOnly(['id', 'uid', 'sessionId', 'questionId', 'questionVersion', 'selectedIndex', 'correct', 'answeredAt', 'elapsedMs', 'mode', 'prompt', 'selected', 'expected', 'explanation'])
+              && a.id == attemptId && reviewId(a.sessionId) && attemptId.matches('^' + a.sessionId + '_[0-4]$')
+              && a.uid == uid && reviewId(a.questionId) && a.questionVersion == q.version
+              && a.selectedIndex is int && a.selectedIndex >= 0 && a.selectedIndex <= 3
+              && a.correct == (a.selectedIndex == q.correctIndex) && a.prompt == q.prompt
+              && a.selected == q.choices[a.selectedIndex] && a.expected == q.choices[q.correctIndex] && a.explanation == q.explanation
+              && a.mode in ['daily', 'retry'] && a.answeredAt is int && a.answeredAt >= 0 && a.answeredAt <= request.time.toMillis()
+              && a.elapsedMs is int && a.elapsedMs >= 0 && a.elapsedMs <= a.answeredAt;
+          }
+          function paired(a) {
+            let p = progressPath(a.questionId);
+            return getAfter(p).data.recordedAttemptId == attemptId
+              && getAfter(p).data.count == (exists(p) ? get(p).data.count + 1 : 1);
+          }
+          allow read: if ownReview();
+          allow create: if ownReview() && answerShape(request.resource.data) && paired(request.resource.data);
+          allow update, delete: if false;
+        }
+        match /progress/{questionId} {
+          function pairedProgress(p, old) {
+            let a = getAfter(attemptPath(p.recordedAttemptId)).data;
+            let newer = old == null || a.answeredAt >= old.latestAt;
+            let sameVersion = old != null && old.questionVersion == a.questionVersion;
+            return !exists(attemptPath(p.recordedAttemptId)) && a.questionId == questionId
+              && p == {
+                'questionId': questionId,
+                'questionVersion': newer ? a.questionVersion : old.questionVersion,
+                'count': old == null ? 1 : old.count + 1,
+                'firstCorrect': old == null ? a.correct : old.firstCorrect,
+                'previousCorrect': newer ? (sameVersion ? old.latestCorrect : a.correct) : old.previousCorrect,
+                'latestCorrect': newer ? a.correct : old.latestCorrect,
+                'latestAt': newer ? a.answeredAt : old.latestAt,
+                'nextAt': newer ? a.answeredAt + (a.correct ? (a.mode == 'retry' ? 86400000 : 259200000) : 0) : old.nextAt,
+                'latestAttemptId': newer ? a.id : old.latestAttemptId,
+                'recordedAttemptId': a.id,
+                'latestMode': newer ? a.mode : old.latestMode
+              };
+          }
+          allow read: if ownReview();
+          allow create: if ownReview() && pairedProgress(request.resource.data, null);
+          allow update: if ownReview() && pairedProgress(request.resource.data, resource.data);
+          allow delete: if false;
+        }
+      }
       match /dailyCalculations/{uid}/days/{dateKey} {
         function ownCalculation() {
           return isFamilyMember(familyId) && request.auth.uid == uid;

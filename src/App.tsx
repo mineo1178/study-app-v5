@@ -1,6 +1,7 @@
 import { commitTokyoDomePerformance, prepareTokyoDomePerformance, type TokyoDomeResult } from "./game/tokyo-dome";
 import { getStudyRewardPreview } from "./game/study-reward-preview";
 import { DailyCalculation, CalculationInput } from "./components/DailyCalculation";
+import { TestReview } from "./components/TestReview";
 import { isCalculationTask } from "./daily-calculation-view";
 import type { CalculationAttempt } from "./daily-calculation";
 import { StudyReview } from "./components/StudyReview";
@@ -172,7 +173,7 @@ if (hasFirebaseConfig) {
 // ==========================================
 
 const FAMILY_ID = "oomine-study-2026";
-const APP_VERSION = "v1.87";
+const APP_VERSION = "v1.88";
 
 // Firestore Path 固定（変更禁止）
 // 実DB構造:
@@ -4443,6 +4444,8 @@ function SessionApp({ session, logout, initialSample }: { session?: FamilySessio
             onSaveTest={saveTestToCloud}
             onDeleteTest={deleteTestFromCloud}
           />
+        ) : activeTab === "review" ? (
+          <TestReview key={`${user?.uid ?? "sample"}-${isSampleMode}`} db={db} familyId={FAMILY_ID} uid={isSampleMode ? "sample" : user!.uid} sample={isSampleMode} session={session} enabled={isSampleMode || import.meta.env.VITE_REVIEW_STORAGE_ENABLED === "true"} />
         ) : activeTab === "produce" ? (
           <ProducerHome
             encore={{
@@ -4489,7 +4492,7 @@ function SessionApp({ session, logout, initialSample }: { session?: FamilySessio
       </main>
 
       <nav className="bg-white/90 backdrop-blur-lg border-t border-slate-100 fixed bottom-0 left-0 right-0 z-40 pb-6 md:pb-8 lg:pb-8 w-full max-w-[1600px] mx-auto rounded-t-3xl md:rounded-t-[2rem] shadow-[0_-10px_30px_rgba(0,0,0,0.04)]">
-        <div className="h-16 md:h-20 lg:h-24 flex justify-around items-center px-2 md:px-6 lg:px-10">
+        <div className="h-16 md:h-20 lg:h-24 grid grid-cols-5 items-center px-1 md:px-6 lg:px-10 [&>button]:min-w-0 [&_span]:whitespace-nowrap">
           <button
             onClick={() => setActiveTab("daily")}
             className={`flex-1 flex flex-col items-center justify-center h-full space-y-1 md:space-y-2 transition-all duration-300 ${activeTab === "daily" ? "text-blue-600 -translate-y-1 md:-translate-y-2" : "text-slate-400 hover:text-slate-500"}`}
@@ -4547,6 +4550,10 @@ function SessionApp({ session, logout, initialSample }: { session?: FamilySessio
               <Zap className="w-[22px] h-[22px] md:w-6 md:h-6 lg:w-7 lg:h-7" strokeWidth={activeTab === "produce" ? 2.5 : 2} />
             </div>
             <span className="text-[10px] md:text-sm lg:text-base font-bold">プロデュース</span>
+          </button>
+          <button onClick={() => setActiveTab("review")} className={`flex flex-col items-center justify-center h-full space-y-1 md:space-y-2 transition-all ${activeTab === "review" ? "text-blue-600 -translate-y-1 md:-translate-y-2" : "text-slate-400 hover:text-slate-500"}`}>
+            <div className={`p-1.5 md:p-3 rounded-xl md:rounded-2xl ${activeTab === "review" ? "bg-blue-50" : ""}`}><CheckCircle className="w-[22px] h-[22px] md:w-6 md:h-6 lg:w-7 lg:h-7" strokeWidth={activeTab === "review" ? 2.5 : 2} /></div>
+            <span className="text-[10px] md:text-sm lg:text-base font-bold">対策・復習</span>
           </button>
         </div>
       </nav>
