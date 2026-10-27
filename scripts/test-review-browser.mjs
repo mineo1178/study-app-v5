@@ -14,6 +14,7 @@ for (const role of ["a", "b", "outsider"]) {
   assert.equal(r.status, 200); accounts.push({ email, uid: (await r.json()).localId });
 }
 assert.equal((await fetch(`${endpoint}/families/${family}`, { method: "PATCH", headers: { Authorization: "Bearer owner", "Content-Type": "application/json" }, body: JSON.stringify({ fields: { memberUids: { arrayValue: { values: accounts.slice(0, 2).map(a => ({ stringValue: a.uid })) } } } }) })).status, 200);
+assert.equal((await fetch(`${endpoint}/families/${family}/reviewManagers/${accounts[0].uid}`, { method: "PATCH", headers: { Authorization: "Bearer owner", "Content-Type": "application/json" }, body: JSON.stringify({ fields: { active: { booleanValue: true }, schemaVersion: { integerValue: "1" }, childUids: { arrayValue: { values: [{ stringValue: accounts[1].uid }] } } } }) })).status, 200);
 const browser = await chromium.launch({ headless: true, channel: process.env.PLAYWRIGHT_CHANNEL || "msedge" });
 const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
 const external = [], blockedConnectivityProbes = [], errors = [], results = [];
@@ -29,11 +30,13 @@ page.on("pageerror", e => errors.push(e.message));
 const call = (file, method, ...args) => page.evaluate(async ({ file, method, args }) => (await import(`/tests/${file}.ts`))[method](...args), { file, method, args });
 const invoke = (method, ...args) => call("timer-client", method, ...args);
 const reviewCall = (method, ...args) => call("review-client", method, ...args);
-const login = i => invoke("login", accounts[i].email, password);
-const panel = () => page.getByRole("region", { name: "テスト対策・復習", exact: true });
+let management = false;
+const login = i => { management = false; return invoke("login", accounts[i].email, password); };
+const panel = () => page.getByRole("region", { name: management ? "保護者の復習管理" : "テスト対策・復習", exact: true });
 const tab = () => page.getByRole("button", { name: "対策・復習", exact: true });
 const manager = () => panel().getByText("保護者の操作：問題登録・編集／苦手分野", { exact: true });
 const waitLoaded = async () => { await panel().waitFor(); await panel().getByText("復習データを読み込み中…", { exact: true }).waitFor({ state: "hidden" }); };
+const enterManager = async () => { await page.getByRole("button", { name: "保護者の管理", exact: true }).click(); management = true; await manager().waitFor(); };
 const save = async () => { await panel().getByRole("button", { name: "結果を保存する（失敗時は再試行）", exact: true }).click(); await panel().getByText("保存しました", { exact: true }).waitFor(); };
 const home = async () => { await panel().getByRole("button", { name: "復習ホームへ", exact: true }).click(); };
 async function answer(correct, remaining) {
@@ -69,23 +72,28 @@ try {
   await page.waitForTimeout(2000);
   const before = await invoke("read");
   assert.equal(await panel().getByRole("button", { name: "今日の0問を始める" }).isDisabled(), true);
+  await enterManager();
   await manager().click();
   await panel().getByRole("button", { name: "問題を保存", exact: true }).click(); await panel().getByRole("alert").waitFor();
   for (const [label, value] of [["単元", rows[0].unit], ["問題文", rows[0].prompt], ["短い解説", rows[0].explanation], ["出典・元テスト／設問（任意）", rows[0].source]]) await panel().getByLabel(label, { exact: true }).fill(value);
   for (let i = 0; i < 4; i++) await panel().getByLabel(`選択肢${i + 1}`, { exact: true }).fill(rows[0].choices[i]);
   await panel().getByRole("button", { name: "問題を保存", exact: true }).click(); await panel().getByText("問題を登録しました。", { exact: true }).waitFor();
-  assert.equal((await reviewCall("inspect")).questions.length, 1);
-  await manager().click(); await panel().getByRole("button", { name: "今日の1問を始める", exact: true }).click(); await answer(false, 1); await save(); await home();
+  assert.equal((await reviewCall("inspectManagement", accounts[1].uid)).questions.length, 1);
+  await login(1); await tab().click(); await waitLoaded();
+  assert.equal(await manager().count(), 0);
+  await panel().getByRole("button", { name: "今日の1問を始める", exact: true }).click(); await answer(false, 1); await save(); await home();
+  await login(0); await tab().click(); await waitLoaded(); await enterManager();
   await manager().click(); await panel().getByText("まとめて取り込む（JSON・50問まで）", { exact: true }).click();
   await panel().getByLabel("問題JSON").fill("{}"); await panel().getByRole("button", { name: "JSONを取り込む", exact: true }).click(); await panel().getByRole("alert").waitFor();
   await panel().getByLabel("問題JSON").fill(JSON.stringify(rows.slice(1))); await panel().getByRole("button", { name: "JSONを取り込む", exact: true }).click(); await panel().getByText("4問を登録しました。", { exact: true }).waitFor();
-  const registered = await reviewCall("inspect");
+  const registered = await reviewCall("inspectManagement", accounts[1].uid);
   await panel().getByLabel("編集する問題", { exact: true }).selectOption(registered.questions[0].id);
   await panel().getByLabel("短い解説", { exact: true }).fill("編集した短い解説"); await panel().getByRole("button", { name: "問題を保存", exact: true }).click(); await panel().getByText("問題を登録しました。", { exact: true }).waitFor();
   for (const [label, value] of [["苦手の単元", "保護者の確認事項"], ["間違えた内容", "紙で確認した誤答"], ["復習したいポイント", "まず小問で再確認"]]) await panel().getByLabel(label, { exact: true }).fill(value);
-  await panel().locator('input[type="checkbox"]').first().check(); await panel().getByRole("button", { name: "苦手分野を保存", exact: true }).click(); await panel().getByText("苦手分野を保存しました。", { exact: true }).waitFor();
+  await panel().locator('input[type="checkbox"]').nth(1).check(); await panel().getByRole("button", { name: "苦手分野を保存", exact: true }).click(); await panel().getByText("苦手分野を保存しました。", { exact: true }).waitFor();
   await noOverflow(320); await page.screenshot({ path: ".review-results.local/320-manager.png", fullPage: true });
   await manager().click(); await noOverflow(390);
+  await login(1); await tab().click(); await waitLoaded();
   results.push("empty state; manual and JSON registration; malformed inputs rejected; edit; parent observation; 320/390 navigation and manager");
   // Start in the past so >3min elapsed can be verified without forging future answer timestamps.
   await page.clock.install({ time: new Date(Date.now() - 200000) });
@@ -108,16 +116,17 @@ try {
   await save(); await home(); await panel().getByText("今は間違い直しの候補はありません。", { exact: true }).waitFor();
   await panel().getByText("復習問題一覧（5問）", { exact: true }).click(); await panel().getByText("直後の再挑戦で正解・後日も確認しよう", { exact: true }).first().waitFor();
   await noOverflow(390); await page.screenshot({ path: ".review-results.local/390-home.png", fullPage: true });
-  const after = await invoke("read"); assert.deepEqual(after, before, "review must not change study/calculation/tests/game rewards");
+  const after = await invoke("read"); const { uid: beforeUid, ...beforeShared } = before; const { uid: afterUid, ...afterShared } = after; void beforeUid; void afterUid;
+  assert.deepEqual(afterShared, beforeShared, "review must not change study/calculation/game rewards");
   assert.deepEqual(await reviewCall("inspectTests"), testsBefore, "review must preserve existing grade records");
   results.push("existing grade input/edit/reload and review isolation");
   assert.ok(await reviewCall("foreignFamilyDenied"));
-  await login(1); await tab().click(); await waitLoaded();
+  await login(0); await tab().click(); await waitLoaded();
   await panel().getByText("利用できる問題：0問（今回は0問。重複出題しません）", { exact: true }).waitFor();
   assert.equal(await panel().getByText("保護者の確認事項", { exact: false }).count(), 0);
-  assert.ok(await reviewCall("crossUidDenied", accounts[0].uid));
+  assert.ok(await reviewCall("crossUidDenied", accounts[1].uid));
   await login(2); await page.getByText("このアカウントでは利用できません。", { exact: true }).waitFor(); assert.equal(await page.locator("[data-protected-session]").count(), 0);
-  await login(0); await tab().click(); await waitLoaded();
+  await login(1); await tab().click(); await waitLoaded();
   // Saved result can be shown after reload; replay remains idempotent.
   if (await panel().getByRole("button", { name: "結果を保存する（失敗時は再試行）", exact: true }).count()) { await save(); await home(); }
   assert.equal((await reviewCall("inspect")).history.length, 11);

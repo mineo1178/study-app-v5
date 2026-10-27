@@ -1,11 +1,11 @@
-import { collection, doc, getDocFromServer, getDocsFromServer, limit, orderBy, query, runTransaction, writeBatch, type Firestore } from "firebase/firestore";
+import { collection, doc, getDocFromServer, getDocsFromServer, limit, orderBy, query, runTransaction, where, type Firestore } from "firebase/firestore";
 import { nextProgress, validateQuestion, validateWeakness, type Answer, type Draft, type Progress, type Question, type Weakness } from "./model";
 
 export const reviewCollection = (db: Firestore, family: string, uid: string, name: "questions" | "weaknesses" | "attempts" | "progress") => collection(db, "families", family, "reviewUsers", uid, name);
 export type ReviewData = { questions: Question[]; weaknesses: Weakness[]; progress: Progress[]; history: Answer[] };
 export async function loadReview(db: Firestore, family: string, uid: string): Promise<ReviewData> {
   const [questions, weaknesses, progress, history] = await Promise.all([
-    getDocsFromServer(query(reviewCollection(db, family, uid, "questions"), limit(201))),
+    getDocsFromServer(query(reviewCollection(db, family, uid, "questions"), where("published", "==", true), limit(201))),
     getDocsFromServer(query(reviewCollection(db, family, uid, "weaknesses"), limit(101))),
     getDocsFromServer(query(reviewCollection(db, family, uid, "progress"), limit(201))),
     getDocsFromServer(query(reviewCollection(db, family, uid, "attempts"), orderBy("answeredAt", "desc"), limit(50))),
@@ -15,12 +15,25 @@ export async function loadReview(db: Firestore, family: string, uid: string): Pr
   const ws = weaknesses.docs.map(d => d.data()); ws.forEach(validateWeakness);
   return { questions: qs as Question[], weaknesses: ws as Weakness[], progress: progress.docs.map(d => d.data() as Progress), history: history.docs.map(d => d.data() as Answer) };
 }
-export async function saveQuestions(db: Firestore, family: string, uid: string, questions: Question[]) {
+export async function loadReviewManagement(db: Firestore, family: string, uid: string) {
+  const [questions, weaknesses] = await Promise.all([
+    getDocsFromServer(query(reviewCollection(db, family, uid, "questions"), limit(201))),
+    getDocsFromServer(query(reviewCollection(db, family, uid, "weaknesses"), limit(101))),
+  ]);
+  if (questions.size > 200 || weaknesses.size > 100) throw new Error("表示上限を超えています。");
+  const qs = questions.docs.map(d => d.data()); qs.forEach(validateQuestion);
+  const ws = weaknesses.docs.map(d => d.data()); ws.forEach(validateWeakness);
+  return { questions: qs as Question[], weaknesses: ws as Weakness[] };
+}
+export async function saveQuestions(db: Firestore, family: string, uid: string, questions: Question[], active = () => true) {
   if (questions.length < 1 || questions.length > 50) throw new Error("1〜50問ずつ登録してください。");
   questions.forEach(validateQuestion);
+  if (new Set(questions.map(q => q.id)).size !== questions.length) throw new Error("問題IDが重複しています。");
   const refs = questions.map(q => doc(reviewCollection(db, family, uid, "questions"), q.id));
   await runTransaction(db, async transaction => {
+    if (!active()) throw new Error("管理権限を確認できません。");
     const existing = await Promise.all(refs.map(ref => transaction.get(ref)));
+    if (!active()) throw new Error("管理権限を確認できません。");
     questions.forEach((q, i) => {
       const old = existing[i].data() as Question | undefined;
       if (old?.version === q.version) {
@@ -31,11 +44,14 @@ export async function saveQuestions(db: Firestore, family: string, uid: string, 
     });
   });
 }
-export async function saveWeakness(db: Firestore, family: string, uid: string, weakness: Weakness) {
+export async function saveWeakness(db: Firestore, family: string, uid: string, weakness: Weakness, active = () => true) {
   validateWeakness(weakness);
-  const batch = writeBatch(db);
-  batch.set(doc(reviewCollection(db, family, uid, "weaknesses"), weakness.id), weakness);
-  await batch.commit();
+  const ref = doc(reviewCollection(db, family, uid, "weaknesses"), weakness.id);
+  await runTransaction(db, async transaction => {
+    await transaction.get(ref);
+    if (!active()) throw new Error("管理権限を確認できません。");
+    transaction.set(ref, weakness);
+  });
 }
 export async function saveReview(db: Firestore, family: string, uid: string, draft: Draft, active = () => true) {
   if (draft.uid !== uid || !draft.finishedAt || draft.answers.length !== draft.questions.length || draft.answers.length < 1 || draft.answers.length > 5) throw new Error("回答が完了していません。");

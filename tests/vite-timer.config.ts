@@ -1,6 +1,7 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
+import { execFileSync } from "node:child_process";
 
 // Only the local browser regression server transforms the real App to a demo
 // project/family. Production vite.config.ts and Firebase settings stay unchanged.
@@ -36,10 +37,24 @@ export default defineConfig({
         return source.replace("export function EncorePanel(context: EncoreContext) {", 'export function EncorePanel(context: EncoreContext) {\n  ((globalThis as unknown as { __encoreRenders?: unknown[] }).__encoreRenders ??= []).push({ scope: context.scope, status: context.status });');
       }
       const path = id.replace(/\\/g, "/");
+      if (process.env.REVIEW_ROLE_TEST === "1" && path.endsWith("/src/review/repository.ts")) {
+        return source.replace('return { questions: qs as Question[], weaknesses: ws as Weakness[] };', 'await (globalThis as any).__reviewDelay?.("read", uid); return { questions: qs as Question[], weaknesses: ws as Weakness[] };')
+          .replace('const existing = await Promise.all(refs.map(ref => transaction.get(ref)));', 'const existing = await Promise.all(refs.map(ref => transaction.get(ref))); await (globalThis as any).__reviewDelay?.("write", uid);');
+      }
+      if (process.env.REVIEW_ROLE_TEST === "1" && path.endsWith("/src/components/ReviewWorkspace.tsx")) {
+        return source.replace('{ doc, onSnapshot }', '{ doc, onSnapshot as roleSdkOnSnapshot }') + `
+function onSnapshot(...args: any[]) {
+  const m = ((globalThis as any).__reviewMetrics ??= { active: 0, closed: 0 }); m.active++;
+  const done = (roleSdkOnSnapshot as any)(...args); let live = true;
+  return () => { if (live) { live = false; m.active--; m.closed++; } done(); };
+}
+`;
+      }
       if (process.env.AUTH_SESSION_TEST === "1" && path.endsWith("/src/use-family-session.ts")) {
         return source.replace('const snapshot = await getDocFromServer(doc(database, "families", family));', 'const snapshot = await getDocFromServer(doc(database, "families", family)); await (globalThis as any).__authDelay?.("membership");');
       }
       if (!path.endsWith("/src/App.tsx")) return;
+      if (process.env.REVIEW_V187_COMPAT === "1") source = execFileSync("git", ["show", "f6442645ecce02ff9c0b9c5a267eacbd935d5d2f:src/App.tsx"], { encoding: "utf8", windowsHide: true });
       if (process.env.AUTH_SESSION_TEST === "1") {
         source = source.replace("  getDocs,", "  getDocs as authSdkGetDocs,").replace("  onSnapshot,", "  onSnapshot as authSdkOnSnapshot,");
         source = `async function getDocs(...args: any[]) { const value = await (authSdkGetDocs as any)(...args); await (globalThis as any).__authDelay?.("read"); return value; }

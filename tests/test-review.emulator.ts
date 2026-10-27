@@ -1,20 +1,20 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { deleteApp, initializeApp } from "firebase/app";
-import { collection, connectFirestoreEmulator, deleteDoc, doc, getDocFromServer, getDocsFromServer, getFirestore, setDoc, terminate, updateDoc, writeBatch } from "firebase/firestore";
+import { collection, connectFirestoreEmulator, deleteDoc, doc, getDocFromServer, getDocsFromServer, getFirestore, setDoc, terminate, updateDoc, where, query, writeBatch } from "firebase/firestore";
 import { answerQuestion, nextProgress, sampleQuestions, type Draft, type Progress } from "../src/review/model";
 import { loadReview, reviewCollection, saveQuestions, saveReview, saveWeakness } from "../src/review/repository";
-import { seedFamily } from "./emulator-admin";
+import { seedFamily, seedReviewManager } from "./emulator-admin";
 const endpoint = process.env.FIRESTORE_EMULATOR_HOST;
 if (!endpoint || !/^127\.0\.0\.1:\d+$/.test(endpoint)) throw new Error("Local emulator required");
 const family = `review-${Date.now()}`, uid = "review-a";
 const client = (id?: string) => { const app = initializeApp({ projectId: "demo-study-v182", apiKey: "emulator-only" }, crypto.randomUUID()); const db = getFirestore(app); connectFirestoreEmulator(db, "127.0.0.1", Number(endpoint.split(":")[1]), id ? { mockUserToken: { sub: id } } : undefined); return { app, db }; };
-const a = client(uid), twin = client(uid), b = client("review-b"), outside = client("review-outsider"), anon = client();
+const manager = client("review-parent"), a = client(uid), twin = client(uid), b = client("review-b"), outside = client("review-outsider"), anon = client();
 const col = (name: Parameters<typeof reviewCollection>[3], who = a, owner = uid, f = family) => reviewCollection(who.db, f, owner, name);
 const denied = (p: Promise<unknown>) => expect(p).rejects.toMatchObject({ code: "permission-denied" });
 function complete(id: string, correct: boolean, count = 5, at = Date.now() - 10000): Draft { let d: Draft = { id, uid, questions: sampleQuestions.slice(0, count), mode: "daily", startedAt: at, questionStartedAt: at, answers: [], finishedAt: null }; for (const q of d.questions) d = answerQuestion(d, correct ? q.correctIndex : (q.correctIndex + 1) % 4, d.questionStartedAt + 100); return d; }
 describe("review rules and emulator persistence", () => {
-  beforeAll(async () => { await seedFamily(family, [uid, "review-b"]); await saveQuestions(a.db, family, uid, sampleQuestions); });
-  afterAll(async () => { await Promise.all([a, twin, b, outside, anon].map(async c => { await terminate(c.db); await deleteApp(c.app); })); });
+  beforeAll(async () => { await seedFamily(family, [uid, "review-b", "review-parent"]); await seedReviewManager(family, "review-parent", [uid]); await saveQuestions(manager.db, family, uid, sampleQuestions); });
+  afterAll(async () => { await Promise.all([manager, a, twin, b, outside, anon].map(async c => { await terminate(c.db); await deleteApp(c.app); })); });
   it("saves five answers with paired progress within Rules access limits; reload and idempotent retry", async () => {
     const d = complete("all-wrong", false);
     await saveReview(a.db, family, uid, d); await saveReview(a.db, family, uid, d);
@@ -67,24 +67,24 @@ describe("review rules and emulator persistence", () => {
       await denied(setDoc(doc(col(name, who), "sample-0"), sampleQuestions[0]));
     }
     await denied(getDocsFromServer(col("questions", a, uid, "unrelated-family")));
-    expect((await getDocsFromServer(col("questions", b, "review-b"))).empty).toBe(true);
+    expect((await getDocsFromServer(query(col("questions", b, "review-b"), where("published", "==", true)))).empty).toBe(true);
   });
   it("validates manual registration/edit/import data and preserves old answer snapshots", async () => {
-    for (const patch of [{ choices: ["a", "a", "b", "c"] }, { correctIndex: 4 }, { prompt: " " }, { prompt: "x".repeat(1001) }, { subject: "invalid" }, { extra: "x" }]) await denied(setDoc(doc(col("questions"), "sample-0"), { ...sampleQuestions[0], version: crypto.randomUUID(), ...patch }));
+    for (const patch of [{ choices: ["a", "a", "b", "c"] }, { correctIndex: 4 }, { prompt: " " }, { prompt: "x".repeat(1001) }, { subject: "invalid" }, { extra: "x" }]) await denied(setDoc(doc(col("questions", manager), "sample-0"), { ...sampleQuestions[0], version: crypto.randomUUID(), ...patch }));
     const q = { ...sampleQuestions[0], version: crypto.randomUUID(), prompt: "編集後\n確認" };
-    await saveQuestions(a.db, family, uid, [q]);
+    await saveQuestions(manager.db, family, uid, [q]);
     expect((await getDocFromServer(doc(col("attempts"), "all-wrong_0"))).data()?.prompt).toBe(sampleQuestions[0].prompt);
     await expect(saveReview(a.db, family, uid, complete("stale-version", true, 1))).rejects.toThrow("編集");
-    await denied(setDoc(doc(col("questions"), q.id), { ...q, explanation: "same version forbidden" }));
-    await denied(deleteDoc(doc(col("questions"), q.id)));
+    await denied(setDoc(doc(col("questions", manager), q.id), { ...q, explanation: "same version forbidden" }));
+    await denied(deleteDoc(doc(col("questions", manager), q.id)));
     const w = { id: "weak", subject: "math" as const, unit: "保護者確認", mistake: "確認した内容", point: "再確認", testKind: "カリテ", questionIds: [q.id] };
-    await saveWeakness(a.db, family, uid, w);
-    await saveWeakness(a.db, family, uid, { ...w, point: "追記" });
-    for (const patch of [{ point: "" }, { subject: "invalid" }, { questionIds: [123] }, { questionIds: Array(6).fill("x") }, { uid: "review-b" }]) await denied(setDoc(doc(col("weaknesses"), w.id), { ...w, ...patch }));
+    await saveWeakness(manager.db, family, uid, w);
+    await saveWeakness(manager.db, family, uid, { ...w, point: "追記" });
+    for (const patch of [{ point: "" }, { subject: "invalid" }, { questionIds: [123] }, { questionIds: Array(6).fill("x") }, { uid: "review-b" }]) await denied(setDoc(doc(col("weaknesses", manager), w.id), { ...w, ...patch }));
     const items = Array.from({ length: 50 }, (_, i) => ({ ...sampleQuestions[1], id: `batch-${i}`, version: crypto.randomUUID() }));
-    await saveQuestions(a.db, family, uid, items);
-    await saveQuestions(a.db, family, uid, items); // lost-response retry uses the same IDs/version
-    expect((await getDocsFromServer(col("questions"))).size).toBe(55);
+    await saveQuestions(manager.db, family, uid, items);
+    await saveQuestions(manager.db, family, uid, items); // lost-response retry uses the same IDs/version
+    expect((await getDocsFromServer(col("questions", manager))).size).toBe(55);
   });
   it("does not touch tests, tasks or game rewards and stops invalidated sessions", async () => {
     await expect(saveReview(a.db, family, uid, complete("inactive", true, 1), () => false)).rejects.toThrow("切り替わり");

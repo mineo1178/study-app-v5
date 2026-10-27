@@ -5,6 +5,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 const require = createRequire(import.meta.url);
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE_PATH || "playwright");
 const base = "http://127.0.0.1:5178", project = "demo-study-hotfix", family = "hotfix-study-family";
+const expectedAppVersion = process.env.EXPECTED_APP_VERSION || "v1.88.1";
 const endpoint = `http://127.0.0.1:8086/v1/projects/${project}/databases/(default)/documents`;
 const results = [], errors = [], external = [], firestorePostPaths = new Set();
 const response = await fetch(`http://127.0.0.1:8086/emulator/v1/projects/${project}/databases/(default)/documents`, { method: "DELETE" });
@@ -305,7 +306,7 @@ try {
   });
   await page.waitForTimeout(100);
   assert.equal(diagnosticWrites, writesBefore, "Diagnostic event added Firestore writes");
-  const exported = await page.evaluate(async () => (await import("/src/device-test.ts")).exportDiagnostics("v1.88", navigator.userAgent));
+  const exported = await page.evaluate(async version => (await import("/src/device-test.ts")).exportDiagnostics(version, navigator.userAgent), expectedAppVersion);
   assert.ok(!/PRIVATE-MARKER|taskId|sessionId|signerKey|passwordHash|email|token|memberUids/.test(exported));
   for (const account of accounts) { assert.ok(!exported.includes(account.uid)); assert.ok(!exported.includes(account.email)); }
   assert.ok(JSON.parse(exported).events.length <= 50);
@@ -316,7 +317,7 @@ try {
     await page.setViewportSize({ width, height: 844 });
     await page.getByRole("button", { name: "安全な診断情報をコピー" }).click();
     const copied = await page.getByLabel("コピー用診断情報").inputValue();
-    assert.equal(JSON.parse(copied).version, "v1.88");
+    assert.equal(JSON.parse(copied).version, expectedAppVersion);
     assert.deepEqual(JSON.parse(await page.evaluate(() => navigator.clipboard.readText())), JSON.parse(copied));
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
     await page.screenshot({ path: `.timer-browser-results.local/diagnostics-${width}.png`, fullPage: true });

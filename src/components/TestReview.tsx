@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { Firestore } from "firebase/firestore";
 import type { FamilySession } from "../use-family-session";
-import { SUBJECTS, answerQuestion, getJstDay, nextProgress, progressLabel, restoreDraft, sampleQuestions, selectQuestions, type Draft, type Question, type Weakness } from "../review/model";
+import { SUBJECTS, createReviewDraft, visibleQuestions, answerQuestion, getJstDay, nextProgress, progressLabel, restoreDraft, sampleQuestions, selectQuestions, type Draft, type Question, type Weakness } from "../review/model";
 import { loadReview, saveQuestions, saveReview, saveWeakness, type ReviewData } from "../review/repository";
 import { ReviewManager } from "./ReviewManager";
 
@@ -57,8 +57,8 @@ export function TestReview({ db, familyId, uid, sample, session, enabled }: { db
   }
   function begin(questions: Question[], mode: Draft["mode"]) {
     if (!questions.length || pending.current || !active()) return;
-    const at = Date.now(); setNow(at); setSaved(false); setSelected(null); setDiscard(false); setError("");
-    persistDraft({ id: crypto.randomUUID(), uid, mode, startedAt: at, questionStartedAt: at, questions, answers: [], finishedAt: null });
+    const next = createReviewDraft(uid, questions, mode); setNow(next.startedAt); setSaved(false); setSelected(null); setDiscard(false); setError("");
+    persistDraft(next);
   }
   async function storeResult() {
     if (!draft?.finishedAt || pending.current || !active()) return;
@@ -110,7 +110,8 @@ export function TestReview({ db, familyId, uid, sample, session, enabled }: { db
     });
   }
   const todayCount = data.history.filter(a => getJstDay(a.answeredAt) === getJstDay(now)).length;
-  const wrong = data.questions.filter(q => data.progress.some(p => p.questionId === q.id && p.questionVersion === q.version && !p.latestCorrect));
+  const availableQuestions = visibleQuestions(data.questions, sample);
+  const wrong = availableQuestions.filter(q => data.progress.some(p => p.questionId === q.id && p.questionVersion === q.version && !p.latestCorrect));
   const time = (ms: number) => `${Math.floor(ms / 60000)}分${Math.floor(ms / 1000) % 60}秒`;
   if (!sample && !enabled) return <section className="p-5"><h2 className="text-xl font-black">対策・復習</h2><p className="mt-3">保存機能は公開準備中です。現在はサンプルモードで試せます。</p></section>;
   return <section aria-label="テスト対策・復習" className="mx-auto w-full max-w-3xl space-y-4 break-words p-4 pb-8 md:p-6">
@@ -144,17 +145,17 @@ export function TestReview({ db, familyId, uid, sample, session, enabled }: { db
     </> : <>
       <div className="space-y-3 rounded-2xl border border-blue-100 bg-white p-4">
         <h3 className="text-lg font-black">今日の5問</h3><p className="text-sm text-slate-600">1回5問・3分程度。4教科の登録問題から、もう一度確認したい問題を優先します。</p>
-        <p className="text-sm">利用できる問題：{data.questions.length}問{data.questions.length < 5 && `（今回は${data.questions.length}問。重複出題しません）`}</p>
-        <button className={primary} disabled={!data.questions.length || !!error || busy} onClick={() => begin(selectQuestions(data.questions, data.progress, Date.now(), Math.random, data.weaknesses.flatMap(w => w.questionIds)), "daily")}>今日の{Math.min(5, data.questions.length)}問を始める</button>
+        <p className="text-sm">利用できる問題：{availableQuestions.length}問{availableQuestions.length < 5 && `（今回は${availableQuestions.length}問。重複出題しません）`}</p>
+        <button className={primary} disabled={!availableQuestions.length || !!error || busy} onClick={() => begin(selectQuestions(availableQuestions, data.progress, undefined, Math.random, data.weaknesses.flatMap(w => w.questionIds)), "daily")}>今日の{Math.min(5, availableQuestions.length)}問を始める</button>
         <p className="text-sm" aria-label="今日の復習状況">今日の復習：{todayCount}回答（最近50回答の範囲・JST）／もう一度確認：{wrong.length}問</p>
-        {!data.questions.length && <p className="text-sm">保護者の操作から、実際に復習したい小問題を登録してください。</p>}
+        {!availableQuestions.length && <p className="text-sm">保護者の操作から、実際に復習したい小問題を登録してください。</p>}
         {!sample && <button className={secondary} disabled={busy} onClick={() => { setLoading(true); setReload(n => n + 1); }}>復習データを再読込</button>}
       </div>
       <div className="rounded-2xl bg-white p-4"><h3 className="mb-2 font-bold">苦手分野</h3><p className="mb-2 text-xs text-slate-500">保護者の入力です。教科の点数から単元の苦手を推測しません。小問の正解だけで元の弱点を解消済みにはしません。</p>{!data.weaknesses.length && <p className="text-sm">まだ登録されていません。</p>}{data.weaknesses.map(w => <article key={w.id} className="my-2 space-y-1 rounded-xl bg-slate-50 p-3 text-sm"><p className="font-bold">{SUBJECTS[w.subject]} ／ {w.unit}（{w.testKind}）</p><p>間違えた内容：{w.mistake}</p><p>復習ポイント：{w.point}</p>{w.questionIds.map(id => <p key={id}>対応問題：{data.questions.find(q => q.id === id)?.prompt ?? "未登録・確認待ち"}</p>)}</article>)}</div>
-      <div className="space-y-2 rounded-2xl bg-white p-4"><h3 className="font-bold">間違い直し</h3><p className="text-sm">{wrong.length ? `${wrong.length}問を次回優先するよ。` : "今は間違い直しの候補はありません。"}</p>{wrong.map(q => <p key={q.id} className="text-sm">{q.unit}：{q.prompt}</p>)}{wrong.length > 0 && <button disabled={!!error || busy} className={secondary} onClick={() => begin(selectQuestions(wrong, data.progress, Date.now()), "daily")}>間違い直しを始める</button>}</div>
+      <div className="space-y-2 rounded-2xl bg-white p-4"><h3 className="font-bold">間違い直し</h3><p className="text-sm">{wrong.length ? `${wrong.length}問を次回優先するよ。` : "今は間違い直しの候補はありません。"}</p>{wrong.map(q => <p key={q.id} className="text-sm">{q.unit}：{q.prompt}</p>)}{wrong.length > 0 && <button disabled={!!error || busy} className={secondary} onClick={() => begin(selectQuestions(wrong, data.progress), "daily")}>間違い直しを始める</button>}</div>
       <details className="rounded-2xl bg-white p-4"><summary className="cursor-pointer font-bold">復習問題一覧（{data.questions.length}問）</summary>{data.questions.map(q => <article key={q.id} className="my-3 space-y-1 border-b border-slate-100 pb-2 text-sm"><p className="font-bold">{SUBJECTS[q.subject]}／{q.unit}：{q.prompt}</p><p>{progressLabel(data.progress.find(p => p.questionId === q.id && p.questionVersion === q.version))}</p></article>)}</details>
       <details className="rounded-2xl bg-white p-4"><summary className="cursor-pointer font-bold">回答履歴・改善記録（最近50回答）</summary>{data.history.map(a => <p key={a.id} className="my-2 text-sm">{new Date(a.answeredAt).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" })} · {a.prompt}：{a.correct ? "正解" : "誤答"} ／ {time(a.elapsedMs)} ／ {a.mode === "retry" ? "直後の再挑戦" : "再確認"}</p>)}</details>
-      {!error && <ReviewManager questions={data.questions} weaknesses={data.weaknesses} onQuestions={registerQuestions} onWeakness={registerWeakness} busy={busy} />}
+      {sample && !error && <ReviewManager questions={data.questions} weaknesses={data.weaknesses} onQuestions={registerQuestions} onWeakness={registerWeakness} busy={busy} />}
     </>}
   </section>;
 }

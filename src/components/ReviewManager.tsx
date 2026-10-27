@@ -3,7 +3,7 @@ import { SUBJECTS, TEST_KINDS, parseQuestions, validateQuestion, validateWeaknes
 
 const field = "block w-full min-w-0 rounded-xl border border-slate-300 bg-white p-2 text-sm font-normal";
 const button = "rounded-xl bg-slate-800 px-4 py-3 text-sm font-bold text-white disabled:opacity-40";
-const blankQuestion = (): Question => ({ id: crypto.randomUUID(), version: crypto.randomUUID(), subject: "math", unit: "", prompt: "", choices: ["", "", "", ""], correctIndex: 0, explanation: "", testKind: "未指定", source: "" });
+const blankQuestion = (): Question => ({ published: true, id: crypto.randomUUID(), version: crypto.randomUUID(), subject: "math", unit: "", prompt: "", choices: ["", "", "", ""], correctIndex: 0, explanation: "", testKind: "未指定", source: "" });
 const blankWeakness = (): Weakness => ({ id: crypto.randomUUID(), subject: "math", unit: "", mistake: "", point: "", testKind: "未指定", questionIds: [] });
 export function ReviewManager({ questions, weaknesses, onQuestions, onWeakness, busy }: {
   questions: Question[]; weaknesses: Weakness[]; busy: boolean;
@@ -18,12 +18,13 @@ export function ReviewManager({ questions, weaknesses, onQuestions, onWeakness, 
   const choose = (value: string) => setQuestion(questions.find(q => q.id === value) ?? blankQuestion());
   return <details className="rounded-2xl border-2 border-dashed border-slate-300 bg-slate-100 p-4">
     <summary className="cursor-pointer font-bold">保護者の操作：問題登録・編集／苦手分野</summary>
-    <p className="my-3 text-xs text-slate-600">この区別は操作案内です。保護者専用の認証はなく、ログイン中の本人UIDに登録します。他の家族のUIDには登録できません。</p>
+    <p className="my-3 text-xs text-slate-600">管理者から割り当てられた子どもの問題を管理します。回答履歴・復習進捗は変更できません。サンプルモードの変更は端末内だけです。</p>
     {error && <p role="alert" className="my-2 text-sm text-red-700">{error}</p>}
     {notice && <p role="status" className="my-2 text-sm text-emerald-700">{notice}</p>}
     <fieldset disabled={busy} className="min-w-0 space-y-3 disabled:opacity-50">
       <legend className="mb-2 font-bold">四択問題</legend>
       <label className="block text-sm">編集する問題<select aria-label="編集する問題" className={field} value={questions.some(q => q.id === question.id) ? question.id : ""} onChange={e => choose(e.target.value)}><option value="">新しく登録</option>{questions.map(q => <option key={q.id} value={q.id}>{SUBJECTS[q.subject]}／{q.unit}：{q.prompt.slice(0, 25)}</option>)}</select></label>
+      <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={question.published === true} onChange={e => setQuestion({ ...question, published: e.target.checked })} />子どもに公開する（未設定の旧問題は非公開）</label>
       <label className="block text-sm">教科<select className={field} value={question.subject} onChange={e => setQuestion({ ...question, subject: e.target.value as Subject })}>{Object.entries(SUBJECTS).map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select></label>
       <label className="block text-sm">単元<input className={field} maxLength={100} value={question.unit} onChange={e => setQuestion({ ...question, unit: e.target.value })} /></label>
       <label className="block text-sm">問題文<textarea aria-label="問題文" className={field} maxLength={1000} value={question.prompt} onChange={e => setQuestion({ ...question, prompt: e.target.value })} /></label>
@@ -34,7 +35,7 @@ export function ReviewManager({ questions, weaknesses, onQuestions, onWeakness, 
       <label className="block text-sm">出典・元テスト／設問（任意）<input className={field} maxLength={300} value={question.source} onChange={e => setQuestion({ ...question, source: e.target.value })} /></label>
       <button className={button} onClick={() => {
         setError(""); setNotice("");
-        const q = { ...question, unit: question.unit.trim(), choices: question.choices.map(c => c.trim()), version: crypto.randomUUID() };
+        const q = { ...question, published: question.published === true, unit: question.unit.trim(), choices: question.choices.map(c => c.trim()), version: crypto.randomUUID() };
         try { validateQuestion(q); } catch (e) { setError((e as Error).message); return; }
         void onQuestions([q]).then(ok => { if (ok) { setQuestion(blankQuestion()); setNotice("問題を登録しました。"); } });
       }}>問題を保存</button>

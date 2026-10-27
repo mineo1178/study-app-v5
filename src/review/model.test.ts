@@ -1,8 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { answerQuestion, getJstDay, nextProgress, parseQuestions, progressLabel, restoreDraft, sampleQuestions, selectQuestions, validateQuestion, validateWeakness, type Draft } from "./model";
+import { answerQuestion, createReviewDraft, visibleQuestions, getJstDay, nextProgress, parseQuestions, progressLabel, restoreDraft, sampleQuestions, selectQuestions, validateQuestion, validateWeakness, type Draft } from "./model";
 const start = (count = 5): Draft => ({ id: "session", uid: "a", mode: "daily", questions: sampleQuestions.slice(0, count), startedAt: 1000, questionStartedAt: 1000, answers: [], finishedAt: null });
 const complete = (correct: boolean) => { let d = start(); for (const q of d.questions) d = answerQuestion(d, correct ? q.correctIndex : (q.correctIndex + 1) % 4, d.questionStartedAt + 61000); return d; };
 describe("short review sessions", () => {
+  it("filters publication safely and starts a new session with one injected timestamp", () => {
+    const questions = [sampleQuestions[0], { ...sampleQuestions[1], published: false }, { ...sampleQuestions[2], published: undefined }];
+    expect(visibleQuestions(questions)).toEqual([questions[0]]);
+    expect(visibleQuestions(questions, true)).toEqual([questions[0], questions[2]]);
+    expect(createReviewDraft("child", [questions[0]], "daily", 5000)).toMatchObject({ uid: "child", startedAt: 5000, questionStartedAt: 5000, mode: "daily", answers: [], finishedAt: null });
+  });
   it.each([true, false])("grades only after all five and supports zero/all correct: %s", correct => {
     const result = complete(correct);
     expect(result.answers.filter(a => a.correct)).toHaveLength(correct ? 5 : 0);
@@ -14,6 +20,10 @@ describe("short review sessions", () => {
     const d = answerQuestion(start(1), 1, 900000);
     expect(d.finishedAt).toBe(900000); expect(d.answers[0].correct).toBe(true);
     for (const invalid of [-1, 4, NaN, 0.5]) expect(() => answerQuestion(start(), invalid, 2000)).toThrow();
+  });
+  it.each([1, 2, 3, 4])("uses exactly %s available questions without padding", count => {
+    const questions = selectQuestions(sampleQuestions.slice(0, count), [], 0);
+    expect(questions).toHaveLength(count); expect(new Set(questions.map(q => q.id)).size).toBe(count);
   });
   it("restores partially answered and scored drafts, rebuilding grades and isolating UID", () => {
     const d = answerQuestion(start(), 1, 2000);
@@ -49,6 +59,7 @@ describe("short review sessions", () => {
   it("rejects malformed imports atomically, unknown fields, duplicates and invalid answer data", () => {
     const { id: _id, version: _version, ...row } = sampleQuestions[0]; void _id; void _version;
     expect(parseQuestions(JSON.stringify([row]))[0]).toMatchObject(row);
+    expect(parseQuestions(JSON.stringify(Array.from({ length: 50 }, (_, i) => ({ ...row, prompt: `確認問題${i}`, published: false }))))).toHaveLength(50);
     for (const input of ["null", "{}", "[]", "{", JSON.stringify([row, row]), JSON.stringify([{ ...row, uid: "a" }]), JSON.stringify([{ ...row, choices: ["x", "x", "y", "z"] }]), JSON.stringify([{ ...row, correctIndex: 4 }]), JSON.stringify([{ ...row, subject: "unknown" }]), JSON.stringify(Array(51).fill(row)), " ".repeat(200001)]) expect(() => parseQuestions(input)).toThrow();
     for (const q of [{ ...sampleQuestions[0], prompt: " " }, { ...sampleQuestions[0], source: "x".repeat(301) }, { ...sampleQuestions[0], id: "../bad" }]) expect(() => validateQuestion(q)).toThrow();
   });

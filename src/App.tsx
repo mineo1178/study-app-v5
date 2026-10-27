@@ -1,7 +1,7 @@
 import { commitTokyoDomePerformance, prepareTokyoDomePerformance, type TokyoDomeResult } from "./game/tokyo-dome";
 import { getStudyRewardPreview } from "./game/study-reward-preview";
 import { DailyCalculation, CalculationInput } from "./components/DailyCalculation";
-import { TestReview } from "./components/TestReview";
+import { ReviewWorkspace } from "./components/ReviewWorkspace";
 import { isCalculationTask } from "./daily-calculation-view";
 import type { CalculationAttempt } from "./daily-calculation";
 import { StudyReview } from "./components/StudyReview";
@@ -173,7 +173,7 @@ if (hasFirebaseConfig) {
 // ==========================================
 
 const FAMILY_ID = "oomine-study-2026";
-const APP_VERSION = "v1.88";
+const APP_VERSION = "v1.88.1";
 
 // Firestore Path 固定（変更禁止）
 // 実DB構造:
@@ -4445,7 +4445,7 @@ function SessionApp({ session, logout, initialSample }: { session?: FamilySessio
             onDeleteTest={deleteTestFromCloud}
           />
         ) : activeTab === "review" ? (
-          <TestReview key={`${user?.uid ?? "sample"}-${isSampleMode}`} db={db} familyId={FAMILY_ID} uid={isSampleMode ? "sample" : user!.uid} sample={isSampleMode} session={session} enabled={isSampleMode || import.meta.env.VITE_REVIEW_STORAGE_ENABLED === "true"} />
+          <ReviewWorkspace key={`${user?.uid ?? "sample"}-${isSampleMode}`} familyId={FAMILY_ID} sample={isSampleMode} session={session} enabled={isSampleMode || import.meta.env.VITE_REVIEW_STORAGE_ENABLED === "true"} />
         ) : activeTab === "produce" ? (
           <ProducerHome
             encore={{

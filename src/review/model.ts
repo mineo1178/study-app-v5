@@ -1,7 +1,7 @@
 export const SUBJECTS = { math: "算数", japanese: "国語", science: "理科", social: "社会" } as const;
 export const TEST_KINDS = ["未指定", "判定", "組分け", "カリテ", "その他"] as const;
 export type Subject = keyof typeof SUBJECTS;
-export type Question = { id: string; version: string; subject: Subject; unit: string; prompt: string; choices: string[]; correctIndex: number; explanation: string; testKind: string; source: string };
+export type Question = { published?: boolean; id: string; version: string; subject: Subject; unit: string; prompt: string; choices: string[]; correctIndex: number; explanation: string; testKind: string; source: string };
 export type Weakness = { id: string; subject: Subject; unit: string; mistake: string; point: string; testKind: string; questionIds: string[] };
 export type Answer = { id: string; uid: string; sessionId: string; questionId: string; questionVersion: string; selectedIndex: number; correct: boolean; answeredAt: number; elapsedMs: number; mode: "daily" | "retry"; prompt: string; selected: string; expected: string; explanation: string };
 export type Progress = { questionId: string; questionVersion: string; count: number; firstCorrect: boolean; latestCorrect: boolean; previousCorrect: boolean; latestAt: number; nextAt: number; latestAttemptId: string; recordedAttemptId: string; latestMode: "daily" | "retry" };
@@ -11,7 +11,8 @@ const text = (value: unknown, max: number) => typeof value === "string" && value
 export const validId = (value: unknown): value is string => typeof value === "string" && /^[A-Za-z0-9_-]{1,100}$/.test(value);
 const subject = (value: unknown): value is Subject => typeof value === "string" && Object.hasOwn(SUBJECTS, value);
 export function validateQuestion(value: unknown): asserts value is Question {
-  if (!record(value) || Object.keys(value).sort().join() !== ["id", "version", "subject", "unit", "prompt", "choices", "correctIndex", "explanation", "testKind", "source"].sort().join() ||
+  if (!record(value) || Object.keys(value).filter(key => key !== "published").sort().join() !== ["id", "version", "subject", "unit", "prompt", "choices", "correctIndex", "explanation", "testKind", "source"].sort().join() ||
+    (value.published !== undefined && typeof value.published !== "boolean") ||
     !validId(value.id) || !validId(value.version) || !subject(value.subject) || !text(value.unit, 100) || !text(value.prompt, 1000) ||
     !Array.isArray(value.choices) || value.choices.length !== 4 || value.choices.some(c => !text(c, 300) || c !== c.trim()) || new Set(value.choices).size !== 4 ||
     !Number.isInteger(value.correctIndex) || Number(value.correctIndex) < 0 || Number(value.correctIndex) > 3 || !text(value.explanation, 1000) ||
@@ -23,12 +24,12 @@ export function validateWeakness(value: unknown): asserts value is Weakness {
     !Array.isArray(value.questionIds) || value.questionIds.length > 5 || value.questionIds.some(id => !validId(id)) || new Set(value.questionIds).size !== value.questionIds.length) throw new Error("苦手分野の入力を確認してください。対応問題は5問までです。");
 }
 export function parseQuestions(input: string): Question[] {
-  if (input.length > 200000) throw new Error("取り込みは200KB以下にしてください。");
+  if (input.length > 200000) throw new Error("取り込みは200,000文字以下にしてください。");
   const items: unknown = JSON.parse(input);
   if (!Array.isArray(items) || items.length < 1 || items.length > 50) throw new Error("1〜50問のJSON配列にしてください。");
   const questions = items.map(item => {
-    if (!record(item) || Object.keys(item).some(key => !["subject", "unit", "prompt", "choices", "correctIndex", "explanation", "testKind", "source"].includes(key))) throw new Error("未対応の項目があります。");
-    const question = { ...item, id: crypto.randomUUID(), version: crypto.randomUUID() };
+    if (!record(item) || Object.keys(item).some(key => !["subject", "unit", "prompt", "choices", "correctIndex", "explanation", "testKind", "source", "published"].includes(key))) throw new Error("未対応の項目があります。");
+    const question = { published: true, ...item, id: crypto.randomUUID(), version: crypto.randomUUID() };
     validateQuestion(question);
     return question;
   });
@@ -36,7 +37,8 @@ export function parseQuestions(input: string): Question[] {
   return questions;
 }
 export const getJstDay = (at: number) => new Date(at + 32400000).toISOString().slice(0, 10);
-export function selectQuestions(questions: Question[], progress: Progress[], now: number, random = Math.random, weaknessIds: string[] = []): Question[] {
+export const visibleQuestions = (questions: Question[], sample = false) => questions.filter(q => sample ? q.published !== false : q.published === true);
+export function selectQuestions(questions: Question[], progress: Progress[], now = Date.now(), random = Math.random, weaknessIds: string[] = []): Question[] {
   const byId = new Map(progress.map(p => [p.questionId, p]));
   return questions.map(q => {
     const p = byId.get(q.id);
@@ -46,6 +48,9 @@ export function selectQuestions(questions: Question[], progress: Progress[], now
     const priority = !current ? duePriority : current.latestCorrect ? (current.nextAt <= now ? duePriority : 3) : 0;
     return { q, priority, roll: random() };
   }).sort((a, b) => a.priority - b.priority || a.roll - b.roll).slice(0, 5).map(item => item.q);
+}
+export function createReviewDraft(uid: string, questions: Question[], mode: Draft["mode"], at = Date.now()): Draft {
+  return { id: crypto.randomUUID(), uid, mode, startedAt: at, questionStartedAt: at, questions, answers: [], finishedAt: null };
 }
 export function answerQuestion(draft: Draft, selectedIndex: number, now: number): Draft {
   const index = draft.answers.length, q = draft.questions[index];
@@ -86,4 +91,4 @@ export const sampleQuestions: Question[] = [
   ["science", "水", "水がこおる温度の目安は？", ["100℃", "50℃", "0℃", "20℃"], 2, "ふつうの気圧では0℃が目安です。"],
   ["social", "方位", "地図の上が北のとき、右は？", ["北", "南", "西", "東"], 3, "北を上にすると右が東です。"],
   ["math", "分数", "1/2 と同じ大きさは？", ["1/3", "2/4", "3/4", "1/4"], 1, "分母と分子を同じ数でかけても大きさは同じです。"],
-].map((row, index) => ({ id: `sample-${index}`, version: "sample-v1", subject: row[0] as Subject, unit: row[1] as string, prompt: row[2] as string, choices: row[3] as string[], correctIndex: row[4] as number, explanation: row[5] as string, testKind: "未指定", source: "架空サンプル（実際のテストとは無関係）" }));
+].map((row, index) => ({ published: true, id: `sample-${index}`, version: "sample-v1", subject: row[0] as Subject, unit: row[1] as string, prompt: row[2] as string, choices: row[3] as string[], correctIndex: row[4] as number, explanation: row[5] as string, testKind: "未指定", source: "架空サンプル（実際のテストとは無関係）" }));

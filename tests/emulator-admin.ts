@@ -9,3 +9,14 @@ export const seedFamily = async (familyId: string, memberUids: string[], extraFi
   });
   if (!response.ok) throw new Error(`Family fixture failed: ${response.status} ${await response.text()}`);
 };
+
+export const seedReviewManager = async (familyId: string, parentUid: string, childUids: string[] | null, active = true) => {
+  const endpoint = process.env.FIRESTORE_EMULATOR_HOST;
+  if (!endpoint || !/^127\.0\.0\.1:\d+$/.test(endpoint)) throw new Error("Local emulator endpoint required");
+  const response = await fetch(`http://${endpoint}/v1/projects/demo-study-v182/databases/(default)/documents/families/${familyId}/reviewManagers/${parentUid}`, {
+    method: childUids === null ? "DELETE" : "PATCH",
+    headers: { Authorization: "Bearer owner", "Content-Type": "application/json" },
+    ...(childUids === null ? {} : { body: JSON.stringify({ fields: { active: { booleanValue: active }, schemaVersion: { integerValue: "1" }, childUids: { arrayValue: { values: childUids.map(uid => ({ stringValue: uid })) } } } }) }),
+  });
+  if (!response.ok) throw new Error(`Role fixture failed: ${response.status}`);
+};
