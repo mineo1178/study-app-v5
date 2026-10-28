@@ -8,7 +8,7 @@ import { execFileSync } from "node:child_process";
 export default defineConfig({
   envDir: "tests",
   define: { "import.meta.env.VITE_REVIEW_STORAGE_ENABLED": JSON.stringify("true") },
-  cacheDir: ".timer-browser-results.local/vite-cache",
+  cacheDir: process.env.TEST_RESULTS_ROOT ? `${process.env.TEST_RESULTS_ROOT}/vite-cache` : ".timer-browser-results.local/vite-cache",
   server: { host: "127.0.0.1", port: 5178, strictPort: true },
   plugins: [{
     name: "timer-emulator-only",
@@ -37,18 +37,9 @@ export default defineConfig({
         return source.replace("export function EncorePanel(context: EncoreContext) {", 'export function EncorePanel(context: EncoreContext) {\n  ((globalThis as unknown as { __encoreRenders?: unknown[] }).__encoreRenders ??= []).push({ scope: context.scope, status: context.status });');
       }
       const path = id.replace(/\\/g, "/");
-      if (process.env.REVIEW_ROLE_TEST === "1" && path.endsWith("/src/review/repository.ts")) {
-        return source.replace('return { questions: qs as Question[], weaknesses: ws as Weakness[] };', 'await (globalThis as any).__reviewDelay?.("read", uid); return { questions: qs as Question[], weaknesses: ws as Weakness[] };')
-          .replace('const existing = await Promise.all(refs.map(ref => transaction.get(ref)));', 'const existing = await Promise.all(refs.map(ref => transaction.get(ref))); await (globalThis as any).__reviewDelay?.("write", uid);');
-      }
-      if (process.env.REVIEW_ROLE_TEST === "1" && path.endsWith("/src/components/ReviewWorkspace.tsx")) {
-        return source.replace('{ doc, onSnapshot }', '{ doc, onSnapshot as roleSdkOnSnapshot }') + `
-function onSnapshot(...args: any[]) {
-  const m = ((globalThis as any).__reviewMetrics ??= { active: 0, closed: 0 }); m.active++;
-  const done = (roleSdkOnSnapshot as any)(...args); let live = true;
-  return () => { if (live) { live = false; m.active--; m.closed++; } done(); };
-}
-`;
+      if (process.env.REVIEW_SINGLE_TEST === "1" && path.endsWith("/src/review/repository.ts")) {
+        return source.replace('return { questions: qs as Question[], weaknesses: ws as Weakness[], progress:', 'await (globalThis as any).__reviewDelay?.("read", uid); return { questions: qs as Question[], weaknesses: ws as Weakness[], progress:')
+          .replace('const existing = await transaction.get(attemptRef);', 'const existing = await transaction.get(attemptRef); await (globalThis as any).__reviewDelay?.("write", uid);');
       }
       if (process.env.AUTH_SESSION_TEST === "1" && path.endsWith("/src/use-family-session.ts")) {
         return source.replace('const snapshot = await getDocFromServer(doc(database, "families", family));', 'const snapshot = await getDocFromServer(doc(database, "families", family)); await (globalThis as any).__authDelay?.("membership");');

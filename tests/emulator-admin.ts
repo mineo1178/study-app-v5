@@ -20,3 +20,13 @@ export const seedReviewManager = async (familyId: string, parentUid: string, chi
   });
   if (!response.ok) throw new Error(`Role fixture failed: ${response.status}`);
 };
+// Trusted fixture writes: loopback demo emulator only, never a client permission.
+export const seedReviewData = async (familyId: string, uid: string, name: "questions" | "weaknesses", rows: { id: string }[]) => {
+  const endpoint = process.env.FIRESTORE_EMULATOR_HOST;
+  if (!endpoint || !/^127\.0\.0\.1:\d+$/.test(endpoint)) throw new Error("Local emulator endpoint required");
+  const encode = (v: unknown): object => v === null ? { nullValue: null } : Array.isArray(v) ? { arrayValue: { values: v.map(encode) } } : typeof v === "string" ? { stringValue: v } : typeof v === "boolean" ? { booleanValue: v } : typeof v === "number" ? { integerValue: String(v) } : { mapValue: { fields: Object.fromEntries(Object.entries(v as Record<string, unknown>).map(([k, x]) => [k, encode(x)])) } };
+  for (const row of rows) {
+    const response = await fetch(`http://${endpoint}/v1/projects/demo-study-v182/databases/(default)/documents/families/${familyId}/reviewUsers/${uid}/${name}/${row.id}`, { method: "PATCH", headers: { Authorization: "Bearer owner", "Content-Type": "application/json" }, body: JSON.stringify({ fields: Object.fromEntries(Object.entries(row).map(([k, v]) => [k, encode(v)])) }) });
+    if (!response.ok) throw new Error("Review fixture failed");
+  }
+};

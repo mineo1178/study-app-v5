@@ -14,7 +14,6 @@ for (const role of ["a", "b", "outsider"]) {
   assert.equal(r.status, 200); accounts.push({ email, uid: (await r.json()).localId });
 }
 assert.equal((await fetch(`${endpoint}/families/${family}`, { method: "PATCH", headers: { Authorization: "Bearer owner", "Content-Type": "application/json" }, body: JSON.stringify({ fields: { memberUids: { arrayValue: { values: accounts.slice(0, 2).map(a => ({ stringValue: a.uid })) } } } }) })).status, 200);
-assert.equal((await fetch(`${endpoint}/families/${family}/reviewManagers/${accounts[0].uid}`, { method: "PATCH", headers: { Authorization: "Bearer owner", "Content-Type": "application/json" }, body: JSON.stringify({ fields: { active: { booleanValue: true }, schemaVersion: { integerValue: "1" }, childUids: { arrayValue: { values: [{ stringValue: accounts[1].uid }] } } } }) })).status, 200);
 const browser = await chromium.launch({ headless: true, channel: process.env.PLAYWRIGHT_CHANNEL || "msedge" });
 const context = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
 const external = [], blockedConnectivityProbes = [], errors = [], results = [];
@@ -30,13 +29,11 @@ page.on("pageerror", e => errors.push(e.message));
 const call = (file, method, ...args) => page.evaluate(async ({ file, method, args }) => (await import(`/tests/${file}.ts`))[method](...args), { file, method, args });
 const invoke = (method, ...args) => call("timer-client", method, ...args);
 const reviewCall = (method, ...args) => call("review-client", method, ...args);
-let management = false;
-const login = i => { management = false; return invoke("login", accounts[i].email, password); };
-const panel = () => page.getByRole("region", { name: management ? "保護者の復習管理" : "テスト対策・復習", exact: true });
+
+const login = i => invoke("login", accounts[i].email, password);
+const panel = () => page.getByRole("region", { name: "テスト対策・復習", exact: true });
 const tab = () => page.getByRole("button", { name: "対策・復習", exact: true });
-const manager = () => panel().getByText("保護者の操作：問題登録・編集／苦手分野", { exact: true });
 const waitLoaded = async () => { await panel().waitFor(); await panel().getByText("復習データを読み込み中…", { exact: true }).waitFor({ state: "hidden" }); };
-const enterManager = async () => { await page.getByRole("button", { name: "保護者の管理", exact: true }).click(); management = true; await manager().waitFor(); };
 const save = async () => { await panel().getByRole("button", { name: "結果を保存する（失敗時は再試行）", exact: true }).click(); await panel().getByText("保存しました", { exact: true }).waitFor(); };
 const home = async () => { await panel().getByRole("button", { name: "復習ホームへ", exact: true }).click(); };
 async function answer(correct, remaining) {
@@ -66,37 +63,27 @@ try {
   await page.getByPlaceholder("例: 第14回 カリテ", { exact: true }).fill("Emulator専用の架空成績（編集済み）");
   await page.getByRole("button", { name: "更新する", exact: true }).click();
   await page.getByText("Emulator専用の架空成績（編集済み）", { exact: true }).waitFor();
+  // The grade UI updates optimistically; wait for the actual server write before measuring isolation.
+  const gradeDeadline=Date.now()+15000;
+  while(Date.now()<gradeDeadline){const savedGrades=await reviewCall('inspectTests');if(savedGrades.length===1&&JSON.stringify(savedGrades).includes('Emulator専用の架空成績（編集済み）'))break;await page.waitForTimeout(100);}
   const testsBefore = await reviewCall("inspectTests"); assert.equal(testsBefore.length, 1);
   await tab().click(); await waitLoaded();
   // Let existing weekly initialization settle before measuring review-only changes.
   await page.waitForTimeout(2000);
   const before = await invoke("read");
   assert.equal(await panel().getByRole("button", { name: "今日の0問を始める" }).isDisabled(), true);
-  await enterManager();
-  await manager().click();
-  await panel().getByRole("button", { name: "問題を保存", exact: true }).click(); await panel().getByRole("alert").waitFor();
-  for (const [label, value] of [["単元", rows[0].unit], ["問題文", rows[0].prompt], ["短い解説", rows[0].explanation], ["出典・元テスト／設問（任意）", rows[0].source]]) await panel().getByLabel(label, { exact: true }).fill(value);
-  for (let i = 0; i < 4; i++) await panel().getByLabel(`選択肢${i + 1}`, { exact: true }).fill(rows[0].choices[i]);
-  await panel().getByRole("button", { name: "問題を保存", exact: true }).click(); await panel().getByText("問題を登録しました。", { exact: true }).waitFor();
-  assert.equal((await reviewCall("inspectManagement", accounts[1].uid)).questions.length, 1);
-  await login(1); await tab().click(); await waitLoaded();
-  assert.equal(await manager().count(), 0);
-  await panel().getByRole("button", { name: "今日の1問を始める", exact: true }).click(); await answer(false, 1); await save(); await home();
-  await login(0); await tab().click(); await waitLoaded(); await enterManager();
-  await manager().click(); await panel().getByText("まとめて取り込む（JSON・50問まで）", { exact: true }).click();
-  await panel().getByLabel("問題JSON").fill("{}"); await panel().getByRole("button", { name: "JSONを取り込む", exact: true }).click(); await panel().getByRole("alert").waitFor();
-  await panel().getByLabel("問題JSON").fill(JSON.stringify(rows.slice(1))); await panel().getByRole("button", { name: "JSONを取り込む", exact: true }).click(); await panel().getByText("4問を登録しました。", { exact: true }).waitFor();
-  const registered = await reviewCall("inspectManagement", accounts[1].uid);
-  await panel().getByLabel("編集する問題", { exact: true }).selectOption(registered.questions[0].id);
-  await panel().getByLabel("短い解説", { exact: true }).fill("編集した短い解説"); await panel().getByRole("button", { name: "問題を保存", exact: true }).click(); await panel().getByText("問題を登録しました。", { exact: true }).waitFor();
-  for (const [label, value] of [["苦手の単元", "保護者の確認事項"], ["間違えた内容", "紙で確認した誤答"], ["復習したいポイント", "まず小問で再確認"]]) await panel().getByLabel(label, { exact: true }).fill(value);
-  await panel().locator('input[type="checkbox"]').nth(1).check(); await panel().getByRole("button", { name: "苦手分野を保存", exact: true }).click(); await panel().getByText("苦手分野を保存しました。", { exact: true }).waitFor();
-  await noOverflow(320); await page.screenshot({ path: ".review-results.local/320-manager.png", fullPage: true });
-  await manager().click(); await noOverflow(390);
-  await login(1); await tab().click(); await waitLoaded();
-  results.push("empty state; manual and JSON registration; malformed inputs rejected; edit; parent observation; 320/390 navigation and manager");
+  assert.equal(await page.getByRole('button',{name:'保護者の管理',exact:true}).count(),0);
+  const encode = v => v === null ? {nullValue:null} : Array.isArray(v) ? {arrayValue:{values:v.map(encode)}} : typeof v==='string' ? {stringValue:v} : typeof v==='boolean' ? {booleanValue:v} : typeof v==='number' ? {integerValue:String(v)} : {mapValue:{fields:Object.fromEntries(Object.entries(v).map(([k,x])=>[k,encode(x)]))}};
+  const seedQuestion = async i => { const q={...rows[i],id:'single-q'+i,version:'v1',published:true};assert.equal((await fetch(endpoint+'/families/'+family+'/reviewUsers/'+accounts[1].uid+'/questions/'+q.id,{method:'PATCH',headers:{Authorization:'Bearer owner','Content-Type':'application/json'},body:JSON.stringify({fields:encode(q).mapValue.fields})})).status,200); };
+  await page.clock.install({ time: new Date(Date.now() - 400000) });
+  await seedQuestion(0);await login(1);await tab().click();await waitLoaded();
+  await panel().getByRole('button',{name:'今日の1問を始める',exact:true}).click();await answer(false,1);await save();await home();
+  for(let i=1;i<5;i++)await seedQuestion(i);
+  await panel().getByRole('button',{name:'復習データを再読込',exact:true}).click();await waitLoaded();
+  for(const width of [320,390])await noOverflow(width);
+  results.push('single UID; trusted fixture registration; no live management UI; 320/390 navigation');
   // Start in the past so >3min elapsed can be verified without forging future answer timestamps.
-  await page.clock.install({ time: new Date(Date.now() - 200000) });
+  await page.clock.fastForward(200000);
   await panel().getByRole("button", { name: "今日の5問を始める", exact: true }).click();
   assert.equal(await panel().getByRole("button", { name: "回答を決めて次へ", exact: true }).isDisabled(), true);
   await answer(false, 1);

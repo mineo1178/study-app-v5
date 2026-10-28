@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { Firestore } from "firebase/firestore";
 import type { FamilySession } from "../use-family-session";
 import { SUBJECTS, createReviewDraft, visibleQuestions, answerQuestion, getJstDay, nextProgress, progressLabel, restoreDraft, sampleQuestions, selectQuestions, type Draft, type Question, type Weakness } from "../review/model";
-import { loadReview, saveQuestions, saveReview, saveWeakness, type ReviewData } from "../review/repository";
+import { loadReview, saveReview, type ReviewData } from "../review/repository";
 import { ReviewManager } from "./ReviewManager";
 
 const empty: ReviewData = { questions: [], weaknesses: [], progress: [], history: [] };
@@ -96,8 +96,7 @@ export function TestReview({ db, familyId, uid, sample, session, enabled }: { db
       }
       if (merged.size > 200) throw new Error("初期版では200問まで登録できます。");
       if (sample) updateSample({ ...data, questions: [...merged.values()] });
-      else if (db) { await saveQuestions(db, familyId, uid, questions); if (active()) setData(await loadReview(db, familyId, uid)); }
-      else throw new Error("保存先を確認できません。");
+      else throw new Error("問題管理はPCの管理者用ツールを使用してください。");
     });
   }
   async function registerWeakness(weakness: Weakness) {
@@ -105,8 +104,7 @@ export function TestReview({ db, familyId, uid, sample, session, enabled }: { db
       const merged = [...data.weaknesses.filter(w => w.id !== weakness.id), weakness];
       if (merged.length > 100) throw new Error("初期版では100件まで登録できます。");
       if (sample) updateSample({ ...data, weaknesses: merged });
-      else if (db) { await saveWeakness(db, familyId, uid, weakness); if (active()) setData(await loadReview(db, familyId, uid)); }
-      else throw new Error("保存先を確認できません。");
+      else throw new Error("苦手情報の管理はPCの管理者用ツールを使用してください。");
     });
   }
   const todayCount = data.history.filter(a => getJstDay(a.answeredAt) === getJstDay(now)).length;
@@ -148,7 +146,7 @@ export function TestReview({ db, familyId, uid, sample, session, enabled }: { db
         <p className="text-sm">利用できる問題：{availableQuestions.length}問{availableQuestions.length < 5 && `（今回は${availableQuestions.length}問。重複出題しません）`}</p>
         <button className={primary} disabled={!availableQuestions.length || !!error || busy} onClick={() => begin(selectQuestions(availableQuestions, data.progress, undefined, Math.random, data.weaknesses.flatMap(w => w.questionIds)), "daily")}>今日の{Math.min(5, availableQuestions.length)}問を始める</button>
         <p className="text-sm" aria-label="今日の復習状況">今日の復習：{todayCount}回答（最近50回答の範囲・JST）／もう一度確認：{wrong.length}問</p>
-        {!availableQuestions.length && <p className="text-sm">保護者の操作から、実際に復習したい小問題を登録してください。</p>}
+        {!availableQuestions.length && <p className="text-sm">問題は準備中です。保護者に確認してください。</p>}
         {!sample && <button className={secondary} disabled={busy} onClick={() => { setLoading(true); setReload(n => n + 1); }}>復習データを再読込</button>}
       </div>
       <div className="rounded-2xl bg-white p-4"><h3 className="mb-2 font-bold">苦手分野</h3><p className="mb-2 text-xs text-slate-500">保護者の入力です。教科の点数から単元の苦手を推測しません。小問の正解だけで元の弱点を解消済みにはしません。</p>{!data.weaknesses.length && <p className="text-sm">まだ登録されていません。</p>}{data.weaknesses.map(w => <article key={w.id} className="my-2 space-y-1 rounded-xl bg-slate-50 p-3 text-sm"><p className="font-bold">{SUBJECTS[w.subject]} ／ {w.unit}（{w.testKind}）</p><p>間違えた内容：{w.mistake}</p><p>復習ポイント：{w.point}</p>{w.questionIds.map(id => <p key={id}>対応問題：{data.questions.find(q => q.id === id)?.prompt ?? "未登録・確認待ち"}</p>)}</article>)}</div>

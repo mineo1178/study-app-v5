@@ -15,44 +15,6 @@ export async function loadReview(db: Firestore, family: string, uid: string): Pr
   const ws = weaknesses.docs.map(d => d.data()); ws.forEach(validateWeakness);
   return { questions: qs as Question[], weaknesses: ws as Weakness[], progress: progress.docs.map(d => d.data() as Progress), history: history.docs.map(d => d.data() as Answer) };
 }
-export async function loadReviewManagement(db: Firestore, family: string, uid: string) {
-  const [questions, weaknesses] = await Promise.all([
-    getDocsFromServer(query(reviewCollection(db, family, uid, "questions"), limit(201))),
-    getDocsFromServer(query(reviewCollection(db, family, uid, "weaknesses"), limit(101))),
-  ]);
-  if (questions.size > 200 || weaknesses.size > 100) throw new Error("表示上限を超えています。");
-  const qs = questions.docs.map(d => d.data()); qs.forEach(validateQuestion);
-  const ws = weaknesses.docs.map(d => d.data()); ws.forEach(validateWeakness);
-  return { questions: qs as Question[], weaknesses: ws as Weakness[] };
-}
-export async function saveQuestions(db: Firestore, family: string, uid: string, questions: Question[], active = () => true) {
-  if (questions.length < 1 || questions.length > 50) throw new Error("1〜50問ずつ登録してください。");
-  questions.forEach(validateQuestion);
-  if (new Set(questions.map(q => q.id)).size !== questions.length) throw new Error("問題IDが重複しています。");
-  const refs = questions.map(q => doc(reviewCollection(db, family, uid, "questions"), q.id));
-  await runTransaction(db, async transaction => {
-    if (!active()) throw new Error("管理権限を確認できません。");
-    const existing = await Promise.all(refs.map(ref => transaction.get(ref)));
-    if (!active()) throw new Error("管理権限を確認できません。");
-    questions.forEach((q, i) => {
-      const old = existing[i].data() as Question | undefined;
-      if (old?.version === q.version) {
-        if (Object.keys(q).some(key => JSON.stringify(old[key as keyof Question]) !== JSON.stringify(q[key as keyof Question]))) throw new Error("同じ版の問題内容が異なります。再読込してください。");
-        return;
-      }
-      transaction.set(refs[i], q);
-    });
-  });
-}
-export async function saveWeakness(db: Firestore, family: string, uid: string, weakness: Weakness, active = () => true) {
-  validateWeakness(weakness);
-  const ref = doc(reviewCollection(db, family, uid, "weaknesses"), weakness.id);
-  await runTransaction(db, async transaction => {
-    await transaction.get(ref);
-    if (!active()) throw new Error("管理権限を確認できません。");
-    transaction.set(ref, weakness);
-  });
-}
 export async function saveReview(db: Firestore, family: string, uid: string, draft: Draft, active = () => true) {
   if (draft.uid !== uid || !draft.finishedAt || draft.answers.length !== draft.questions.length || draft.answers.length < 1 || draft.answers.length > 5) throw new Error("回答が完了していません。");
   // One bounded two-write transaction per answer avoids the 20-access batch limit.
