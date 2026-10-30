@@ -6,6 +6,11 @@ const keys = (v, allowed) => v && typeof v === 'object' && !Array.isArray(v) && 
 export function validateTarget(t) {
   requireSafe(keys(t, ['projectId', 'familyId', 'uid']) && Object.keys(t).length === 3 && typeof t.projectId === 'string' && /^[a-z][a-z0-9-]{4,61}[a-z0-9]$/.test(t.projectId) && [t.familyId, t.uid].every(v => typeof v === 'string' && v.length > 0 && v.length <= 128 && !/[/.]/.test(v)), 'TARGET_REJECTED');
 }
+// This verification build cannot connect to production or retired projects, even for dry-run.
+export function validateConnectionTarget(t) {
+  validateTarget(t);
+  requireSafe(t.projectId.startsWith('demo-') || (t.projectId === 'study-app-v5-cloud-test-2' && t.familyId === 'study-v5-cloud-test-2'), 'CLOUD_TARGET_NOT_ALLOWED');
+}
 export function normalizeManifest(value) {
   if (Array.isArray(value)) value = { schemaVersion: 1, questions: parseQuestions(JSON.stringify(value)).map(q => ({ ...q, published: false })), weaknesses: [] };
   requireSafe(keys(value, ['schemaVersion', 'questions', 'weaknesses']) && value.schemaVersion === 1 && Array.isArray(value.questions) && Array.isArray(value.weaknesses) && value.questions.length + value.weaknesses.length >= 1 && value.questions.length + value.weaknesses.length <= 50, 'MANIFEST_REJECTED');

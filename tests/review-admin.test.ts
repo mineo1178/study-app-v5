@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeManifest, buildPlan, verifyPlan, hash, validateTarget } from "../scripts/review-admin-core.mjs";
+import { normalizeManifest, buildPlan, verifyPlan, hash, validateTarget, validateConnectionTarget } from "../scripts/review-admin-core.mjs";
 import { sampleQuestions } from "../src/review/model";
 const target = { projectId: "demo-admin-test", familyId: "family", uid: "child" };
 const state = { members: ["child"], questions: [], weaknesses: [] };
@@ -63,4 +63,11 @@ describe("administrator CLI fails closed before connecting", () => {
     expect(result.status).toBe(1); expect(JSON.parse(result.stdout).code).toBe("TARGET_CONFIRMATION_REQUIRED");
     const bad = spawnSync(process.execPath, [resolve("scripts/review-admin.mjs"), "prepare", "input", targetFile], { encoding: "utf8", windowsHide: true }); expect(bad.status).toBe(1); expect(JSON.parse(bad.stdout).code).toBe("ARGUMENT_REJECTED");
   });
+});
+
+it('rejects production/retired/wrong-family targets before SDK or network initialization', () => {
+  for (const t of [{...target,projectId:'study-app-v5'}, {...target,projectId:'study-app-v5-cloud-test'}, {...target,projectId:'study-app-v5-cloud-test-2',familyId:'wrong'}]) expect(() => validateConnectionTarget(t)).toThrow('CLOUD_TARGET_NOT_ALLOWED');
+  expect(() => validateConnectionTarget({...target,projectId:'study-app-v5-cloud-test-2',familyId:'study-v5-cloud-test-2'})).not.toThrow();
+  const dir=mkdtempSync(join(tmpdir(),'review-blocked-project-')), file=join(dir,'target.json');writeFileSync(file,JSON.stringify({...target,projectId:'study-app-v5'}));
+  for(const command of ['export','plan','apply']) {const r=spawnSync(process.execPath,[resolve('scripts/review-admin.mjs'),command,'--target',file,'--confirm-project','study-app-v5','--confirm-family',target.familyId],{encoding:'utf8',windowsHide:true,env:{...process.env,REVIEW_ADMIN_SDK_DIR:''}});expect(r.status).toBe(1);expect(JSON.parse(r.stdout).code).toBe('CLOUD_TARGET_NOT_ALLOWED');}
 });

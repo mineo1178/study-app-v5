@@ -4,7 +4,7 @@ import { createRequire } from 'node:module';
 import { resolve, relative, isAbsolute, join, sep } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { normalizeManifest, validateTarget, buildPlan, verifyPlan, requireSafe } from './review-admin-core.mjs';
+import { normalizeManifest, validateConnectionTarget, buildPlan, verifyPlan, requireSafe } from './review-admin-core.mjs';
 // SDK diagnostics can include document paths; never print them to the operator log.
 console.log = console.info = console.warn = console.error = console.debug = () => {};
 delete process.env.NODE_DEBUG; delete process.env.GRPC_TRACE; delete process.env.GRPC_VERBOSITY;
@@ -30,7 +30,7 @@ try {
     const manifest = normalizeManifest(await read(privatePath(opts.input))); await output(opts.output, manifest);
     summary({ status: 'PREPARED_LOCAL_ONLY', questions: manifest.questions.length, weaknesses: manifest.weaknesses.length, writes: 0 });
   } else {
-    const target = await read(privatePath(opts.target)); validateTarget(target);
+    const target = await read(privatePath(opts.target)); validateConnectionTarget(target);
     requireSafe(opts['confirm-project'] === target.projectId && opts['confirm-family'] === target.familyId, 'TARGET_CONFIRMATION_REQUIRED');
     const emulator = process.env.FIRESTORE_EMULATOR_HOST;
     if (emulator) requireSafe(/^127\.0\.0\.1:\d+$/.test(emulator) && target.projectId.startsWith('demo-') && /^127\.0\.0\.1:\d+$/.test(process.env.FIREBASE_AUTH_EMULATOR_HOST ?? ''), 'EMULATOR_SCOPE_REJECTED');
@@ -39,7 +39,7 @@ try {
     const rq = createRequire(join(resolve(process.env.REVIEW_ADMIN_SDK_DIR), 'package.json'));
     const sdk = rq('firebase-admin/app'); deleteApp = sdk.deleteApp;
     app = sdk.initializeApp({ projectId: target.projectId, ...(emulator ? {} : { credential: sdk.applicationDefault() }) }, 'review-admin');
-    db = rq('firebase-admin/firestore').getFirestore(app);
+    db = rq('firebase-admin/firestore').initializeFirestore(app, { preferRest: !emulator });
     const user = await rq('firebase-admin/auth').getAuth(app).getUser(target.uid);
     requireSafe(user.uid === target.uid && !user.disabled, 'TARGET_AUTH_INVALID');
     const family = db.doc(`families/${target.familyId}`), userRoot = family.collection('reviewUsers').doc(target.uid);

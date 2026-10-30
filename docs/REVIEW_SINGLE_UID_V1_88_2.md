@@ -107,3 +107,11 @@ IAM管理ツールはフラグやRulesとは別経路で書けるため、ツー
 - 復習E2Eの時刻巻戻しと、成績の楽観UIをサーバー保存完了と誤認するfixtureを修正。古い回答より新しい回答を優先する製品挙動やテストの期待値を緩めていない。失敗試行の証跡も保持。
 - buildの既知chunk-size警告と、既存依存監査14件の評価は残る。依存変更/自動upgradeは実施していない。
 - 新方式の実Cloud・実機Safari・本番実UID受入は未実施。公開は別途承認と残ゲート完了後。本番変更、main merge/push/deployは行っていない。
+
+### Cloud最終監査でのCLI防御追加
+
+Cloud Test 2検証では、CLIの対象確認文字列だけでは本番project指定を防げない不足を見つけたため、接続前の許可先検査を追加した。この検証版のexport/plan/applyは、明示したCloud Test 2とそのfamily、またはlocalhost Emulator用demo projectだけを許可する。本番study-app-v5・旧Cloud Test・誤familyは、dry-runも含めSDK初期化前に拒否する。prepareはローカルだけで実行できる。
+
+したがって上記のPROJECT_ID構文例は**本番操作の許可を意味しない**。将来の本番登録を有効にする方式は、公開前に別途明示承認・対象制限の再レビューが必要。本番のUIDや秘密をコードへ埋め込む方式で解除しない。
+
+WindowsでのCloud検証中にgRPC読取の90秒停止を検出したため、CLIのAdmin Firestore初期化をCloudではREST優先、localhost Emulatorでは従来のgRPCとした。変更後の検証結果・追加commitは今回専用Cloud監査資料へ記録する。旧方式のCloud PASSは流用しない。
