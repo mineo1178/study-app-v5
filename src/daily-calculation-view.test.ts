@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { summarizeCalculation, type CalculationAttempt } from "./daily-calculation";
-import { calculationAttemptTrend, calculationStartLabel } from "./daily-calculation-view";
+import { calculationAttemptTrend, calculationDateTrend, calculationStartLabel } from "./daily-calculation-view";
 
 const attempt = (attemptNo: number, score = 3, elapsedSeconds = 260, dateKey = "2026-10-10"): CalculationAttempt => ({
   id: `${dateKey}-${attemptNo}`, dateKey, attemptNo, score, elapsedSeconds, maxScore: 7,
@@ -9,6 +9,28 @@ const attempt = (attemptNo: number, score = 3, elapsedSeconds = 260, dateKey = "
 });
 
 describe("daily calculation UX", () => {
+  it("orders saved JST days across month/year boundaries, without inventing missing days", () => {
+    const saved = ["2026-02-01", "2025-12-31", "2026-01-01"].map(date => ({ ...attempt(1, 7, 10, date), taskId: "a" }));
+    const before = structuredClone(saved);
+    expect(calculationDateTrend(saved, "a").map(point => point.label)).toEqual(["2025-12-31", "2026-01-01", "2026-02-01"]);
+    expect(saved).toEqual(before);
+    expect(calculationDateTrend(saved, "other")).toEqual([]);
+    expect(calculationDateTrend([], "")).toEqual([]);
+  });
+  it("distinguishes task-local first/latest/best and never combines different task IDs", () => {
+    const saved = [attempt(5, 2), attempt(2, 7), attempt(1, 1), attempt(3, 6)].map(item => ({ ...item, taskId: item.attemptNo === 1 ? "other" : "a" }));
+    expect(calculationDateTrend(saved, "a", "first")[0].score).toBe(7);
+    expect(calculationDateTrend(saved, "a", "latest")[0].score).toBe(2);
+    expect(calculationDateTrend(saved, "a", "best")[0].score).toBe(7);
+    expect(calculationDateTrend(saved, "other")[0].score).toBe(1);
+    expect(calculationDateTrend([attempt(1)], "")).toEqual([{ label: "2026-10-10", score: 3, elapsedSeconds: 260 }]);
+  });
+  it("retains all loaded days beyond 30 and preserves a genuine saved zero", () => {
+    const saved = Array.from({ length: 40 }, (_, i) => ({ ...attempt(1, i === 39 ? 0 : 7, 10, new Date(Date.UTC(2026, 0, i + 1)).toISOString().slice(0, 10)), taskId: "a" }));
+    const trend = calculationDateTrend(saved, "a");
+    expect(trend).toHaveLength(40);
+    expect(trend.at(-1)?.score).toBe(0);
+  });
   it("offers the first calculation when no daily record exists", () => {
     expect(calculationStartLabel()).toBe("計算をはじめる");
   });
