@@ -1,7 +1,8 @@
 import { getJstDay, reviewDueAt, validId, type Progress, type Question } from "./model";
+import type { Integration } from "./exchange-plan";
 
 // Personal observations are imported on the device; never bundled with the app or sent to Firestore.
-export type TargetPlan = { schemaVersion: 1; label: string; testDay: string; items: { questionId: string; questionVersion: string; priority: number; reason: string; evidence: string; scopeBasis: string }[]; gaps: string[]; notes: string[] };
+export type TargetPlan = { schemaVersion: 1; label: string; testDay: string; items: { questionId: string; questionVersion: string; priority: number; reason: string; evidence: string; scopeBasis: string; topicId?: string; classification?: string }[]; gaps: string[]; notes: string[]; integration?: Integration };
 const text = (v: unknown, max = 500): v is string => typeof v === "string" && v.trim().length > 0 && v.length <= max;
 export function parseTargetPlan(raw: string): TargetPlan {
   if (raw.length > 50000) throw new Error("対策計画が大きすぎます。");
@@ -16,17 +17,36 @@ export function parseTargetPlan(raw: string): TargetPlan {
   return { schemaVersion: 1, label: p.label, testDay: p.testDay,
     items: p.items.map(i => ({ questionId: i.questionId, questionVersion: i.questionVersion, priority: i.priority, reason: i.reason, evidence: i.evidence, scopeBasis: i.scopeBasis })), gaps: p.gaps, notes: p.notes };
 }
+const classificationRank = (value: string) => ["observed_error", "recurring_error_pattern", "needs_retention_check", "improved_in_new_test", "demonstrated_strength", "not_assessed_for_target_scope"].indexOf(value);
 export function targetCandidates(questions: Question[], progress: Progress[], plan: TargetPlan | null, now: number) {
   if (plan && getJstDay(now) > plan.testDay) return [];
   const today = getJstDay(now);
   const remaining = Math.max(0, 5 - new Set(progress.filter(p => getJstDay(p.latestAt) === today).map(p => p.questionId)).size);
-  return questions.flatMap(q => {
+  const pool = questions.flatMap(q => {
     const item = plan?.items.find(i => i.questionId === q.id && i.questionVersion === q.version);
     if (plan && !item) return [];
     const p = progress.find(p => p.questionId === q.id && p.questionVersion === q.version);
     if (p && reviewDueAt(p) > now) return [];
     const reason = item?.reason ?? "登録されている問題を、日を空けて確かめよう。テスト範囲との関係は未確認です。";
-    return [{ question: q, reason, dueAt: p ? reviewDueAt(p) : null, priority: item?.priority ?? 3 }];
+    return [{ question: q, reason, dueAt: p ? reviewDueAt(p) : null, priority: item?.priority ?? 3, topicId: item?.topicId ?? q.id,
+      stage: p?.reviewStage ?? 0, wrong: p ? !p.latestCorrect : false, classification: item?.classification ?? "" }];
   }).sort((a, b) => (a.dueAt === null ? 1 : 0) - (b.dueAt === null ? 1 : 0) ||
-    (a.dueAt ?? 0) - (b.dueAt ?? 0) || a.priority - b.priority || a.question.id.localeCompare(b.question.id)).slice(0, remaining);
+    (plan?.integration && Date.parse(plan.testDay) - Date.parse(today) <= 3 * 86400000 ? Number(a.stage >= 3) - Number(b.stage >= 3) : 0) ||
+    (plan?.integration ? Number(b.wrong) - Number(a.wrong) || a.priority - b.priority || classificationRank(a.classification) - classificationRank(b.classification) : 0) ||
+    (a.dueAt ?? 0) - (b.dueAt ?? 0) || a.priority - b.priority || a.question.id.localeCompare(b.question.id));
+  const policy = plan?.integration?.source.reviewPolicy;
+  const selected: typeof pool = [], topicCounts = new Map<string, number>();
+  if (policy) for (const p of progress.filter(p => getJstDay(p.latestAt) === today)) {
+    const topic = plan?.items.find(i => i.questionId === p.questionId)?.topicId;
+    if (topic) topicCounts.set(topic, (topicCounts.get(topic) ?? 0) + 1);
+  }
+  while (selected.length < remaining) {
+    const eligible = pool.filter(c => !selected.includes(c) && (topicCounts.get(c.topicId) ?? 0) < (policy?.maxQuestionsPerTopicPerDay ?? 5));
+    if (!eligible.length) break;
+    const subjects = new Set(selected.map(c => c.question.subject));
+    const minimum = Math.min(policy?.minimumSubjectsWhenEnoughEligibleQuestions ?? 1, new Set([...selected, ...eligible].map(c => c.question.subject)).size);
+    const candidate = remaining - selected.length <= minimum - subjects.size ? eligible.find(c => !subjects.has(c.question.subject)) ?? eligible[0] : eligible[0];
+    selected.push(candidate); topicCounts.set(candidate.topicId, (topicCounts.get(candidate.topicId) ?? 0) + 1);
+  }
+  return selected;
 }

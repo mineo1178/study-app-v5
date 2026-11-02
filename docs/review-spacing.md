@@ -24,3 +24,19 @@
 `tests/review-spacing.emulator.ts` / `test-review.emulator.ts` で旧データ、transaction、同時保存、再試行、偽装拒否、UID・family分離を確認する。
 
 `scripts/test-review-spacing-browser.mjs` はlocalhost専用。通常は架空資料で動作し、任意の非公開ファイルで選定の実照合も可能。非公開ファイルの内容は出力せず、スクリーンショットも保存しない。320/390px、reload、失敗再試行、期限・段階、UID切替、既存学習・ゲームの不変性を確認する。
+
+## データ側schemaVersion 1.0.0との連携
+
+`exchange-schema.ts`はデータ側の公開交換契約のみを収録する。実計画・非公開根拠は含めない。`exchange-plan.ts`が型・未知項目・参照・件数・方針を検証し、数値schemaVersion 1の旧形式と別に取り込む。元JSONを書き換えない。
+
+questionIdsが空なら、文字列の似方や同じ教科という理由で自動推定しない。保護者による内容照合済みの問題対応表を別途取り込む。対応表は `schemaVersion: "review-question-bindings/1"`、`planId`、`bindings` を持つ。各bindingは `topicId`、`topicTitle`、`topicSkill`、`subject`、`questionId`、`questionVersion`、`questionSha256`、`coverage`（verified / partial）、`reason`。`topicSkill`は単元の教科・タイトル・範囲・難度・確認する技能のcanonical JSON、問題hashは公開状態を含む問題全体のcanonical JSONのSHA-256。内容の審査をhashだけで代替しない。
+
+元計画の対応状態と、内容照合した対応表によるアプリ上の状態は区別する。部分対応を単元全体の確認済み・定着済みへ変換しない。問題ID・versionと履歴を維持する。同じ問題に複数の対応があっても、出題は1回だけ。
+
+計画の優先度・観察分類を選定へ反映する。期限到来を先にし、試験前3日以内は未定着の期限済み問題を優先する。誤答・優先度・観察分類・期限で並べ、単元あたりの上限と可能な場合の教科数を守る。期限前・対象外で補充しない。元の復習期限は計画で書き換えない。
+
+同じplanIdの新revisionを取り込むと、技能・版・内容が一致する対応表だけを引き継ぐ。問題が変更されたら再照合が必要。同revisionの内容違いと旧revisionを拒否する。計画を外しても端末のrevision高水位は残す。履歴・Progressは変更しない。他タブでの更新を検知した場合は再読込まで開始を止める。取込・完了状態も表示する。
+
+公開前には対応Rulesとアプリを合わせて承認する。この追加統合によるRules差分・新規Firestore保存先はない。端末で「根拠付き対策計画」を選び、初回だけ「内容照合済み問題対応表」も選ぶ。同じ単元・技能の計画更新は新JSONの選択だけで反映される。別端末には明示的に再取込する。非公開根拠JSONをWebへ配信せず、WindowsのパスをWebアプリが直接読めるとは扱わない。
+
+`scripts/test-review-exchange-browser.mjs`と`tests/review-plan-fixture.ts`は架空データによる再現試験。非公開の実計画もlocalhostだけで検証でき、個人情報を含む画面は撮影しない。
