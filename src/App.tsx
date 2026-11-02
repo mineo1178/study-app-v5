@@ -689,7 +689,7 @@ const StrictTimer = React.memo(
     };
 
     return (
-      <div className="flex flex-col gap-3 md:gap-4 w-full relative">
+      <div className="design20-timer flex flex-col gap-3 md:gap-4 w-full relative">
         <div className="flex items-center justify-between bg-slate-50 rounded-2xl md:rounded-3xl p-3 md:p-5 lg:p-6 border border-slate-200 shadow-inner w-full">
           <div className="flex-1 text-center">
             <span
@@ -2129,7 +2129,23 @@ const DailyView = ({
   }, [tasks]);
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="design20-learning flex flex-col h-full">
+      <section className="design20-home-hero" aria-label="今日の学習の入口">
+        <div>
+          <span className="design20-home-eyebrow">TODAY'S STUDY</span>
+          <h2>今日の学習を始めよう</h2>
+          <p>{selectedUnit ? `${selectedUnit}の学習タスクを確認しよう。` : "取り組む回を選んで、タスクを確認しよう。"}</p>
+          <button type="button" disabled={!selectedUnit && unitsWithTasks.length === 0} onClick={() => {
+            if (!selectedUnit && unitsWithTasks.length > 0) setSelectedUnit(unitsWithTasks[0]);
+            else document.getElementById("design20-task-list")?.scrollIntoView({ behavior: "smooth", block: "start" });
+          }}>{selectedUnit ? "学習タスクを見る" : "学習する回を開く"}</button>
+        </div>
+        <div className="design20-home-stat">
+          <span>全期間のタスク完了率</span>
+          <strong>{allStats.total.progress}%</strong>
+          <small>今日の学習時間ではありません</small>
+        </div>
+      </section>
       <div className="sticky top-0 z-20 px-4 py-3 md:px-6 md:py-4 lg:px-8 lg:py-5 bg-white/80 backdrop-blur-md border-b border-slate-200">
         <div className="flex gap-2 md:gap-3">
           <button
@@ -2172,7 +2188,7 @@ const DailyView = ({
         </div>
       </div>
 
-      <div className="pt-4 px-4 md:px-6 lg:px-8 md:pt-6 lg:pt-8 space-y-6 md:space-y-8 lg:space-y-10 pb-32 md:pb-40">
+      <div id="design20-task-list" className="pt-4 px-4 md:px-6 lg:px-8 md:pt-6 lg:pt-8 space-y-6 md:space-y-8 lg:space-y-10 pb-32 md:pb-40">
         {selectedUnit ? (
           <div className="space-y-6 md:space-y-8 lg:space-y-10 animate-in fade-in slide-in-from-bottom-4">
             {(() => {
@@ -3069,7 +3085,7 @@ const LoginForm = ({
   };
 
   return (
-    <div className="flex h-screen items-center justify-center bg-slate-50 px-4">
+    <div className="design20-login flex h-screen items-center justify-center bg-slate-50 px-4">
       <div className="w-full max-w-sm md:max-w-md lg:max-w-lg bg-white rounded-3xl md:rounded-[2rem] shadow-xl p-8 md:p-10 lg:p-12">
         <div className="text-center mb-8 md:mb-10">
           <div className="w-16 h-16 md:w-18 md:h-18 lg:w-20 lg:h-20 bg-blue-100 text-blue-600 rounded-2xl md:rounded-3xl flex items-center justify-center mx-auto mb-4 md:mb-6">
@@ -4305,7 +4321,7 @@ function SessionApp({ session, logout, initialSample }: { session?: FamilySessio
 
   return (
     <SessionOperationsContext.Provider value={getPendingSessionOperations}>
-    <div data-protected-session className="flex flex-col h-screen w-full bg-slate-50 font-sans text-slate-900 max-w-[1600px] mx-auto shadow-2xl overflow-x-hidden relative">
+    <div data-protected-session data-design20-tab={activeTab} className="design20-app flex flex-col h-screen w-full bg-slate-50 font-sans text-slate-900 max-w-[1600px] mx-auto shadow-2xl overflow-x-hidden relative">
       {legacyPending && !isSampleMode && <div role="alert" className="bg-amber-100 p-3 text-sm">この端末に以前の未保存記録があります。自分の記録か確認してから引き継いでください。<button type="button" onClick={() => setConfirmModalData({ title: "未保存記録の引き継ぎ", message: "以前の未保存記録が自分の記録であることを確認しましたか？", onConfirm: async () => { cache.adoptLegacy(); setLegacyPending(false); await fetchData(); await flushPendingTaskUpdates(); } })}>未保存記録を確認して引き継ぐ</button></div>}
       {DEVICE_TEST_ENABLED && (
         <DeviceTestPanel
@@ -4327,7 +4343,7 @@ function SessionApp({ session, logout, initialSample }: { session?: FamilySessio
           サンプルモード表示中（データは保存されません）
         </div>
       )}
-      <header className="bg-white/80 backdrop-blur-xl pt-4 md:pt-6 lg:pt-8 sticky top-0 z-30 border-b border-slate-100">
+      <header className="design20-header bg-white/80 backdrop-blur-xl pt-4 md:pt-6 lg:pt-8 sticky top-0 z-30 border-b border-slate-100">
         <div className="h-14 md:h-16 lg:h-20 flex items-center justify-between px-5 md:px-8 lg:px-10">
           <div>
             <h1 className="font-black text-lg md:text-2xl lg:text-3xl text-slate-800 tracking-tight flex items-center gap-2 md:gap-3">
@@ -4405,7 +4421,7 @@ function SessionApp({ session, logout, initialSample }: { session?: FamilySessio
         </div>
       </header>
 
-      <main className="flex-1 overflow-y-auto overscroll-contain no-scrollbar flex flex-col pb-24 md:pb-32 lg:pb-40">
+      <main className="design20-main flex-1 overflow-y-auto overscroll-contain no-scrollbar flex flex-col pb-24 md:pb-32 lg:pb-40">
         <StudyReview records={pendingReviews} onConfirm={confirmStudyTime} />
         {activeTab === "daily" ? (
           <DailyView
@@ -4491,8 +4507,8 @@ function SessionApp({ session, logout, initialSample }: { session?: FamilySessio
         )}
       </main>
 
-      <nav className="bg-white/90 backdrop-blur-lg border-t border-slate-100 fixed bottom-0 left-0 right-0 z-40 pb-6 md:pb-8 lg:pb-8 w-full max-w-[1600px] mx-auto rounded-t-3xl md:rounded-t-[2rem] shadow-[0_-10px_30px_rgba(0,0,0,0.04)]">
-        <div className="h-16 md:h-20 lg:h-24 grid grid-cols-5 items-center px-1 md:px-6 lg:px-10 [&>button]:min-w-0 [&_span]:whitespace-nowrap">
+      <nav aria-label="メインナビゲーション" className="design20-nav bg-white/90 backdrop-blur-lg border-t border-slate-100 fixed bottom-0 left-0 right-0 z-40 pb-6 md:pb-8 lg:pb-8 w-full max-w-[1600px] mx-auto rounded-t-3xl md:rounded-t-[2rem] shadow-[0_-10px_30px_rgba(0,0,0,0.04)]">
+        <div className="design20-nav-items h-16 md:h-20 lg:h-24 grid grid-cols-5 items-center px-1 md:px-6 lg:px-10 [&>button]:min-w-0 [&_span]:whitespace-nowrap">
           <button
             onClick={() => setActiveTab("daily")}
             className={`flex-1 flex flex-col items-center justify-center h-full space-y-1 md:space-y-2 transition-all duration-300 ${activeTab === "daily" ? "text-blue-600 -translate-y-1 md:-translate-y-2" : "text-slate-400 hover:text-slate-500"}`}
