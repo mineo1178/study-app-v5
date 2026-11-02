@@ -18,8 +18,11 @@ export function parseTargetPlan(raw: string): TargetPlan {
     items: p.items.map(i => ({ questionId: i.questionId, questionVersion: i.questionVersion, priority: i.priority, reason: i.reason, evidence: i.evidence, scopeBasis: i.scopeBasis })), gaps: p.gaps, notes: p.notes };
 }
 const classificationRank = (value: string) => ["observed_error", "recurring_error_pattern", "needs_retention_check", "improved_in_new_test", "demonstrated_strength", "not_assessed_for_target_scope"].indexOf(value);
+export function activeTargetPlan(plan: TargetPlan | null, now: number): TargetPlan | null {
+  return plan && getJstDay(now) <= plan.testDay ? plan : null;
+}
 export function targetCandidates(questions: Question[], progress: Progress[], plan: TargetPlan | null, now: number) {
-  if (plan && getJstDay(now) > plan.testDay) return [];
+  plan = activeTargetPlan(plan, now);
   const today = getJstDay(now);
   const remaining = Math.max(0, 5 - new Set(progress.filter(p => getJstDay(p.latestAt) === today).map(p => p.questionId)).size);
   const pool = questions.flatMap(q => {

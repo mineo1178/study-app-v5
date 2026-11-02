@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { getJstDay, jstDayNumber, nextProgress, reviewDueAt, sampleQuestions, selectQuestions, type Answer, type Progress } from "./model";
-import { parseTargetPlan, targetCandidates, type TargetPlan } from "./target-plan";
+import { activeTargetPlan, parseTargetPlan, targetCandidates, type TargetPlan } from "./target-plan";
 const at = (s: string) => Date.parse(`${s}T12:00:00+09:00`);
 const answer = (day: string, correct = true, mode: Answer["mode"] = "daily", id = day): Answer => ({ id, uid: "a", sessionId: id, questionId: sampleQuestions[0].id, questionVersion: sampleQuestions[0].version, selectedIndex: 1, correct, answeredAt: at(day), elapsedMs: 1000, mode, prompt: "fictional", selected: "42", expected: "42", explanation: "fictional" });
 const plan: TargetPlan = { schemaVersion: 1, label: "架空テスト", testDay: "2027-02-01", items: sampleQuestions.slice(0, 2).map((q, i) => ({ questionId: q.id, questionVersion: q.version, priority: i + 1, reason: "架空の誤答を再確認しよう", evidence: "架空答案の観察", scopeBasis: "架空の範囲資料" })), gaps: ["記述は未確認"], notes: ["実資料ではない"] };
@@ -41,7 +41,7 @@ describe("JST spaced review and evidence-based selection", () => {
     expect(targetCandidates(sampleQuestions, [p], plan, at("2026-11-03")).map(c => c.question.id)).toEqual(["sample-1", "sample-0"]);
     expect(targetCandidates(sampleQuestions, [p], plan, at("2026-11-02"))).toHaveLength(1);
     expect(targetCandidates(sampleQuestions.map(q => ({ ...q, version: "edited" })), [], plan, at("2026-11-02"))).toEqual([]);
-    expect(targetCandidates(sampleQuestions, [], plan, at("2027-02-02"))).toEqual([]);
+    expect(targetCandidates(sampleQuestions, [], plan, at("2027-02-02"))).toEqual(targetCandidates(sampleQuestions, [], null, at("2027-02-02")));
     expect(targetCandidates(Array.from({ length: 9 }, (_, i) => ({ ...sampleQuestions[0], id: "q" + i })), [], null, at("2026-11-02"))).toHaveLength(5);
     expect(targetCandidates(sampleQuestions, [], plan, at("2026-11-02"))[0].reason).toContain("架空");
   });
@@ -59,5 +59,37 @@ describe("JST spaced review and evidence-based selection", () => {
   it("validates import boundaries, evidence, date, duplicates, and strips extra fields", () => {
     expect(parseTargetPlan(JSON.stringify({ ...plan, privateExtra: "not retained" }))).toEqual(plan);
     for (const bad of [null, { ...plan, testDay: "2026-02-30" }, { ...plan, items: [{ ...plan.items[0], evidence: "" }] }, { ...plan, items: [plan.items[0], plan.items[0]] }, { ...plan, gaps: [123] }, { ...plan, items: [{ ...plan.items[0], priority: 0 }] }]) expect(() => parseTargetPlan(JSON.stringify(bad))).toThrow();
+  });
+  it("switches only expired targeting off at November 9 JST midnight, keeping due progress and answers unchanged", () => {
+    const expired = { ...plan, testDay: "2026-11-08", items: [plan.items[1]] };
+    const midnight = Date.parse("2026-11-09T00:00:00+09:00");
+    const answers = [answer("2026-11-07", false), { ...answer("2026-11-07"), questionId: sampleQuestions[1].id }];
+    const progress = answers.map(a => nextProgress(undefined, a));
+    const before = structuredClone({ expired, progress, answers });
+    expect(activeTargetPlan(expired, midnight - 1)).toBe(expired);
+    expect(targetCandidates(sampleQuestions.slice(0, 2), progress, expired, midnight - 1)).toEqual([]);
+    expect(activeTargetPlan(expired, midnight)).toBeNull();
+    const candidates = targetCandidates(sampleQuestions.slice(0, 2), progress, expired, midnight);
+    expect(candidates.map(c => c.question.id)).toEqual([sampleQuestions[0].id]);
+    expect(candidates[0].reason).toContain("テスト範囲との関係は未確認");
+    expect({ expired, progress, answers }).toEqual(before);
+  });
+  it("expired plans use the full general pool and daily cap, and do not pad early or empty pools", () => {
+    const expired = { ...plan, testDay: "2026-11-08", items: [] };
+    const now = at("2026-11-09");
+    const early = sampleQuestions.map(q => nextProgress(undefined, { ...answer("2026-11-08"), questionId: q.id }));
+    expect(targetCandidates(sampleQuestions, early, expired, now)).toEqual([]);
+    expect(targetCandidates([], [], expired, now)).toEqual([]);
+    expect(targetCandidates(sampleQuestions, [], expired, now)).toEqual(targetCandidates(sampleQuestions, [], null, now));
+    const done = sampleQuestions.slice(0, 4).map(q => nextProgress(undefined, { ...answer("2026-11-09"), questionId: q.id }));
+    expect(targetCandidates(sampleQuestions, done, expired, now)).toHaveLength(1);
+  });
+  it("a newly imported future plan restores targeting without changing progress", () => {
+    const now = at("2026-11-09"), progress = [nextProgress(undefined, answer("2026-11-07", false))];
+    const replacement = parseTargetPlan(JSON.stringify({ ...plan, testDay: "2026-11-15", items: [plan.items[1]] }));
+    const before = structuredClone(progress);
+    expect(activeTargetPlan(replacement, now)).toBe(replacement);
+    expect(targetCandidates(sampleQuestions, progress, replacement, now).map(c => c.question.id)).toEqual([sampleQuestions[1].id]);
+    expect(progress).toEqual(before);
   });
 });

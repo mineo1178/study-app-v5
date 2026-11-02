@@ -1,7 +1,7 @@
 import type { TargetPlan } from "../review/target-plan";
 import { useRef, useState } from "react";
 
-export function ReviewTargetPlan({ plan, onImport, onClear, onError, disabled }: { plan: TargetPlan | null; onImport: (raw: string, kind: "plan" | "bindings") => Promise<void>; onClear: () => void; onError: (message: string) => void; disabled: boolean }) {
+export function ReviewTargetPlan({ plan, expired, onImport, onClear, onError, disabled }: { plan: TargetPlan | null; expired: boolean; onImport: (raw: string, kind: "plan" | "bindings") => Promise<void>; onClear: () => void; onError: (message: string) => void; disabled: boolean }) {
   const [importing, setImporting] = useState(false), pending = useRef(false);
   const [completed, setCompleted] = useState(0);
   const fileInput = (label: string, kind: "plan" | "bindings") => <label className="my-3 block">{label}<input aria-label={label} disabled={disabled || importing} className="mt-1 block w-full min-w-0 text-xs" type="file" accept=".json,application/json" onChange={async e => {
@@ -19,7 +19,7 @@ export function ReviewTargetPlan({ plan, onImport, onClear, onError, disabled }:
     {fileInput("根拠付き対策計画", "plan")}
     {importing && <p role="status">計画を確認中…</p>}
     {plan?.integration && fileInput("内容照合済み問題対応表", "bindings")}
-    {plan ? <><p className="font-bold">{plan.label}（{plan.testDay}）</p>
+    {plan ? <><p className="font-bold">{expired ? "期限切れ・保存済み計画：" : ""}{plan.label}（{plan.testDay}）</p>
       {plan.integration && <><p>計画revision：{plan.integration.source.revision} ／ 取込：{new Date(plan.integration.importedAt).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" })}（JST）</p><p>問題対応表：{plan.integration.bindings.length}件・{new Set(plan.integration.bindings.map(b => b.questionId)).size}問。全{plan.integration.source.topics.length}単元のうち、未対応は{plan.integration.source.topics.filter(t => !plan.integration!.bindings.some(b => b.topicId === t.topicId)).length}単元です。部分対応も下に区別して表示します。</p>
         <details><summary>全単元の問題紐付け状況</summary>{plan.integration.source.topics.map(t => { const bs = plan.integration!.bindings.filter(b => b.topicId === t.topicId && plan.items.some(i => i.questionId === b.questionId)); return <p className="my-2" key={t.topicId}>{t.title}：{bs.some(b => b.coverage === "verified") ? "対応確認済み" : bs.length ? "一部対応・補助確認" : "対応問題なし／未確認"}</p>; })}</details></>}
       {plan.notes.map((note, i) => <p className="mt-1" key={i}>{note}</p>)}
