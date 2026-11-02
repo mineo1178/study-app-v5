@@ -71,19 +71,19 @@ try {
   await invoke("seed");
   await page.goto(base, { waitUntil: "domcontentloaded" }); await page.locator("select").first().selectOption({ label: "第1回" });
   await setStaleCalculationTime(13);
-  await page.getByText("⑦", { exact: true }).click();
+  await page.locator("#design20-task-list").getByText("⑦", { exact: true }).click();
   await waitFor(() => diagnosticEvent({ type: "BUTTON", source: "calculation_7", button: "START", code: "UNSAVED_TIME", disabled: true }), "Calculation unsaved-time disabled reason missing");
   assert.equal(await startCalculation().isDisabled(), true);
   assert.ok(!await diagnosticEvent({ type: "CLICK", source: "calculation_7", button: "START" }));
   await close().click(); await setStaleCalculationTime(0);
-  await page.getByText("基本問題", { exact: true }).click();
+  await page.locator("#design20-task-list").getByText("基本問題", { exact: true }).click();
   await waitFor(() => diagnosticEvent({ type: "BUTTON", source: "study", button: "STOP", disabled: true, code: "ZERO_TIME" }), "Disabled zero-time reason not recorded without click");
   await startStudy().evaluate(button => { button.click(); button.click(); });
   await waitFor(async () => (await task()).isRunning, "START did not persist");
-  await close().click(); await page.getByText("①", { exact: true }).click();
+  await close().click(); await page.locator("#design20-task-list").getByText("①", { exact: true }).click();
   assert.equal(await startCalculation().isDisabled(), true);
   await waitFor(() => diagnosticEvent({ type: "BUTTON", source: "calculation_1", button: "START", code: "OTHER_TIMER", disabled: true }), "Calculation other-timer disabled reason missing");
-  await close().click(); await page.getByText("基本問題", { exact: true }).click();
+  await close().click(); await page.locator("#design20-task-list").getByText("基本問題", { exact: true }).click();
   await page.waitForTimeout(2200);
   await page.getByRole("button", { name: "学習タイマーを一時停止", exact: true }).click();
   await waitFor(async () => !(await task()).isRunning && (await task()).currentDuration >= 2, "STOP did not persist");
@@ -94,7 +94,7 @@ try {
   assert.ok(await diagnosticEvent({ type: "CLICK", source: "study", button: "STOP" }));
   assert.ok(await diagnosticEvent({ type: "HANDLER", source: "study", button: "STOP" }));
   assert.ok(await diagnosticEvent({ type: "SAVE_SUCCESS", source: "study" }));
-  await page.getByText("基本問題", { exact: true }).click(); await startStudy().click();
+  await page.locator("#design20-task-list").getByText("基本問題", { exact: true }).click(); await startStudy().click();
   await waitFor(async () => (await task()).isRunning, "Second START missing"); await page.waitForTimeout(2200);
   await members([accounts[1].uid]);
   await saveStudy().click(); await page.waitForTimeout(1000);
@@ -110,7 +110,7 @@ try {
   await members(accounts.slice(0, 2).map(account => account.uid));
   await page.route("**/documents:commit*", route => route.abort());
   await page.reload(); await page.locator("select").first().selectOption({ label: "第1回" });
-  await page.getByText("基本問題", { exact: true }).click();
+  await page.locator("#design20-task-list").getByText("基本問題", { exact: true }).click();
   assert.equal((await queue()).find(operation => operation.kind === "save").operationId, retained.operationId);
   assert.equal(await startStudy().isDisabled(), true); assert.equal(await saveStudy().isDisabled(), false);
   await page.unroute("**/documents:commit*");
@@ -123,7 +123,7 @@ try {
   assert.equal((await queue()).length, 0);
   results.push("Rules refusal retains STOP/time/operation across reload; retry saves once at original STOP timestamp");
 
-  await page.getByText("基本問題", { exact: true }).click(); await startStudy().tap();
+  await page.locator("#design20-task-list").getByText("基本問題", { exact: true }).click(); await startStudy().tap();
   await waitFor(async () => (await task()).isRunning && !(await queue()).length, "Delayed-write session not ready");
   await page.waitForTimeout(2100);
   let releaseCommit; const gate = new Promise(resolve => { releaseCommit = resolve; });
@@ -153,7 +153,7 @@ try {
   await page.locator("select").first().selectOption({ label: "第1回" });
   assert.equal((await task()).history.length, 3);
   const beforeCalculations = await task();
-  await page.getByText("①", { exact: true }).click();
+  await page.locator("#design20-task-list").getByText("①", { exact: true }).click();
   const measured = [];
   for (const score of [3, 5, 7, 2]) {
     await startCalculation().tap();
@@ -170,20 +170,21 @@ try {
   assert.equal(state.ledger.length, 0);
   await close().tap();
   // Closing a running calculation releases the normal-timer fieldset.
-  await page.getByText("①", { exact: true }).click(); await startCalculation().tap(); await page.waitForTimeout(1100); await close().tap();
-  await page.getByText("基本問題", { exact: true }).click(); assert.equal(await startStudy().isDisabled(), false); await close().tap();
+  await page.locator("#design20-task-list").getByText("①", { exact: true }).click(); await startCalculation().tap(); await page.waitForTimeout(1100); await close().tap();
+  await page.locator("#design20-task-list").getByText("基本問題", { exact: true }).click(); assert.equal(await startStudy().isDisabled(), false); await close().tap();
   await page.reload(); await page.locator("select").first().selectOption({ label: "第1回" });
-  await page.getByText("①", { exact: true }).click(); assert.equal(await startCalculation().innerText(), "計測を再開"); await close().tap();
+  await page.locator("#design20-task-list").getByText("①", { exact: true }).click(); assert.equal(await startCalculation().innerText(), "計測を再開"); await close().tap();
   for (const id of ["②", "③", "④", "⑤", "⑥", "⑦"]) {
-    await page.getByText(id, { exact: true }).click(); await startCalculation().tap(); await saveCalculation(0); await close().tap();
+    await page.locator("#design20-task-list").getByText(id, { exact: true }).click(); await startCalculation().tap(); await saveCalculation(0); await close().tap();
   }
   state = await read(); assert.equal(state.attempts.length, 10);
   assert.deepEqual(state.attempts.slice(4).map(attempt => attempt.taskId), ["②", "③", "④", "⑤", "⑥", "⑦"].map(id => `calc-${id}`));
   await page.getByRole("button", { name: "実績", exact: true }).tap();
   await page.getByLabel("グラフで見る計算課題", { exact: true }).selectOption("calc-①");
   await page.getByText("最高 7/7 / 解き直し3回 / 7/7達成", { exact: true }).waitFor();
-  await waitFor(async () => await page.locator(".recharts-line-dots circle").count() >= 10, "Four charts missing");
-  assert.deepEqual(await page.locator(".recharts-line-dots").evaluateAll(groups => groups.map(group => group.querySelectorAll("circle").length)), [1, 1, 4, 4]);
+  await page.getByRole("region", { name: "日付ごとの得点", exact: true }).getByRole("listitem").waitFor();
+  await waitFor(async () => await page.locator(".recharts-line-dots circle").count() >= 9, "Daily bars and three remaining charts missing");
+  assert.deepEqual(await page.locator(".recharts-line-dots").evaluateAll(groups => groups.map(group => group.querySelectorAll("circle").length)), [1, 4, 4]);
   for (const width of [320, 390]) {
     await page.setViewportSize({ width, height: 844 });
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), `Horizontal overflow at ${width}`);
@@ -220,7 +221,7 @@ try {
   results.push("Idle STOP/pending_review/600s and 0s confirmations/reload/rewardLedger/activityP idempotency: historical sessions, unchanged wall clock");
 
   await page.getByRole("button", { name: "学習", exact: true }).tap(); await page.locator("select").first().selectOption({ label: "第1回" });
-  await page.getByText("基本問題", { exact: true }).click(); await startStudy().tap();
+  await page.locator("#design20-task-list").getByText("基本問題", { exact: true }).click(); await startStudy().tap();
   await waitFor(async () => (await task()).isRunning && !(await queue()).length, "Offline session not ready"); await page.waitForTimeout(2100);
   const historyCount = (await task()).history.length;
   await context.setOffline(true);
@@ -239,7 +240,7 @@ try {
   assert.ok(!await diagnosticEvent({ type: "GUARD", source: "auth", code: "cancelled" }), "Old UID diagnostic session survived Auth switch");
   assert.equal((await read()).attempts.length, 0);
   await page.getByRole("button", { name: "学習", exact: true }).tap(); await page.locator("select").first().selectOption({ label: "第1回" });
-  await page.getByText("①", { exact: true }).click(); assert.equal(await calculationSeconds(), 0); assert.equal(await startCalculation().innerText(), "計算をはじめる"); await close().tap();
+  await page.locator("#design20-task-list").getByText("①", { exact: true }).click(); assert.equal(await calculationSeconds(), 0); assert.equal(await startCalculation().innerText(), "計算をはじめる"); await close().tap();
   await invoke("login", accounts[0].email, password); await page.waitForTimeout(1000); assert.equal((await read()).attempts.length, 10);
   await page.reload(); await page.locator("[data-protected-session]").waitFor();
   // The fixture import and Auth persistence restoration must finish before taps.
@@ -247,13 +248,13 @@ try {
   results.push("Actual Auth UID switch: own attempt/draft isolation, shared study/game preserved, reload restores original attempts");
   await page.getByRole("button", { name: "学習", exact: true }).tap(); await page.locator("select").first().selectOption({ label: "第1回" });
   await page.setViewportSize({ width: 320, height: 844 });
-  await page.getByText("基本問題", { exact: true }).click();
+  await page.locator("#design20-task-list").getByText("基本問題", { exact: true }).click();
   const bounds = await startStudy().boundingBox(); assert.ok(bounds.width >= 44 && bounds.height >= 44);
   assert.equal(await startStudy().evaluate(button => { const box = button.getBoundingClientRect(); return button.contains(document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2)); }), true);
   await startStudy().tap(); await waitFor(async () => (await task()).isRunning, "320px START missing"); await page.waitForTimeout(2100);
   await page.getByRole("button", { name: "学習タイマーを一時停止", exact: true }).tap();
   await waitFor(async () => !(await task()).isRunning, "320px STOP missing"); await saveStudy().tap(); await close().waitFor({ state: "hidden" });
-  await page.getByText("②", { exact: true }).click(); await startCalculation().tap();
+  await page.locator("#design20-task-list").getByText("②", { exact: true }).click(); await startCalculation().tap();
   await waitFor(async () => await calculationSeconds() >= 2, "320px calculation did not count up"); await saveCalculation(4); await close().tap();
   await page.setViewportSize({ width: 390, height: 844 });
   assert.equal((await read()).attempts.length, 11);
@@ -279,7 +280,7 @@ try {
   // Storage failure is diagnostic-only; timers and transaction acknowledgement still work.
   await page.getByRole("button", { name: "学習", exact: true }).click();
   await page.locator("select").first().selectOption({ label: "第1回" });
-  await page.getByText("基本問題", { exact: true }).click();
+  await page.locator("#design20-task-list").getByText("基本問題", { exact: true }).click();
   await page.evaluate(() => {
     const original = Storage.prototype.setItem;
     Storage.prototype.setItem = function(key, value) { if (key.startsWith("study-device-diagnostics")) throw new DOMException("quota", "QuotaExceededError"); return original.call(this, key, value); };

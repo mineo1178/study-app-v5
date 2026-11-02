@@ -147,6 +147,34 @@ const CalculationGraph = ({ data, valueKey, title, score }: { data: { label: str
   <div className="mt-2 h-56 min-w-0"><ResponsiveContainer width="100%" height="100%"><LineChart data={data} margin={{ left: 20, right: 10, top: 10, bottom: 15 }}><CartesianGrid strokeDasharray="3 3" /><XAxis dataKey="label" interval="preserveStartEnd" minTickGap={10} angle={-30} textAnchor="end" height={65} tick={{ fontSize: 11 }} /><YAxis interval={score ? 0 : undefined} domain={score ? [0, 7] : [0, "auto"]} ticks={score ? [0, 1, 2, 3, 4, 5, 6, 7] : undefined} /><Tooltip formatter={value => score ? String(value) + "/7" : formatCalculationTime(Number(value))} /><Line dataKey={valueKey} name={score ? "得点" : "所要時間"} stroke={score ? "#2563eb" : "#059669"} isAnimationActive={false} /></LineChart></ResponsiveContainer></div>
 </section>;
 
+const DailyScoreBars = ({ data, scoreLabel }: { data: { label: string; score: number }[]; scoreLabel: string }) => {
+  const latest = data.at(-1);
+  const best = data.length ? Math.max(...data.map(item => item.score)) : null;
+  return <section className="min-w-0 rounded-2xl bg-white p-4" aria-label="日付ごとの得点">
+    <div className="flex flex-wrap items-center gap-2">
+      <h3 className="font-bold">日付ごとの{scoreLabel}得点（7点満点）</h3>
+      <span className="rounded-full bg-blue-100 px-3 py-1 text-xs font-bold text-blue-800">{scoreLabel}を表示中</span>
+    </div>
+    <p className="mt-2 text-sm text-slate-600">記録した日だけを1本ずつ表示するよ。日付の間隔はそろえて並べ、記録のない日は補わないよ。</p>
+    <p className="mt-3 text-xs text-slate-600">読み込み済みの{scoreLabel}得点で比較</p>
+    <dl className="mt-2 grid grid-cols-3 gap-2 rounded-xl bg-slate-50 p-3 text-center">
+      <div className="min-w-0"><dt className="text-xs text-slate-600">記録日数</dt><dd className="mt-1 text-lg font-black tabular-nums">{data.length}日</dd></div>
+      <div className="min-w-0"><dt className="text-xs text-slate-600">直近の日の点</dt><dd className="mt-1 text-lg font-black tabular-nums">{latest ? `${latest.score}/7` : "—"}</dd></div>
+      <div className="min-w-0"><dt className="text-xs text-slate-600">表示範囲の最高点</dt><dd className="mt-1 text-lg font-black tabular-nums">{best !== null ? `${best}/7` : "—"}</dd></div>
+    </dl>
+    <p role="status" className="mt-3 text-sm">{data.length === 0 ? "この課題の記録はまだないよ。" : data.length === 1 ? "1日分だけの参考表示です。点数の変化はまだ分からないよ。" : data.length === 2 ? "2日分だけの参考表示です。間の日の点数や、連続した変化を表すものではないよ。" : `この課題は${data.length}日分の記録があるよ。`}</p>
+    {data.length > 0 && <ol aria-label={`記録日ごとの${scoreLabel}得点`} tabIndex={data.length > 6 ? 0 : undefined} className="mt-4 max-h-96 space-y-4 overflow-y-auto pr-2 focus-visible:outline-2 focus-visible:outline-blue-600">
+      {data.map(item => <li key={item.label}>
+        <div className="mb-1 flex items-baseline justify-between gap-2 text-sm"><time dateTime={item.label} className="tabular-nums">{item.label}</time><strong className="shrink-0 tabular-nums text-blue-800">{item.score}/7</strong></div>
+        <div aria-hidden="true" className="relative h-3 overflow-hidden rounded-full bg-slate-100">
+          <div className="h-full rounded-full bg-blue-600" style={{ width: `${item.score / 7 * 100}%` }} />
+          {item.score === 0 && <span className="absolute left-0 top-0 h-full w-0.5 bg-blue-600" />}
+        </div>
+      </li>)}
+    </ol>}
+  </section>;
+};
+
 // Reset records and selections at the identity boundary, including pending reads.
 export const DailyCalculation = (props: CalculationProps) => <CalculationRecords key={JSON.stringify([props.familyId, props.uid, props.sample])} {...props} />;
 
@@ -214,11 +242,10 @@ const CalculationRecords = ({ db, familyId, uid, sample, sampleAttempts }: Calcu
     {loading && <p role="status">記録を読み込み中…</p>}{error && <p role="alert">{error}</p>}
     {!loading && !records.length && <p>まだ記録がないよ。「学習 → 算数 → 計算」のカードから結果を保存してね。</p>}
     <label className="block font-bold">グラフで見る計算課題<select aria-label="グラフで見る計算課題" className="mt-2 w-full rounded-xl border bg-white p-3 text-sm" value={taskId} onChange={event => setSelectedTask(event.target.value)}>{taskOptions.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label>
-    <h3 className="font-black">選んだ課題の日付別推移</h3>
+    <h3 className="font-black">選んだ課題の日付別記録</h3>
     <p className="text-sm">保存されたJSTの日付順に表示するよ。記録のない日は0点にしないよ。以前の記録は「もっと前の日を見る」で読み込めるよ。</p>
     <label className="block font-bold">日付ごとに表示する得点<select aria-label="日付ごとに表示する得点" className="mt-2 w-full rounded-xl border bg-white p-3 text-sm" value={scoreMode} onChange={event => setScoreMode(event.target.value as CalculationScoreMode)}><option value="first">初回</option><option value="latest">最新</option><option value="best">最高</option></select></label>
-    {trendLoading ? <p role="status">日付別の記録を読み込み中…</p> : <p role="status">{trend.length === 1 ? "この課題は読み込み済みの記録が1日分だけだよ。別の日に保存すると推移が見られるよ。" : `この課題は${trend.length}日分の記録があるよ。`}</p>}
-    <CalculationGraph data={trend} valueKey="score" title={`日付ごとの${scoreLabel}得点推移（7点満点）`} score />
+    {trendLoading ? <p role="status">日付別の記録を読み込み中…</p> : <DailyScoreBars data={trend} scoreLabel={scoreLabel} />}
     <CalculationGraph data={trend} valueKey="elapsedSeconds" title="日付ごとの初回時間推移" score={false} />
     <section className="rounded-3xl bg-white p-4"><h3 className="font-black">日ごとの記録</h3><div className="mt-3 space-y-2">{records.map(record => <button key={JSON.stringify([record.dateKey, record.taskId])} className={"w-full rounded-xl border p-3 text-left " + (selectedDate === record.dateKey && taskId === record.taskId ? "border-blue-500 bg-blue-50" : "border-slate-100")} onClick={() => selectDay(record.dateKey, record.taskId)}><strong>{record.dateKey} / {record.taskLabel}</strong><p>初回 {record.firstScore}/7 ・ {formatCalculationTime(record.firstElapsedSeconds)}</p><p>最新 {record.latestScore}/7 ・ {formatCalculationTime(record.latestElapsedSeconds)}</p><p className="text-sm">最高 {record.bestScore}/7 / 解き直し{record.attemptCount - 1}回 / {record.bestScore === 7 ? "7/7達成" : "チャレンジ中"}</p></button>)}</div>{!sample && hasMore && dates.split(",").length >= 30 && <button className="mt-3 w-full rounded-xl bg-slate-100 p-3 font-bold" disabled={moreBusy} onClick={() => void more()}>{moreBusy ? "読み込み中…" : "もっと前の日を見る"}</button>}</section>
     <section ref={detailRef} className="scroll-mt-4 space-y-4 rounded-3xl bg-white p-4">

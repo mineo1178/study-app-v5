@@ -173,7 +173,7 @@ if (hasFirebaseConfig) {
 // ==========================================
 
 const FAMILY_ID = "oomine-study-2026";
-const APP_VERSION = "v1.88.3";
+const APP_VERSION = "v1.88.4";
 
 // Firestore Path 固定（変更禁止）
 // 実DB構造:
@@ -689,7 +689,7 @@ const StrictTimer = React.memo(
     };
 
     return (
-      <div className="flex flex-col gap-3 md:gap-4 w-full relative">
+      <div className="design20-timer flex flex-col gap-3 md:gap-4 w-full relative">
         <div className="flex items-center justify-between bg-slate-50 rounded-2xl md:rounded-3xl p-3 md:p-5 lg:p-6 border border-slate-200 shadow-inner w-full">
           <div className="flex-1 text-center">
             <span
@@ -2128,8 +2128,45 @@ const DailyView = ({
     return { total, subjects };
   }, [tasks]);
 
+  const currentUnit = selectedUnit || unitsWithTasks[0];
+  const visibleTasks = (tasks as Task[]).filter((task) => task.unit === currentUnit);
+  const nextTask = visibleTasks.find((task) => task.isRunning)
+    ?? visibleTasks.find((task) => task.status === "in_progress")
+    ?? visibleTasks.find((task) => task.status === "not_started");
+  const remainingTasks = visibleTasks.filter((task) => task.status !== "completed").length;
+
+  const openNextTask = () => {
+    if (nextTask) {
+      setSelectedUnit(nextTask.unit);
+      setDetailTaskId(nextTask.id);
+    } else if (currentUnit) {
+      setSelectedUnit(currentUnit);
+      document.getElementById("design20-task-list")?.scrollIntoView({ behavior: "smooth", block: "start" });
+    } else {
+      setAddModalOpen(true);
+    }
+  };
+
   return (
-    <div className="flex flex-col h-full">
+    <div className="design20-learning flex flex-col h-full">
+      <section className="design20-home-hero" aria-label="学習を始める">
+        <div className="design20-home-content">
+          <span className="design20-home-eyebrow">TODAY'S STUDY</span>
+          <h2>次の学習を始めよう</h2>
+          <p>{currentUnit ? `${currentUnit}のタスクから取り組もう。` : "学習する回を作成して、最初のタスクを始めよう。"}</p>
+          <div className="design20-next-action">
+            <span>{nextTask?.isRunning ? "計測中のタスク" : nextTask ? "次に開くタスク" : currentUnit ? "この回のタスク" : "学習を準備"}</span>
+            <strong>{nextTask ? nextTask.title : currentUnit ? "すべて完了・一覧を確認" : "学習する回がありません"}</strong>
+            {nextTask && <small>{SUBJECT_CONFIG[nextTask.subject].label} · {nextTask.isRunning ? "計測中" : nextTask.status === "in_progress" ? "取り組み中" : "未着手"}</small>}
+          </div>
+          <button type="button" onClick={openNextTask}>{nextTask ? "このタスクを開く" : currentUnit ? "タスク一覧を見る" : "学習する回を追加"}</button>
+        </div>
+        <div className="design20-home-stat" aria-label="選択中の回と全期間の進捗">
+          <span>{currentUnit ? "この回の残りタスク" : "登録されたタスク"}</span>
+          <strong>{currentUnit ? remainingTasks : (tasks as Task[]).length}<span className="design20-home-unit">件</span></strong>
+          <small>全期間のタスク完了率：{allStats.total.progress}%</small>
+        </div>
+      </section>
       <div className="sticky top-0 z-20 px-4 py-3 md:px-6 md:py-4 lg:px-8 lg:py-5 bg-white/80 backdrop-blur-md border-b border-slate-200">
         <div className="flex gap-2 md:gap-3">
           <button
@@ -2172,7 +2209,7 @@ const DailyView = ({
         </div>
       </div>
 
-      <div className="pt-4 px-4 md:px-6 lg:px-8 md:pt-6 lg:pt-8 space-y-6 md:space-y-8 lg:space-y-10 pb-32 md:pb-40">
+      <div id="design20-task-list" className="pt-4 px-4 md:px-6 lg:px-8 md:pt-6 lg:pt-8 space-y-6 md:space-y-8 lg:space-y-10 pb-32 md:pb-40">
         {selectedUnit ? (
           <div className="space-y-6 md:space-y-8 lg:space-y-10 animate-in fade-in slide-in-from-bottom-4">
             {(() => {
@@ -2439,7 +2476,11 @@ const TestsView = ({ tests, onSaveTest, onDeleteTest }: any) => {
   }, [tests]);
 
   return (
-    <div className="flex flex-col h-full bg-slate-50">
+    <div className="design20-content-page flex flex-col h-full bg-slate-50">
+      <section className="design20-page-heading" aria-label="成績の概要">
+        <div><span className="design20-page-eyebrow">TEST RESULTS</span><h2>テストの記録</h2><p>教科やテストの種類を選んで、結果の変化を確認しよう。</p></div>
+        <span className="design20-page-counter">登録 {tests.length}件</span>
+      </section>
       <div className="bg-white sticky top-0 z-20 px-4 py-3 md:px-6 md:py-4 lg:px-8 lg:py-4 border-b border-slate-200 shadow-sm space-y-2.5 md:space-y-3">
         <div className="flex justify-between items-center gap-2 md:gap-3">
           <div className="flex gap-1.5 md:gap-2">
@@ -2793,11 +2834,14 @@ const AchievementsView = ({ tasks, calculationRecords }: { tasks: Task[]; calcul
   }, [tasks, dateRange, selectedSubjects]);
 
   return (
-    <div className="flex flex-col h-full bg-slate-50">
+    <div className="design20-content-page flex flex-col h-full bg-slate-50">
+      <section className="design20-page-heading" aria-label="学習実績の概要">
+        <div><span className="design20-page-eyebrow">LEARNING HISTORY</span><h2>学習の実績</h2><p>教科ごとの学習時間と、毎日計算の記録を見返そう。</p></div>
+      </section>
       <div className="bg-white sticky top-0 z-20 px-4 py-3 md:px-6 md:py-4 lg:px-8 lg:py-4 border-b border-slate-200 shadow-sm space-y-2.5 md:space-y-3">
-        <div className="flex gap-2 md:gap-3">
+        <div className="design20-history-range flex gap-2 md:gap-3">
           <div className="flex-1 flex justify-between items-center bg-slate-50 p-1.5 md:p-2 lg:p-2.5 rounded-lg md:rounded-xl border border-slate-200">
-            <div className="flex gap-1.5 md:gap-2 items-center">
+            <div className="design20-history-dates flex gap-1.5 md:gap-2 items-center">
               <CalendarIcon className="text-slate-400 ml-1 w-[14px] h-[14px] md:w-4 md:h-4 lg:w-5 lg:h-5" />
               <input
                 type="date"
@@ -3069,7 +3113,7 @@ const LoginForm = ({
   };
 
   return (
-    <div className="flex h-screen items-center justify-center bg-slate-50 px-4">
+    <div className="design20-login flex h-screen items-center justify-center bg-slate-50 px-4">
       <div className="w-full max-w-sm md:max-w-md lg:max-w-lg bg-white rounded-3xl md:rounded-[2rem] shadow-xl p-8 md:p-10 lg:p-12">
         <div className="text-center mb-8 md:mb-10">
           <div className="w-16 h-16 md:w-18 md:h-18 lg:w-20 lg:h-20 bg-blue-100 text-blue-600 rounded-2xl md:rounded-3xl flex items-center justify-center mx-auto mb-4 md:mb-6">
@@ -4305,7 +4349,7 @@ function SessionApp({ session, logout, initialSample }: { session?: FamilySessio
 
   return (
     <SessionOperationsContext.Provider value={getPendingSessionOperations}>
-    <div data-protected-session className="flex flex-col h-screen w-full bg-slate-50 font-sans text-slate-900 max-w-[1600px] mx-auto shadow-2xl overflow-x-hidden relative">
+    <div data-protected-session data-design20-tab={activeTab} className="design20-app flex flex-col h-screen w-full bg-slate-50 font-sans text-slate-900 max-w-[1600px] mx-auto shadow-2xl overflow-x-hidden relative">
       {legacyPending && !isSampleMode && <div role="alert" className="bg-amber-100 p-3 text-sm">この端末に以前の未保存記録があります。自分の記録か確認してから引き継いでください。<button type="button" onClick={() => setConfirmModalData({ title: "未保存記録の引き継ぎ", message: "以前の未保存記録が自分の記録であることを確認しましたか？", onConfirm: async () => { cache.adoptLegacy(); setLegacyPending(false); await fetchData(); await flushPendingTaskUpdates(); } })}>未保存記録を確認して引き継ぐ</button></div>}
       {DEVICE_TEST_ENABLED && (
         <DeviceTestPanel
@@ -4327,7 +4371,7 @@ function SessionApp({ session, logout, initialSample }: { session?: FamilySessio
           サンプルモード表示中（データは保存されません）
         </div>
       )}
-      <header className="bg-white/80 backdrop-blur-xl pt-4 md:pt-6 lg:pt-8 sticky top-0 z-30 border-b border-slate-100">
+      <header className="design20-header bg-white/80 backdrop-blur-xl pt-4 md:pt-6 lg:pt-8 sticky top-0 z-30 border-b border-slate-100">
         <div className="h-14 md:h-16 lg:h-20 flex items-center justify-between px-5 md:px-8 lg:px-10">
           <div>
             <h1 className="font-black text-lg md:text-2xl lg:text-3xl text-slate-800 tracking-tight flex items-center gap-2 md:gap-3">
@@ -4405,7 +4449,7 @@ function SessionApp({ session, logout, initialSample }: { session?: FamilySessio
         </div>
       </header>
 
-      <main className="flex-1 overflow-y-auto overscroll-contain no-scrollbar flex flex-col pb-24 md:pb-32 lg:pb-40">
+      <main className="design20-main flex-1 overflow-y-auto overscroll-contain no-scrollbar flex flex-col pb-24 md:pb-32 lg:pb-40">
         <StudyReview records={pendingReviews} onConfirm={confirmStudyTime} />
         {activeTab === "daily" ? (
           <DailyView
@@ -4491,9 +4535,10 @@ function SessionApp({ session, logout, initialSample }: { session?: FamilySessio
         )}
       </main>
 
-      <nav className="bg-white/90 backdrop-blur-lg border-t border-slate-100 fixed bottom-0 left-0 right-0 z-40 pb-6 md:pb-8 lg:pb-8 w-full max-w-[1600px] mx-auto rounded-t-3xl md:rounded-t-[2rem] shadow-[0_-10px_30px_rgba(0,0,0,0.04)]">
-        <div className="h-16 md:h-20 lg:h-24 grid grid-cols-5 items-center px-1 md:px-6 lg:px-10 [&>button]:min-w-0 [&_span]:whitespace-nowrap">
+      <nav aria-label="メインナビゲーション" className="design20-nav bg-white/90 backdrop-blur-lg border-t border-slate-100 fixed bottom-0 left-0 right-0 z-40 pb-6 md:pb-8 lg:pb-8 w-full max-w-[1600px] mx-auto rounded-t-3xl md:rounded-t-[2rem] shadow-[0_-10px_30px_rgba(0,0,0,0.04)]">
+        <div className="design20-nav-items h-16 md:h-20 lg:h-24 grid grid-cols-5 items-center px-1 md:px-6 lg:px-10 [&>button]:min-w-0 [&_span]:whitespace-nowrap">
           <button
+            aria-current={activeTab === "daily" ? "page" : undefined}
             onClick={() => setActiveTab("daily")}
             className={`flex-1 flex flex-col items-center justify-center h-full space-y-1 md:space-y-2 transition-all duration-300 ${activeTab === "daily" ? "text-blue-600 -translate-y-1 md:-translate-y-2" : "text-slate-400 hover:text-slate-500"}`}
           >
@@ -4511,6 +4556,7 @@ function SessionApp({ session, logout, initialSample }: { session?: FamilySessio
             </span>
           </button>
           <button
+            aria-current={activeTab === "achievements" ? "page" : undefined}
             onClick={() => setActiveTab("achievements")}
             className={`flex-1 flex flex-col items-center justify-center h-full space-y-1 md:space-y-2 transition-all duration-300 ${activeTab === "achievements" ? "text-blue-600 -translate-y-1 md:-translate-y-2" : "text-slate-400 hover:text-slate-500"}`}
           >
@@ -4527,6 +4573,7 @@ function SessionApp({ session, logout, initialSample }: { session?: FamilySessio
             </span>
           </button>
           <button
+            aria-current={activeTab === "tests" ? "page" : undefined}
             onClick={() => setActiveTab("tests")}
             className={`flex-1 flex flex-col items-center justify-center h-full space-y-1 md:space-y-2 transition-all duration-300 ${activeTab === "tests" ? "text-blue-600 -translate-y-1 md:-translate-y-2" : "text-slate-400 hover:text-slate-500"}`}
           >
@@ -4543,6 +4590,7 @@ function SessionApp({ session, logout, initialSample }: { session?: FamilySessio
             </span>
           </button>
           <button
+            aria-current={activeTab === "produce" ? "page" : undefined}
             onClick={() => setActiveTab("produce")}
             className={`flex-1 flex flex-col items-center justify-center h-full space-y-1 md:space-y-2 transition-all duration-300 ${activeTab === "produce" ? "text-violet-600 -translate-y-1 md:-translate-y-2" : "text-slate-400 hover:text-slate-500"}`}
           >
@@ -4551,7 +4599,7 @@ function SessionApp({ session, logout, initialSample }: { session?: FamilySessio
             </div>
             <span className="text-[10px] md:text-sm lg:text-base font-bold">プロデュース</span>
           </button>
-          <button onClick={() => setActiveTab("review")} className={`flex flex-col items-center justify-center h-full space-y-1 md:space-y-2 transition-all ${activeTab === "review" ? "text-blue-600 -translate-y-1 md:-translate-y-2" : "text-slate-400 hover:text-slate-500"}`}>
+          <button type="button" aria-current={activeTab === "review" ? "page" : undefined} onClick={() => setActiveTab("review")} className={`flex flex-col items-center justify-center h-full space-y-1 md:space-y-2 transition-all ${activeTab === "review" ? "text-blue-600 -translate-y-1 md:-translate-y-2" : "text-slate-400 hover:text-slate-500"}`}>
             <div className={`p-1.5 md:p-3 rounded-xl md:rounded-2xl ${activeTab === "review" ? "bg-blue-50" : ""}`}><CheckCircle className="w-[22px] h-[22px] md:w-6 md:h-6 lg:w-7 lg:h-7" strokeWidth={activeTab === "review" ? 2.5 : 2} /></div>
             <span className="text-[10px] md:text-sm lg:text-base font-bold">対策・復習</span>
           </button>
