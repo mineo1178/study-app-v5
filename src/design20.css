@@ -1,0 +1,216 @@
+/* Study-app Design 2.0 — presentation layer only.
+   Keep learning session, Firestore, rewards and game progression in their existing modules.
+   This stylesheet is scoped to the authenticated application shell. */
+.design20-app {
+  --d20-ink: #17243e;
+  --d20-muted: #5f708d;
+  --d20-border: #dce4f0;
+  --d20-surface: #ffffff;
+  --d20-canvas: #f3f6fc;
+  --d20-primary: #4549df;
+  --d20-primary-deep: #3438b9;
+  --d20-teal: #0e8576;
+  --d20-purple: #7850c9;
+  color: var(--d20-ink);
+  background: var(--d20-canvas);
+  font-feature-settings: "tnum" 1;
+}
+.design20-app *, .design20-app *::before, .design20-app *::after { box-sizing: border-box; }
+.design20-app :focus-visible { outline: 3px solid #a5adfa; outline-offset: 3px; }
+.design20-app :where(button, input, select, textarea) { font: inherit; }
+.design20-app :where(button) { cursor: pointer; }
+.design20-app :where(button:disabled) { cursor: not-allowed; }
+.design20-app .design20-header {
+  background: rgba(255,255,255,.96);
+  border-bottom: 1px solid var(--d20-border);
+  box-shadow: none;
+  padding-top: 0;
+}
+.design20-app .design20-header > div { min-height: 68px; height: auto; padding-block: 12px; gap: 10px; }
+.design20-app .design20-header h1 { color: var(--d20-ink); font-size: clamp(1.06rem,2.15vw,1.55rem); letter-spacing:-.035em; }
+.design20-app .design20-header button { min-width:44px; min-height:44px; border-radius:12px; }
+.design20-app .design20-header [class*="text-[9px]"] { font-size: 12px !important; }
+.design20-app .design20-header h1 span { font-size: 11px; padding: 4px 8px; border-radius: 8px; }
+.design20-app .design20-main { background: var(--d20-canvas); scrollbar-gutter: stable; min-width:0; }
+.design20-app .design20-main :where(h1,h2,h3,h4) { line-height:1.35; letter-spacing:-.02em; }
+.design20-app .design20-main :where(p,li,label) { overflow-wrap:anywhere; }
+.design20-app .design20-main :where(input:not([type=checkbox]):not([type=radio]),select,textarea) {
+  min-height:44px; max-width:100%; border-radius:12px;
+}
+.design20-app .design20-main :where(button):not([role=tab]) { min-height:44px; }
+.design20-app .design20-main :where(button:disabled) { opacity:.58; }
+.design20-app .design20-main :where(.bg-white.rounded-2xl,.bg-white.rounded-3xl) {
+  border:1px solid var(--d20-border);
+  box-shadow:0 5px 24px rgba(24,44,86,.045);
+}
+.design20-app .design20-main :where(.text-slate-400,.text-slate-500) { color: var(--d20-muted); }
+.design20-app .design20-main :where([class*="text-[10px]"],[class*="text-[11px]"],[class*="text-[9px]"]) { font-size:12px; }
+.design20-app .design20-main .font-mono { font-variant-numeric:tabular-nums; }
+.design20-app .design20-nav { background:rgba(255,255,255,.98); border-top:1px solid var(--d20-border); border-radius:16px 16px 0 0; box-shadow:0 -8px 26px rgba(19,37,74,.06); }
+.design20-app .design20-nav-items { min-height:72px; height:auto; padding:6px 4px calc(8px + env(safe-area-inset-bottom,0px)); }
+.design20-app .design20-nav-items > button { min-height:58px; padding:7px 1px; border-radius:12px; gap:2px; transition:background .15s ease,color .15s ease; }
+.design20-app .design20-nav-items > button:hover { background:#f1f4ff; }
+.design20-app .design20-nav-items > button[class*="text-blue-600"],
+.design20-app .design20-nav-items > button[class*="text-violet-600"] { background:#ebeeff; color:#383cc2; transform:none; }
+.design20-app .design20-nav-items > button span { font-size:clamp(10px,2.6vw,12px); font-weight:800; line-height:1.25; letter-spacing:-.04em; white-space:normal; text-align:center; }
+.design20-app .design20-nav-items > button > div { padding:3px; border-radius:9px; }
+/* Home: reuse existing progress and task data, without inventing today's minutes. */
+.design20-learning { max-width:1160px; margin-inline:auto; width:100%; }
+.design20-home-hero {
+  margin:18px 16px 0; padding:clamp(20px,3vw,32px);
+  display:grid; grid-template-columns:minmax(0,1.7fr) minmax(210px,.7fr); gap:24px;
+  background:linear-gradient(112deg,#19254c 0%,#293a81 62%,#4947a9 100%);
+  color:white; border-radius:24px; box-shadow:0 12px 30px rgba(31,49,110,.13);
+}
+.design20-home-eyebrow { display:inline-flex; font-size:12px; font-weight:800; letter-spacing:.13em; color:#bcc5ff; }
+.design20-home-hero h2 { font-size:clamp(23px,3vw,32px); font-weight:900; line-height:1.3; margin-top:8px; }
+.design20-home-hero p { font-size:14px; color:#e4e9ff; line-height:1.65; margin-top:9px; }
+.design20-home-hero button {
+  margin-top:18px; min-height:50px; background:white; color:#293a81;
+  padding:11px 24px; border-radius:12px; font-size:15px; font-weight:900;
+  box-shadow:0 4px 12px #0a1d4b30;
+}
+.design20-home-hero button:disabled { background:#d0d5e7; }
+.design20-home-stat { display:flex; flex-direction:column; justify-content:center; gap:8px; padding:20px; background:#ffffff17; border:1px solid #ffffff35; border-radius:18px; }
+.design20-home-stat span { font-size:13px; color:#e0e5ff; font-weight:700; }
+.design20-home-stat strong { font-size:clamp(34px,4vw,48px); letter-spacing:-.05em; line-height:1.15; font-variant-numeric:tabular-nums; }
+.design20-home-stat small { color:#e1e7ff; font-size:12px; }
+.design20-learning #design20-task-list { scroll-margin-top:22px; }
+.design20-learning :where(.rounded-2xl,.rounded-3xl) { transition:border-color .15s ease; }
+.design20-learning :where(.rounded-2xl,.rounded-3xl):hover { border-color:#bfc8e4; }
+/* Existing timer: only visual changes; elapsed time remains owned by StrictTimer. */
+.design20-timer { padding:10px; border-radius:20px; background:#f8faff; border:1px solid #dfe7fa; }
+.design20-timer .font-mono { font-size:clamp(29px,5vw,50px); letter-spacing:-.04em; }
+.design20-timer button[aria-label="学習タイマーを開始"],
+.design20-timer button[aria-label="学習タイマーを一時停止"] { min-width:52px; min-height:52px; }
+.design20-timer button[aria-label="学習タイマーを開始"] { background:var(--d20-primary); }
+.design20-timer [class*="bg-slate-800"] { background:#202c54; }
+/* Chart readability and accessible control sizing. */
+.design20-app [aria-label="計算の記録"],
+.design20-app [aria-label="テスト対策・復習"] { width:100%; }
+.design20-app [aria-label="計算の記録"] > h2,
+.design20-app [aria-label="テスト対策・復習"] > h2 { color:var(--d20-ink); font-size:clamp(23px,3vw,28px); }
+.design20-app [aria-label="計算の記録"] :where(section,button),
+.design20-app [aria-label="テスト対策・復習"] :where(section,article) { border-color:var(--d20-border); }
+.design20-app [aria-label="計算の記録"] :where(select),
+.design20-app [aria-label="テスト対策・復習"] :where(select) { min-height:48px; }
+.design20-app :where(.recharts-cartesian-axis-tick-value) { font-size:12px; fill:#5b6a85; }
+.design20-app :where(.recharts-legend-item-text) { font-size:13px; }
+.design20-app [aria-label="テスト対策・復習"] button[class*="bg-blue-600"] { background:var(--d20-primary); min-height:48px; }
+/* Tests and achievements: both retain existing filters, charts, and computations. */
+.design20-app[data-design20-tab="tests"] .design20-main > div,
+.design20-app[data-design20-tab="achievements"] .design20-main > div { min-width:0; }
+.design20-app[data-design20-tab="tests"] .design20-main > div > div:first-child,
+.design20-app[data-design20-tab="achievements"] .design20-main > div > div:first-child {
+  background:#f9fbff; border-bottom:1px solid var(--d20-border); box-shadow:none;
+}
+.design20-app[data-design20-tab="tests"] .design20-main :where(table) { font-variant-numeric:tabular-nums; }
+.design20-app[data-design20-tab="tests"] .design20-main :where(th,td) { padding-block:12px; }
+/* Game: preserve game-specific colors but normalize spacing and section hierarchy. */
+.design20-app[data-design20-tab="produce"] .design20-main > div { max-width:1160px; }
+.design20-app[data-design20-tab="produce"] .design20-main :where(section.bg-white,section.bg-slate-100) { border:1px solid var(--d20-border); border-radius:20px; }
+.design20-app[data-design20-tab="produce"] .design20-main :where(button) { min-height:44px; }
+.design20-app[data-design20-tab="produce"] .design20-main :where(h2,h3) { line-height:1.35; }
+@media(min-width:768px) {
+  .design20-home-hero { margin-inline:24px; }
+}
+@media(min-width:1024px) {
+  .design20-app .design20-header { margin-left:228px; }
+  .design20-app .design20-main { margin-left:228px; padding-bottom:28px; }
+  .design20-app .design20-nav {
+    position:absolute; left:0; top:0; bottom:0; right:auto;
+    width:228px; max-width:none; border-top:none; border-right:1px solid #263862;
+    border-radius:0; background:#121e39; box-shadow:none; padding:90px 14px 14px;
+  }
+  .design20-app .design20-nav-items { display:flex; flex-direction:column; align-items:stretch; gap:8px; height:auto; padding:0; }
+  .design20-app .design20-nav-items > button {
+    display:flex; flex-direction:row; align-items:center; justify-content:flex-start;
+    min-height:56px; width:100%; gap:10px; padding:8px 12px; color:#d1daf0;
+  }
+  .design20-app .design20-nav-items > button > div { padding:3px; background:transparent; }
+  .design20-app .design20-nav-items > button span { font-size:14px; letter-spacing:0; text-align:left; white-space:normal; }
+  .design20-app .design20-nav-items > button:hover { background:#233353; color:white; }
+  .design20-app .design20-nav-items > button[class*="text-blue-600"],
+  .design20-app .design20-nav-items > button[class*="text-violet-600"] { background:#3b477e; color:#fff; }
+  .design20-learning .design20-home-hero { margin:22px 30px 0; }
+}
+@media(max-width:640px) {
+  .design20-history-range { flex-direction:column; }
+  .design20-history-range > div { min-width:0; width:100%; }
+  .design20-history-dates { min-width:0; width:100%; }
+  .design20-history-dates input[type="date"] { flex:1; width:0; min-width:0; font-size:12px; }
+  .design20-history-range > div:last-child > button { white-space:nowrap; font-size:12px; }
+  .design20-home-hero { display:flex; flex-direction:column; gap:15px; border-radius:19px; padding:20px; margin-top:12px; }
+  .design20-home-stat { flex-direction:row; align-items:center; justify-content:space-between; padding:12px 15px; }
+  .design20-home-stat strong { font-size:30px; }
+  .design20-app .design20-header > div { padding-inline:13px; }
+  .design20-app .design20-header h1 { font-size:16px; }
+  .design20-app .design20-header h1 span { font-size:10px; }
+  .design20-app .design20-main { padding-bottom:100px; }
+  .design20-app .design20-nav-items > button span { font-size:10px; }
+  .design20-app[data-design20-tab="tests"] .design20-main :where(th,td) { font-size:11px; }
+}
+@media(prefers-reduced-motion:reduce) {
+  .design20-app *, .design20-app *::before, .design20-app *::after { animation-duration:.01ms !important; transition-duration:.01ms !important; }
+}
+
+/* Login: maintain the existing Auth handler, only improve its presentation. */
+.design20-login { min-height:100dvh; background:radial-gradient(circle at 15% 10%,#e8e9ff 0%,transparent 38%),#f3f6fc; }
+.design20-login > div { border:1px solid #dce4f0; box-shadow:0 18px 50px rgba(27,47,92,.095); }
+.design20-login h1 { color:#17243e; letter-spacing:-.04em; }
+.design20-login :where(input) { min-height:50px; border-radius:12px; }
+.design20-login :where(button) { min-height:48px; border-radius:12px; }
+.design20-login button[type="submit"] { background:#4549df; }
+.design20-login :focus-visible { outline:3px solid #a5adfa; outline-offset:3px; }
+
+/* Design 2.0 / second pass: make the next task and learning history explicit. */
+.design20-home-content { min-width:0; }
+.design20-next-action {
+  margin-top:16px; max-width:540px; padding:14px 16px;
+  background:rgba(255,255,255,.11); border:1px solid rgba(255,255,255,.26);
+  border-radius:14px; display:flex; flex-direction:column; gap:5px;
+}
+.design20-next-action > span {
+  font-size:12px; color:#c6d6ff; font-weight:800;
+  letter-spacing:.04em;
+}
+.design20-next-action > strong {
+  font-size:clamp(16px,2vw,20px); line-height:1.4; overflow-wrap:anywhere;
+  font-weight:900;
+}
+.design20-next-action > small { font-size:13px; color:#e1e9ff; }
+.design20-home-stat strong .design20-home-unit { font-size:15px; padding-left:5px; font-weight:700; }
+.design20-content-page { max-width:1160px; width:100%; margin-inline:auto; }
+.design20-page-heading {
+  display:flex; align-items:center; justify-content:space-between; gap:18px;
+  padding:23px 20px 19px; background:transparent;
+}
+.design20-page-eyebrow {
+  display:block; font-size:11px; font-weight:900; letter-spacing:.11em;
+  color:#6671af; margin-bottom:5px;
+}
+.design20-page-heading h2 {
+  color:#17243e; font-size:clamp(22px,2.8vw,29px);
+  font-weight:900; line-height:1.3;
+}
+.design20-page-heading p { font-size:14px; color:#5f708d; margin-top:5px; line-height:1.6; }
+.design20-page-counter {
+  display:inline-flex; flex-shrink:0; padding:8px 12px;
+  border-radius:999px; border:1px solid #dce4f0; background:white;
+  font-size:13px; font-weight:800; color:#263862;
+}
+.design20-app .design20-nav-items > button[aria-current="page"] {
+  background:#ebeeff; color:#383cc2; transform:none;
+}
+@media(min-width:1024px) {
+  .design20-app .design20-nav-items > button[aria-current="page"] {
+    background:#3b477e; color:#fff;
+  }
+  .design20-page-heading { padding:27px 30px 20px; }
+}
+@media(max-width:480px) {
+  .design20-page-heading { padding:17px 15px 14px; align-items:flex-start; }
+  .design20-page-counter { font-size:11px; padding:7px 9px; }
+  .design20-next-action { padding:12px; margin-top:13px; }
+  .design20-home-stat small { max-width:58%; line-height:1.45; }
+}

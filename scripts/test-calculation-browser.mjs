@@ -178,7 +178,7 @@ try {
   await page.getByRole("button", { name: "サンプルデータで試す" }).click();
   await page.locator("select").first().selectOption({ label: "第14回" });
   for (const id of ["①", "②", "③", "④", "⑤", "⑥", "⑦"]) {
-    await page.getByText(id, { exact: true }).click();
+    await page.locator("#design20-task-list").getByText(id, { exact: true }).click();
     await page.getByRole("button", { name: "計算をはじめる", exact: true }).click();
     assert.equal(await page.getByRole("button", { name: "学習タイマーを開始", exact: true }).isDisabled(), true);
     await page.waitForTimeout(2200);
