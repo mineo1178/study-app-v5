@@ -2134,6 +2134,10 @@ const DailyView = ({
     ?? visibleTasks.find((task) => task.status === "in_progress")
     ?? visibleTasks.find((task) => task.status === "not_started");
   const remainingTasks = visibleTasks.filter((task) => task.status !== "completed").length;
+  const scopeTasks: Task[] = currentUnit ? visibleTasks : tasks;
+  const runningCount = scopeTasks.filter(task => task.isRunning).length;
+  const activeCount = scopeTasks.filter(task => task.status === "in_progress").length;
+  const finishedCount = scopeTasks.filter(task => task.status === "completed").length;
 
   const openNextTask = () => {
     if (nextTask) {
@@ -2167,7 +2171,13 @@ const DailyView = ({
           <small>全期間のタスク完了率：{allStats.total.progress}%</small>
         </div>
       </section>
-      <div className="sticky top-0 z-20 px-4 py-3 md:px-6 md:py-4 lg:px-8 lg:py-5 bg-white/80 backdrop-blur-md border-b border-slate-200">
+      <section className="design22-home-metrics" aria-label="タスクの進行状況">
+        <div><span>学習中</span><strong>{runningCount}<small>件</small></strong></div>
+        <div><span>取り組み中</span><strong>{activeCount}<small>件</small></strong></div>
+        <div><span>完了</span><strong>{finishedCount}<small>件</small></strong></div>
+        <p>{currentUnit ? `${currentUnit}のタスク` : "登録された全タスク"}の状態です。今日の学習時間ではありません。</p>
+      </section>
+      <div className="design22-unit-filter sticky top-0 z-20 px-4 py-3 md:px-6 md:py-4 lg:px-8 lg:py-5 bg-white/80 backdrop-blur-md border-b border-slate-200">
         <div className="flex gap-2 md:gap-3">
           <button
             onClick={() => setSelectedUnit(null)}
@@ -2481,7 +2491,7 @@ const TestsView = ({ tests, onSaveTest, onDeleteTest }: any) => {
         <div><span className="design20-page-eyebrow">TEST RESULTS</span><h2>テストの記録</h2><p>教科やテストの種類を選んで、結果の変化を確認しよう。</p></div>
         <span className="design20-page-counter">登録 {tests.length}件</span>
       </section>
-      <div className="bg-white sticky top-0 z-20 px-4 py-3 md:px-6 md:py-4 lg:px-8 lg:py-4 border-b border-slate-200 shadow-sm space-y-2.5 md:space-y-3">
+      <div className="design22-tests-filters bg-white sticky top-0 z-20 px-4 py-3 md:px-6 md:py-4 lg:px-8 lg:py-4 border-b border-slate-200 shadow-sm space-y-2.5 md:space-y-3">
         <div className="flex justify-between items-center gap-2 md:gap-3">
           <div className="flex gap-1.5 md:gap-2">
             <button
@@ -2532,9 +2542,34 @@ const TestsView = ({ tests, onSaveTest, onDeleteTest }: any) => {
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-3 py-4 md:px-6 md:py-6 lg:px-8 lg:py-8 space-y-5 md:space-y-6 lg:space-y-8 pb-20 md:pb-32">
+      <div className="design22-tests-content flex-1 overflow-y-auto px-3 py-4 md:px-6 md:py-6 lg:px-8 lg:py-8 space-y-5 md:space-y-6 lg:space-y-8 pb-20 md:pb-32">
         {producerBonus && <div className="rounded-2xl bg-violet-50 border border-violet-200 p-4"><p className="font-black text-violet-800">プロデューサーブースト（{producerBonus.kind}）</p><p className="mt-1 text-sm text-violet-700">{producerBonus.previous === undefined ? "次回の同じテストから上昇ボーナスを判定します" : `${producerBonus.previous.toFixed(1)} → ${producerBonus.current.toFixed(1)}（${producerBonus.improvement >= 0 ? "+" : ""}${producerBonus.improvement.toFixed(1)}）`}</p><p className="mt-2 font-bold text-violet-900">現在のブースト：+{producerBonus.boost}% {producerBonus.gap > 0 && `／次のBONUSまであと偏差値 +${producerBonus.gap.toFixed(1)}`}</p></div>}
-        <div className="bg-white p-3 md:p-5 lg:p-6 rounded-2xl md:rounded-3xl shadow-sm border border-slate-200 h-56 md:h-80 lg:h-[28rem] shrink-0">
+        {chartData.length < 2 || selectedSubjects.length === 0 ? (
+          <section className="design22-test-single" aria-label="テストの記録">
+            {selectedSubjects.length === 0 ? (
+              <p>表示する教科を選ぶと、成績を確認できます。</p>
+            ) : chartData.length === 0 ? (
+              <p>この条件に合うテスト記録はまだありません。テスト種別を切り替えるか、記録を追加してください。</p>
+            ) : (
+              <>
+                <div className="design22-test-single-heading">
+                  <div><span>記録は1件</span><h3>{chartData[0].testName}</h3><p>{chartData[0].name} · 偏差値</p></div>
+                  <span className="design22-no-trend">まだ推移は判定できません</span>
+                </div>
+                <div className="design22-test-score-grid">
+                  {selectedSubjects.map(key => {
+                    const value = chartData[0][key];
+                    const label = key === "4ko" ? "4科" : SUBJECT_CONFIG[key as Subject]?.label ?? key;
+                    return typeof value === "number" ? <div key={key}><span>{label}</span><strong>{value.toFixed(1)}</strong></div> : null;
+                  })}
+                </div>
+                <p className="design22-test-hint">同じ条件のテストが2件以上になると、偏差値の変化を比較できます。</p>
+              </>
+            )}
+          </section>
+        ) : <section className="design22-test-chart bg-white rounded-2xl border border-slate-200">
+          <header className="design22-chart-heading"><h3>偏差値の推移</h3><span>{chartData.length}件の記録 · 偏差値</span></header>
+          <div className="design22-test-chart-canvas">
           <ResponsiveContainer width="100%" height="100%">
             <LineChart
               data={chartData}
@@ -2617,14 +2652,16 @@ const TestsView = ({ tests, onSaveTest, onDeleteTest }: any) => {
               )}
             </LineChart>
           </ResponsiveContainer>
-        </div>
+          </div>
+        </section>}
 
-        <div className="bg-white rounded-2xl md:rounded-3xl shadow-sm border border-slate-200 overflow-hidden">
+        <div className="design22-test-table bg-white rounded-2xl md:rounded-3xl shadow-sm border border-slate-200 overflow-x-auto">
+          <p className="design22-swipe-hint">スマートフォンでは表を左右にスクロールして確認できます。</p>
           <h3 className="font-bold text-slate-700 text-xs md:text-sm lg:text-base px-3 pt-3 pb-2 md:px-5 md:pt-5 md:pb-3 lg:px-6 lg:pt-6 flex items-center gap-1.5 md:gap-2">
             <TrendingUp className="text-blue-500 w-[14px] h-[14px] md:w-4 md:h-4 lg:w-5 lg:h-5" />{" "}
             偏差値履歴
           </h3>
-          <table className="w-full text-center text-[10px] md:text-xs lg:text-sm">
+          <table className="design22-tests-table w-full text-center text-[10px] md:text-xs lg:text-sm">
             <thead className="text-slate-400 bg-slate-50 border-y border-slate-100">
               <tr>
                 <th className="py-2 md:py-3 lg:py-4 pl-3 md:pl-5 text-left font-bold">
@@ -2838,10 +2875,10 @@ const AchievementsView = ({ tasks, calculationRecords }: { tasks: Task[]; calcul
       <section className="design20-page-heading" aria-label="学習実績の概要">
         <div><span className="design20-page-eyebrow">LEARNING HISTORY</span><h2>学習の実績</h2><p>教科ごとの学習時間と、毎日計算の記録を見返そう。</p></div>
       </section>
-      <div className="bg-white sticky top-0 z-20 px-4 py-3 md:px-6 md:py-4 lg:px-8 lg:py-4 border-b border-slate-200 shadow-sm space-y-2.5 md:space-y-3">
-        <div className="design20-history-range flex gap-2 md:gap-3">
+      <div className="design22-achievements-filters bg-white sticky top-0 z-20 px-4 py-3 md:px-6 md:py-4 lg:px-8 lg:py-4 border-b border-slate-200 shadow-sm space-y-2.5 md:space-y-3">
+        <div className="design22-history-range flex gap-2 md:gap-3">
           <div className="flex-1 flex justify-between items-center bg-slate-50 p-1.5 md:p-2 lg:p-2.5 rounded-lg md:rounded-xl border border-slate-200">
-            <div className="design20-history-dates flex gap-1.5 md:gap-2 items-center">
+            <div className="design22-history-dates flex gap-1.5 md:gap-2 items-center">
               <CalendarIcon className="text-slate-400 ml-1 w-[14px] h-[14px] md:w-4 md:h-4 lg:w-5 lg:h-5" />
               <input
                 type="date"
@@ -2896,11 +2933,13 @@ const AchievementsView = ({ tasks, calculationRecords }: { tasks: Task[]; calcul
       <div className="design20-achievements-content flex-1 overflow-y-auto px-3 py-4 md:px-6 md:py-6 lg:px-8 lg:py-8 space-y-4 md:space-y-6 lg:space-y-8 pb-20 md:pb-32">
         {calculationRecords}
         <div className="design20-history-chart bg-white rounded-2xl border border-slate-200">
-          <h3 className="text-[10px] md:text-sm lg:text-base font-bold text-slate-500 mb-1 md:mb-3 flex items-center gap-1 md:gap-1.5">
-            <BarChart2 className="w-3 h-3 md:w-4 md:h-4 lg:w-5 lg:h-5" />{" "}
-            学習時間 (分)
-          </h3>
-          <div className="design20-history-chart-canvas">
+          <header className="design22-chart-heading">
+            <h3><BarChart2 className="w-4 h-4 inline-block mr-1.5" />学習時間の推移</h3>
+            <span>単位：分 · 選択期間内</span>
+          </header>
+          {pieData.length === 0 ? (
+            <p className="design22-empty-activity">選択した科目・期間に学習時間の記録がありません。期間または科目を変更して確認してください。</p>
+          ) : <div className="design20-history-chart-canvas">
           <ResponsiveContainer width="100%" height="100%">
             <BarChart
               data={chartData}
@@ -2962,7 +3001,7 @@ const AchievementsView = ({ tasks, calculationRecords }: { tasks: Task[]; calcul
               )}
             </BarChart>
           </ResponsiveContainer>
-          </div>
+          </div>}
         </div>
 
         <div className="grid grid-cols-2 md:grid-cols-2 lg:grid-cols-3 gap-3 md:gap-5 lg:gap-6">

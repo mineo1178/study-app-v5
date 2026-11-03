@@ -68,7 +68,7 @@ try {
   await page.locator('input[type="date"]').fill("2026-10-17");
   for (let i = 0; i < 5; i++) await page.locator('input[type="number"]').nth(i).fill(String(50 + i));
   await page.getByRole("button", { name: "追加する", exact: true }).click();
-  await page.getByText("表示確認用の架空カリテ", { exact: true }).waitFor();
+  await page.getByRole("heading", { name: "表示確認用の架空カリテ", exact: true }).waitFor();
   await tab("対策・復習"); const panel = page.getByRole("region", { name: "テスト対策・復習", exact: true });
   await panel.getByText("復習データを読み込み中…", { exact: true }).waitFor({ state: "hidden" });
   const { plan, bindings } = await page.evaluate(async questions => {
@@ -85,7 +85,18 @@ try {
     await page.setViewportSize({ width, height });
     for (const [name, slug, heading] of [["学習", "learning", "次の学習を始めよう"], ["成績", "results", "テストの記録"], ["実績", "history", "学習の実績"], ["対策・復習", "review", "対策・復習"], ["プロデュース", "game", null]]) {
       await tab(name); if (heading) await page.getByRole("heading", { name: heading, exact: true }).waitFor();
-      if (slug === "game") await page.getByRole("region", { name: "東京ドームのアンコール", exact: true }).waitFor();
+      if (slug === "results") {
+        await page.locator(".design22-test-single").waitFor();
+        assert.equal(await page.locator(".design22-test-chart").count(), 0);
+        assert.equal(await page.locator(".design22-test-score-grid strong").count(), 1);
+      }
+      if (slug === "game") {
+        const encore = page.getByRole("region", { name: "東京ドームのアンコール", exact: true });
+        await encore.getByRole("button", { name: /^(アンコールに応える|もう一度見る)$/ }).click();
+        await encore.getByRole("status", { name: "アンコール演出", exact: true }).waitFor();
+        await encore.getByRole("button", { name: "演出をスキップ・閉じる", exact: true }).click();
+        await encore.getByRole("button", { name: "もう一度見る", exact: true }).waitFor();
+      }
       await page.locator(".design20-main").evaluate(e => { e.scrollTop = 0; }); await geometry(); await shot(`${label}-${slug}`);
     }
     await tab("学習"); await page.locator("#design20-task-list").getByText("基本問題", { exact: true }).click();
@@ -98,6 +109,19 @@ try {
     results.push(`${label}: learning/results/history/review/game + study/calculation dialogs; layout and navigation`);
   }
   assert.deepEqual(await call("timer-client", "read"), baseline); assert.deepEqual(await call("review-client", "inspectTests"), grades);
+  await tab("成績"); await page.getByRole("button", { name: "テスト記録を追加", exact: true }).click();
+  await page.getByPlaceholder("例: 第14回 カリテ", { exact: true }).fill("表示確認用の架空カリテ2");
+  await page.locator('input[type="date"]').fill("2026-10-24");
+  for (let i = 0; i < 5; i++) await page.locator('input[type="number"]').nth(i).fill(String(55 + i));
+  await page.getByRole("button", { name: "追加する", exact: true }).click();
+  for (const [label, width, height] of [["320", 320, 844], ["390", 390, 844], ["ipad", 834, 1112], ["pc", 1440, 900]]) {
+    await page.setViewportSize({ width, height }); await page.locator(".design22-test-chart").waitFor();
+    await page.locator(".design22-test-chart .recharts-line").first().waitFor();
+    assert.equal(await page.locator(".design22-test-single").count(), 0);
+    await geometry(); await page.locator(".design20-main").evaluate(e => { e.scrollTop = 0; }); await shot(`${label}-results-two`);
+  }
+  assert.deepEqual(await call("timer-client", "read"), baseline);
+  results.push("Design 2.2: one-result cards and two-result trends at all four sizes; encore start/skip/replay entry without shared data changes");
   await page.reload(); await tab("対策・復習"); await panel.getByRole("button", { name: "今日の5問を始める", exact: true }).waitFor();
   assert.deepEqual(errors, []); assert.deepEqual(external, []);
   await writeFile(`${out}/results.json`, JSON.stringify({ results, screenshots, pageErrors: errors.length, externalDataRequests: external.length, sharedDataUnchanged: true }, null, 2));
