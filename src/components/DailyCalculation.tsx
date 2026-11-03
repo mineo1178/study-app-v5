@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { getDocs, limit, onSnapshot, orderBy, query, where, type Firestore } from "firebase/firestore";
-import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { calculationStorageKey, commitCalculationAttempt, formatCalculationTime, getCalculationAttempts, getCalculationDays, getCalculationElapsedSeconds, getJstDateKey, MAX_CALCULATION_SECONDS, type CalculationAttempt, type CalculationDay, type CalculationDraft } from "../daily-calculation";
 import { calculationDateTrend, calculationTaskRecords, calculationStartLabel, type CalculationScoreMode } from "../daily-calculation-view";
 import { calculationDiagnosticSource, diagnosticReasonText, normalizeDiagnosticError, recordDiagnostic, scopedDiagnosticRecorder, type DiagnosticCode } from "../device-test";
@@ -142,10 +141,69 @@ export const CalculationInput = ({ db, familyId, uid, sample, sampleAttempts, on
   </div>;
 };
 
-const CalculationGraph = ({ data, valueKey, title, score }: { data: { label: string; score: number; elapsedSeconds: number }[]; valueKey: "score" | "elapsedSeconds"; title: string; score: boolean }) => <section className="rounded-2xl bg-white p-4 min-w-0">
-  <h3 className="font-bold">{title}</h3>{!score && <p className="text-sm">時間の単位：秒</p>}
-  <div className="mt-2 h-56 min-w-0"><ResponsiveContainer width="100%" height="100%"><LineChart data={data} margin={{ left: 20, right: 10, top: 10, bottom: 15 }}><CartesianGrid strokeDasharray="3 3" /><XAxis dataKey="label" interval="preserveStartEnd" minTickGap={10} angle={-30} textAnchor="end" height={65} tick={{ fontSize: 11 }} /><YAxis interval={score ? 0 : undefined} domain={score ? [0, 7] : [0, "auto"]} ticks={score ? [0, 1, 2, 3, 4, 5, 6, 7] : undefined} /><Tooltip formatter={value => score ? String(value) + "/7" : formatCalculationTime(Number(value))} /><Line dataKey={valueKey} name={score ? "得点" : "所要時間"} stroke={score ? "#2563eb" : "#059669"} isAnimationActive={false} /></LineChart></ResponsiveContainer></div>
-</section>;
+// A single saved day cannot show a trend. Use a compact fact card for one day,
+// then labeled, proportional comparison bars for multiple real saved records.
+const CalculationGraph = ({ data, valueKey, title, score }: {
+  data: { label: string; score: number; elapsedSeconds: number }[];
+  valueKey: "score" | "elapsedSeconds"; title: string; score: boolean;
+}) => {
+  const [showAll, setShowAll] = useState(false);
+  const entries = showAll ? data : data.slice(-7);
+  const last = data.at(-1);
+  const first = data[0];
+  const limit = score ? 7 : Math.max(1, ...data.map(item => item.elapsedSeconds));
+  const valueText = (value: number) => score ? `${value}/7 点` : formatCalculationTime(value);
+  const formatLabel = (label: string) => /^\\d{4}-\\d{2}-\\d{2}$/.test(label) ? label.slice(5).replace("-", "/") : label;
+  const change = first && last ? last[valueKey] - first[valueKey] : 0;
+  return (
+    <section className="design20-series" aria-label={title}>
+      <div className="design20-series-header">
+        <h3>{title}</h3>
+        <span className="design20-series-unit">{score ? "7点満点" : "単位：分・秒"}</span>
+      </div>
+      {data.length === 0 ? (
+        <p className="design20-series-empty">この課題の記録はまだありません。</p>
+      ) : data.length === 1 && last ? (
+        <div className="design20-series-single" role="status">
+          <div>
+            <span className="design20-series-small">記録された結果</span>
+            <strong>{valueText(last[valueKey])}</strong>
+            <span className="design20-series-date">{last.label}</span>
+          </div>
+          <p>記録はまだ1回分。<b>別の日の記録が増えると比較できます。</b> 現時点では上がった・下がったとは判定しません。</p>
+        </div>
+      ) : (
+        <>
+          <div className="design20-series-overview">
+            <span>最初 <strong>{valueText(first[valueKey])}</strong></span>
+            <span>最新 <strong>{valueText(last![valueKey])}</strong></span>
+            <span className="design20-series-delta">差 {change > 0 ? "+" : ""}{score ? `${change}点` : `${change}秒`}</span>
+          </div>
+          <div className="design20-series-bars" role="list">
+            {entries.map((entry, index) => {
+              const v = entry[valueKey];
+              return (
+                <div className="design20-series-row" role="listitem" key={`${entry.label}-${index}`}>
+                  <span className="design20-series-label" title={entry.label}>{formatLabel(entry.label)}</span>
+                  <div className="design20-series-track" role="img" aria-label={`${entry.label}：${valueText(v)}`}>
+                    <div className={`design20-series-fill ${score ? "design20-series-score" : "design20-series-time"}`} style={{ width: `${Math.max(0, Math.min(100, v / limit * 100))}%` }} />
+                  </div>
+                  <strong className="design20-series-value">{valueText(v)}</strong>
+                </div>
+              );
+            })}
+          </div>
+          {data.length > 7 && (
+            <button type="button" className="design20-series-toggle" aria-expanded={showAll} onClick={() => setShowAll(current => !current)}>
+              {showAll ? "最新7件に戻す" : `全${data.length}件を見る（表示中：最新7件）`}
+            </button>
+          )}
+          <p className="design20-series-footnote">{score ? "棒の長さは7点を基準に比較しています。" : "棒の長さは表示中の記録の最大所要時間を基準にしています。"} 日付のない日は追加していません。</p>
+        </>
+      )}
+    </section>
+  );
+};
 
 // Reset records and selections at the identity boundary, including pending reads.
 export const DailyCalculation = (props: CalculationProps) => <CalculationRecords key={JSON.stringify([props.familyId, props.uid, props.sample])} {...props} />;
@@ -208,23 +266,27 @@ const CalculationRecords = ({ db, familyId, uid, sample, sampleAttempts }: Calcu
     } catch { setError("前の記録を読み込めなかったよ。もう一度ためしてね。"); }
     finally { setMoreBusy(false); }
   };
-  return <section className="mx-auto w-full max-w-2xl space-y-5 min-w-0" aria-label="計算の記録">
-    <h2 className="text-2xl font-black">計算の記録</h2>
-    <p className="text-sm">課題ごとに7点満点でくらべるよ。異なる課題の点数は合算しないよ。</p>
+  return <section className="design20-calculation mx-auto w-full max-w-5xl min-w-0" aria-label="計算の記録">
+    <div className="design20-calculation-heading">
+      <div><span className="design20-calculation-eyebrow">DAILY CALCULATION</span><h2>毎日計算の記録</h2></div>
+      <p>同じ課題を日付ごとに比較します。7点満点、記録のない日は0点にはしません。</p>
+    </div>
     {loading && <p role="status">記録を読み込み中…</p>}{error && <p role="alert">{error}</p>}
     {!loading && !records.length && <p>まだ記録がないよ。「学習 → 算数 → 計算」のカードから結果を保存してね。</p>}
-    <label className="block font-bold">グラフで見る計算課題<select aria-label="グラフで見る計算課題" className="mt-2 w-full rounded-xl border bg-white p-3 text-sm" value={taskId} onChange={event => setSelectedTask(event.target.value)}>{taskOptions.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label>
-    <h3 className="font-black">選んだ課題の日付別推移</h3>
-    <p className="text-sm">保存されたJSTの日付順に表示するよ。記録のない日は0点にしないよ。以前の記録は「もっと前の日を見る」で読み込めるよ。</p>
-    <label className="block font-bold">日付ごとに表示する得点<select aria-label="日付ごとに表示する得点" className="mt-2 w-full rounded-xl border bg-white p-3 text-sm" value={scoreMode} onChange={event => setScoreMode(event.target.value as CalculationScoreMode)}><option value="first">初回</option><option value="latest">最新</option><option value="best">最高</option></select></label>
-    {trendLoading ? <p role="status">日付別の記録を読み込み中…</p> : <p role="status">{trend.length === 1 ? "この課題は読み込み済みの記録が1日分だけだよ。別の日に保存すると推移が見られるよ。" : `この課題は${trend.length}日分の記録があるよ。`}</p>}
-    <CalculationGraph data={trend} valueKey="score" title={`日付ごとの${scoreLabel}得点推移（7点満点）`} score />
-    <CalculationGraph data={trend} valueKey="elapsedSeconds" title="日付ごとの初回時間推移" score={false} />
-    <section className="rounded-3xl bg-white p-4"><h3 className="font-black">日ごとの記録</h3><div className="mt-3 space-y-2">{records.map(record => <button key={JSON.stringify([record.dateKey, record.taskId])} className={"w-full rounded-xl border p-3 text-left " + (selectedDate === record.dateKey && taskId === record.taskId ? "border-blue-500 bg-blue-50" : "border-slate-100")} onClick={() => selectDay(record.dateKey, record.taskId)}><strong>{record.dateKey} / {record.taskLabel}</strong><p>初回 {record.firstScore}/7 ・ {formatCalculationTime(record.firstElapsedSeconds)}</p><p>最新 {record.latestScore}/7 ・ {formatCalculationTime(record.latestElapsedSeconds)}</p><p className="text-sm">最高 {record.bestScore}/7 / 解き直し{record.attemptCount - 1}回 / {record.bestScore === 7 ? "7/7達成" : "チャレンジ中"}</p></button>)}</div>{!sample && hasMore && dates.split(",").length >= 30 && <button className="mt-3 w-full rounded-xl bg-slate-100 p-3 font-bold" disabled={moreBusy} onClick={() => void more()}>{moreBusy ? "読み込み中…" : "もっと前の日を見る"}</button>}</section>
-    <section ref={detailRef} className="scroll-mt-4 space-y-4 rounded-3xl bg-white p-4">
+    <div className="design20-calculation-filters">
+      <label>比較する課題<select aria-label="グラフで見る計算課題" value={taskId} onChange={event => setSelectedTask(event.target.value)}>{taskOptions.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label>
+      <label>表示する得点<select aria-label="日付ごとに表示する得点" value={scoreMode} onChange={event => setScoreMode(event.target.value as CalculationScoreMode)}><option value="first">初回</option><option value="latest">最新</option><option value="best">最高</option></select></label>
+    </div>
+    <p className="design20-calculation-status" role="status">{trendLoading ? "日付別の記録を読み込み中…" : trend.length === 1 ? "1日分の記録です。推移を判断するには別の日の記録が必要です。" : `比較できる記録：${trend.length}日分（JST）`}</p>
+    <div className="design20-calculation-charts">
+      <CalculationGraph data={trend} valueKey="score" title={`日付別・${scoreLabel}得点`} score />
+      <CalculationGraph data={trend} valueKey="elapsedSeconds" title="日付別・初回所要時間" score={false} />
+    </div>
+    <section className="design20-calculation-log"><h3>日ごとの記録</h3><p>選択中の課題を日付順に確認できます。</p><div className="design20-calculation-log-list">{records.filter(record => record.taskId === taskId).map(record => <button key={JSON.stringify([record.dateKey, record.taskId])} className={"w-full rounded-xl border p-3 text-left " + (selectedDate === record.dateKey && taskId === record.taskId ? "border-blue-500 bg-blue-50" : "border-slate-100")} onClick={() => selectDay(record.dateKey, record.taskId)}><strong>{record.dateKey} / {record.taskLabel}</strong><p>初回 {record.firstScore}/7 ・ {formatCalculationTime(record.firstElapsedSeconds)}</p><p>最新 {record.latestScore}/7 ・ {formatCalculationTime(record.latestElapsedSeconds)}</p><p className="text-sm">最高 {record.bestScore}/7 / 解き直し{record.attemptCount - 1}回 / {record.bestScore === 7 ? "7/7達成" : "チャレンジ中"}</p></button>)}</div>{!sample && hasMore && dates.split(",").length >= 30 && <button className="mt-3 w-full rounded-xl bg-slate-100 p-3 font-bold" disabled={moreBusy} onClick={() => void more()}>{moreBusy ? "読み込み中…" : "もっと前の日を見る"}</button>}</section>
+    <section ref={detailRef} className="design20-calculation-detail scroll-mt-4">
       <h3 className="font-black">{selectedDate} / {taskOptions.find(([id]) => id === taskId)?.[1] ?? "課題未指定"} / この日の解き直し</h3>
       <p className="text-sm text-slate-600">解き直しで解く問題数が違う場合、時間だけでは比べられないよ。短い時間でも得点が下がったときは、改善したとはいえないよ。</p>
-      {detailLoading ? <p role="status">読み込み中…</p> : <><CalculationGraph data={history} valueKey="score" title="各回の得点推移（7点満点）" score /><CalculationGraph data={history} valueKey="elapsedSeconds" title="各回の所要時間推移" score={false} />
+      {detailLoading ? <p role="status">読み込み中…</p> : <><div className="design20-calculation-charts"><CalculationGraph data={history} valueKey="score" title="この日の各回の得点" score /><CalculationGraph data={history} valueKey="elapsedSeconds" title="この日の各回の所要時間" score={false} /></div>
       <h4 className="font-bold">この日の全課題・全記録</h4>{dayRecords.length ? dayRecords.map(record => <div key={record.taskId}><h5 className="font-bold">{record.taskLabel}</h5><ol className="mt-3 space-y-2">{record.history.map(attempt => <li key={attempt.id} className="rounded-xl bg-slate-50 p-3"><p className="font-bold">{attempt.label}</p><p>{attempt.score}/7 ・ {formatCalculationTime(attempt.elapsedSeconds)}</p></li>)}</ol></div>) : <p>この日の記録はまだないよ。</p>}</>}
     </section>
   </section>;

@@ -2893,13 +2893,14 @@ const AchievementsView = ({ tasks, calculationRecords }: { tasks: Task[]; calcul
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-3 py-4 md:px-6 md:py-6 lg:px-8 lg:py-8 space-y-4 md:space-y-6 lg:space-y-8 pb-20 md:pb-32">
+      <div className="design20-achievements-content flex-1 overflow-y-auto px-3 py-4 md:px-6 md:py-6 lg:px-8 lg:py-8 space-y-4 md:space-y-6 lg:space-y-8 pb-20 md:pb-32">
         {calculationRecords}
-        <div className="bg-white p-3 md:p-5 lg:p-6 rounded-2xl md:rounded-3xl shadow-sm border border-slate-200 h-52 md:h-80 lg:h-[28rem] shrink-0">
+        <div className="design20-history-chart bg-white rounded-2xl border border-slate-200">
           <h3 className="text-[10px] md:text-sm lg:text-base font-bold text-slate-500 mb-1 md:mb-3 flex items-center gap-1 md:gap-1.5">
             <BarChart2 className="w-3 h-3 md:w-4 md:h-4 lg:w-5 lg:h-5" />{" "}
             学習時間 (分)
           </h3>
+          <div className="design20-history-chart-canvas">
           <ResponsiveContainer width="100%" height="100%">
             <BarChart
               data={chartData}
@@ -2961,6 +2962,7 @@ const AchievementsView = ({ tasks, calculationRecords }: { tasks: Task[]; calcul
               )}
             </BarChart>
           </ResponsiveContainer>
+          </div>
         </div>
 
         <div className="grid grid-cols-2 md:grid-cols-2 lg:grid-cols-3 gap-3 md:gap-5 lg:gap-6">
