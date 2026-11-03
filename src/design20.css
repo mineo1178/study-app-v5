@@ -209,3 +209,85 @@
   .design20-next-action { padding:12px; margin-top:13px; }
   .design20-home-stat small { max-width:58%; line-height:1.45; }
 }
+
+/* Design 2.1: compact, accurate, readable data displays. */
+.design20-app .design20-main { font-size:14px; line-height:1.55; }
+.design20-app .design20-main :where(.space-y-8 > :not([hidden]) ~ :not([hidden])) { margin-top:20px; }
+.design20-app .design20-main :where(.space-y-10 > :not([hidden]) ~ :not([hidden])) { margin-top:24px; }
+.design20-app .design20-main :where(.shadow-lg,.shadow-md) { box-shadow:0 4px 16px rgba(21,36,75,.07); }
+.design20-app .design20-main :where(h2,h3) { color:#1a2946; }
+.design20-app .design20-main :where(button,select,input) { transition:background-color .15s ease,border-color .15s ease; }
+.design20-app .design20-content-page > div:nth-child(2) { z-index:15; }
+.design20-app .design20-page-heading { padding-block:17px 13px; }
+.design20-app .design20-page-heading h2 { font-size:clamp(21px,2.4vw,26px); }
+.design20-app .design20-page-heading p { margin-top:3px; }
+.design20-app .design20-home-hero { margin-top:12px; padding:clamp(18px,2.4vw,24px); box-shadow:0 5px 16px rgba(31,49,110,.11); gap:15px; }
+.design20-app .design20-next-action { margin-top:12px; padding:12px 14px; }
+.design20-app .design20-home-hero button { margin-top:12px; }
+.design20-app .design20-home-stat { padding:14px; }
+/* Remove the stacked 224px/large-empty-chart treatment from calculations. */
+.design20-calculation { display:flex; flex-direction:column; gap:13px; }
+.design20-calculation-heading { display:flex; flex-wrap:wrap; gap:5px 16px; align-items:baseline; justify-content:space-between; }
+.design20-calculation-heading h2 { font-size:clamp(20px,2.7vw,26px); font-weight:900; letter-spacing:-.025em; }
+.design20-calculation-heading p { color:#566682; font-size:13px; line-height:1.5; }
+.design20-calculation-eyebrow { display:block; color:#5262b2; font-size:11px; font-weight:900; letter-spacing:.12em; }
+.design20-calculation-filters { display:grid; grid-template-columns:minmax(0,1.6fr) minmax(150px,1fr); gap:10px; }
+.design20-calculation-filters label { display:block; min-width:0; font-size:13px; font-weight:800; color:#3b4a65; }
+.design20-calculation-filters select { display:block; width:100%; min-height:46px; margin-top:5px; padding:8px 12px; background:#fff; border:1px solid #ced9ea; border-radius:11px; font-size:14px; color:#1e2e4c; }
+.design20-calculation-status { font-size:13px; color:#516083; background:#eef2fc; border-radius:10px; padding:8px 11px; }
+.design20-calculation-charts { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; align-items:start; }
+.design20-series { min-width:0; padding:14px 15px; background:#fff; border:1px solid #dce4f0; border-radius:15px; }
+.design20-series-header { display:flex; align-items:baseline; justify-content:space-between; flex-wrap:wrap; gap:4px 10px; }
+.design20-series-header h3 { font-size:15px; font-weight:900; line-height:1.4; }
+.design20-series-unit { font-size:11px; color:#5a6984; white-space:nowrap; }
+.design20-series-single { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; padding-top:11px; }
+.design20-series-single > div { display:flex; flex-direction:column; gap:1px; }
+.design20-series-small { font-size:12px; color:#64748b; }
+.design20-series-single strong { font-size:clamp(25px,2.8vw,33px); color:#283fc2; line-height:1.15; font-variant-numeric:tabular-nums; }
+.design20-series-date { font-size:12px; color:#66738c; }
+.design20-series-single p { flex:1 1 185px; font-size:12px; color:#53627c; line-height:1.5; max-width:280px; }
+.design20-series-empty { margin-top:10px; color:#64748b; font-size:13px; }
+.design20-series-overview { display:flex; gap:8px 15px; flex-wrap:wrap; align-items:center; padding:9px 0; border-bottom:1px solid #eef1f7; color:#5f6e86; font-size:12px; }
+.design20-series-overview strong { font-size:14px; color:#1c2943; margin-left:3px; font-variant-numeric:tabular-nums; }
+.design20-series-delta { padding:3px 8px; border-radius:7px; background:#f0f3fc; color:#344275; }
+.design20-series-bars { display:flex; flex-direction:column; gap:7px; padding-top:12px; }
+.design20-series-row { display:grid; grid-template-columns:minmax(46px,73px) minmax(0,1fr) minmax(62px,86px); gap:9px; align-items:center; min-height:28px; }
+.design20-series-label { white-space:nowrap; color:#3e5070; font-weight:700; font-size:12px; overflow:hidden; text-overflow:ellipsis; }
+.design20-series-track { height:14px; background:#ebeff8; border-radius:6px; overflow:hidden; }
+.design20-series-fill { height:100%; border-radius:6px; min-width:0; }
+.design20-series-score { background:linear-gradient(90deg,#5969e9,#3947bf); }
+.design20-series-time { background:linear-gradient(90deg,#36b1a6,#0c8175); }
+.design20-series-value { text-align:right; font-size:13px; color:#1c2d4c; white-space:nowrap; font-variant-numeric:tabular-nums; }
+.design20-series-footnote { margin-top:9px; font-size:11px; color:#687790; }
+.design20-series-toggle { margin-top:11px; width:100%; min-height:44px; border:1px solid #ccd7ee; border-radius:9px; background:#f7f9ff; font-size:13px; font-weight:800; color:#35469c; }
+.design20-calculation-log, .design20-calculation-detail { padding:14px 15px; background:#fff; border:1px solid #dce4f0; border-radius:15px; min-width:0; }
+.design20-calculation-log > h3, .design20-calculation-detail > h3 { font-size:16px; font-weight:900; }
+.design20-calculation-log > p, .design20-calculation-detail > p { margin-top:4px; font-size:12px; color:#64748b; }
+.design20-calculation-log-list { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin-top:11px; }
+.design20-calculation-log-list button { padding:10px 12px; background:#fbfcff; border:1px solid #e0e7f1; border-radius:10px; font-size:13px; }
+.design20-calculation-log-list button:hover { background:#eef3ff; border-color:#8597f5; }
+.design20-calculation-log-list button strong { display:block; color:#1f3156; font-size:13px; }
+.design20-calculation-log-list button p { color:#56637d; font-size:12px; margin-top:3px; }
+.design20-calculation-detail { scroll-margin-top:65px; display:flex; flex-direction:column; gap:10px; }
+.design20-calculation-detail h4 { font-size:14px; color:#30415e; }
+.design20-app .design20-history-chart { padding:14px 16px; }
+.design20-app .design20-history-chart h3 { margin-bottom:9px; font-size:14px; color:#31425f; }
+.design20-app .design20-history-chart-canvas { height:clamp(160px,22vw,215px); width:100%; min-width:0; }
+.design20-app .design20-achievements-content { padding-top:12px; }
+.design20-app .design20-achievements-content > .grid { gap:12px; }
+.design20-app .design20-achievements-content > .grid > div { min-height:unset; padding:13px 15px; }
+.design20-app .design20-achievements-content > .grid h3 { font-size:13px; margin-bottom:8px; }
+.design20-app .design20-achievements-content .text-slate-400 { color:#566781; }
+@media(max-width:760px) {
+ .design20-calculation-charts { grid-template-columns:1fr; }
+ .design20-calculation-log-list { grid-template-columns:1fr; }
+ .design20-app .design20-history-chart-canvas { height:175px; }
+ .design20-app .design20-page-heading { padding:12px 16px; }
+}
+@media(max-width:390px) {
+ .design20-calculation-filters { grid-template-columns:1fr; }
+ .design20-series { padding:12px; }
+ .design20-series-row { grid-template-columns:52px minmax(0,1fr) 70px; gap:6px; }
+ .design20-series-value { font-size:12px; }
+ .design20-app .design20-main :where(.text-[10px],.text-[11px]) { font-size:12px; }
+}
