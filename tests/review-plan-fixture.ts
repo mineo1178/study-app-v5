@@ -1,0 +1,11 @@
+import type { StudyPlan } from "../src/review/exchange-plan";
+// Entirely fictional exchange data. No personal topics, paths, IDs or observations.
+export function fictionalPlan(): StudyPlan {
+  const refs = ["ev-000000000000000000000001"];
+  return { schemaVersion: "1.0.0", planId: "fictional-plan", revision: 1, generatedAt: "2026-01-01T00:00:00+09:00",
+    targetExam: { examKey: "fictional-exam", displayName: "架空の目標テスト", officialName: null, date: "2027-12-31", confirmationStatus: "partially_confirmed", nameStatus: "unresolved", dateStatus: "confirmed", scopeStatus: "fictional_partial", mainCurriculumRounds: [6], reviewCurriculumRounds: [1], aliases: ["架空の別名"], unresolvedItems: ["架空の正式名称"], evidenceRefs: refs },
+    topics: Array.from({ length: 23 }, (_, i) => ({ topicId: `fictional-topic-${i}`, subject: "math", title: `架空の技能${i}`, priority: i < 2 ? 1 : 3, priorityReason: "架空の観察を確認", weaknessClassification: i < 2 ? "observed_error" : "needs_retention_check", causeStatus: "unverified", scopeRole: "main", scopeStatus: "fictional_material_match", difficultyFocus: "standard", recommendedAction: "架空の技能を説明する", evidenceRefs: refs, questionIds: [], coverageStatus: "unverified", coverageReason: "内容照合前" })), evidenceRefs: refs,
+    reviewPolicy: { timeZone: "Asia/Tokyo", intervalDays: [1, 3, 7, 14], dailyQuestionTarget: 5, historyOwner: "app", selectionOrder: ["app_due_reviews", "target_exam_relevant_observed_needs", "retention_checks", "strength_maintenance"], maxQuestionsPerTopicPerDay: 2, minimumSubjectsWhenEnoughEligibleQuestions: 2, candidateShortfallPolicy: "report_shortfall_use_only_app_approved_fallback", examDateUse: "priority_only_do_not_fabricate_next_review_dates", difficultyPolicy: "架空の基本・応用", priorityDefinition: { "1": "架空の最優先", "2": "架空の補助", "3": "架空の保持", "4": "架空の維持" } },
+    compatibility: { requestedAppVersion: "v1.88.4", observedSourceVersion: "fictional", nativeSchemaStatus: "requires_adapter", questionCatalogStatus: "fictional", subjectCodesStatus: "fictional", importReadiness: "requires_mapping", evidenceRefs: refs },
+    coverageStatus: { status: "unverified", verifiedQuestionIdCount: 0, topicsWithVerifiedQuestions: 0, totalTopics: 23, reason: "架空の未確認" } };
+}

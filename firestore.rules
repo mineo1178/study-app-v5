@@ -64,12 +64,31 @@ service cloud.firestore {
           allow update, delete: if false;
         }
         match /progress/{questionId} {
+          function day(at) { return int(math.floor((at + 32400000) / 86400000)); }
+          function due(old) {
+            return !('reviewStage' in old) && (!old.latestCorrect || old.latestMode == 'retry')
+              ? (day(old.latestAt) + 1) * 86400000 - 32400000 : old.nextAt;
+          }
+          function schedule(a, old, sameVersion, newer) {
+            let current = sameVersion ? old : null;
+            let today = day(a.answeredAt);
+            let oldStage = current == null ? 0 : current.get('reviewStage', 0);
+            let oldDay = current == null ? today : current.get('reviewDay', day(current.latestAt));
+            let advance = a.mode != 'retry' && (current == null || (today > oldDay && a.answeredAt >= due(current)));
+            let stage = !a.correct ? 0 : (advance ? (oldStage < 3 ? oldStage + 1 : 3) : oldStage);
+            return newer ? {
+              'reviewStage': stage,
+              'reviewDay': a.correct && current != null && !advance ? oldDay : today,
+              'nextAt': a.correct && current != null && !advance ? due(current)
+                : (today + (stage == 0 ? 1 : stage == 1 ? 3 : stage == 2 ? 7 : 14)) * 86400000 - 32400000
+            } : {'reviewStage': old.get('reviewStage', 0), 'reviewDay': old.get('reviewDay', day(old.latestAt)), 'nextAt': old.nextAt};
+          }
           function pairedProgress(p, old) {
             let a = getAfter(attemptPath(p.recordedAttemptId)).data;
             let newer = old == null || a.answeredAt >= old.latestAt;
             let sameVersion = old != null && old.questionVersion == a.questionVersion;
-            return !exists(attemptPath(p.recordedAttemptId)) && a.questionId == questionId
-              && p == {
+            let spaced = schedule(a, old, sameVersion, newer);
+            let legacy = {
                 'questionId': questionId,
                 'questionVersion': newer ? a.questionVersion : old.questionVersion,
                 'count': old == null ? 1 : old.count + 1,
@@ -82,6 +101,11 @@ service cloud.firestore {
                 'recordedAttemptId': a.id,
                 'latestMode': newer ? a.mode : old.latestMode
               };
+            return !exists(attemptPath(p.recordedAttemptId)) && a.questionId == questionId && (
+              (p == legacy && (old == null || !('reviewStage' in old))) ||
+              (p.diff(legacy).affectedKeys().hasOnly(['nextAt', 'reviewStage', 'reviewDay']) &&
+                p.reviewStage == spaced.reviewStage && p.reviewDay == spaced.reviewDay && p.nextAt == spaced.nextAt)
+            );
           }
           allow read: if ownReview();
           allow create: if ownReview() && pairedProgress(request.resource.data, null);
