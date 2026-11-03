@@ -4,7 +4,7 @@ export type Subject = keyof typeof SUBJECTS;
 export type Question = { published?: boolean; id: string; version: string; subject: Subject; unit: string; prompt: string; choices: string[]; correctIndex: number; explanation: string; testKind: string; source: string };
 export type Weakness = { id: string; subject: Subject; unit: string; mistake: string; point: string; testKind: string; questionIds: string[] };
 export type Answer = { id: string; uid: string; sessionId: string; questionId: string; questionVersion: string; selectedIndex: number; correct: boolean; answeredAt: number; elapsedMs: number; mode: "daily" | "retry"; prompt: string; selected: string; expected: string; explanation: string };
-export type Progress = { questionId: string; questionVersion: string; count: number; firstCorrect: boolean; latestCorrect: boolean; previousCorrect: boolean; latestAt: number; nextAt: number; latestAttemptId: string; recordedAttemptId: string; latestMode: "daily" | "retry" };
+export type Progress = { questionId: string; questionVersion: string; count: number; firstCorrect: boolean; latestCorrect: boolean; previousCorrect: boolean; latestAt: number; nextAt: number; latestAttemptId: string; recordedAttemptId: string; latestMode: "daily" | "retry"; reviewStage?: number; reviewDay?: number };
 export type Draft = { id: string; uid: string; mode: "daily" | "retry"; startedAt: number; questionStartedAt: number; questions: Question[]; answers: Answer[]; finishedAt: number | null };
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
 const text = (value: unknown, max: number) => typeof value === "string" && value.trim().length > 0 && value.length <= max;
@@ -37,6 +37,11 @@ export function parseQuestions(input: string): Question[] {
   return questions;
 }
 export const getJstDay = (at: number) => new Date(at + 32400000).toISOString().slice(0, 10);
+export const jstDayNumber = (at: number) => Math.floor((at + 32400000) / 86400000);
+export const jstMidnight = (day: number) => day * 86400000 - 32400000;
+// Legacy errors were due immediately. Do not promote a same-day retry into a spaced review.
+export const reviewDueAt = (p: Progress) => p.reviewStage === undefined && (!p.latestCorrect || p.latestMode === "retry")
+  ? jstMidnight(jstDayNumber(p.latestAt) + 1) : p.nextAt;
 export const visibleQuestions = (questions: Question[], sample = false) => questions.filter(q => sample ? q.published !== false : q.published === true);
 export function selectQuestions(questions: Question[], progress: Progress[], now = Date.now(), random = Math.random, weaknessIds: string[] = []): Question[] {
   const byId = new Map(progress.map(p => [p.questionId, p]));
@@ -45,9 +50,10 @@ export function selectQuestions(questions: Question[], progress: Progress[], now
     const current = p?.questionVersion === q.version ? p : undefined;
     // Select the review pool first, then shuffle within each priority.
     const duePriority = weaknessIds.includes(q.id) ? 1 : 2;
-    const priority = !current ? duePriority : current.latestCorrect ? (current.nextAt <= now ? duePriority : 3) : 0;
+    const priority = !current ? duePriority : !current.latestCorrect ? 0 : duePriority;
+    if (current && reviewDueAt(current) > now) return null;
     return { q, priority, roll: random() };
-  }).sort((a, b) => a.priority - b.priority || a.roll - b.roll).slice(0, 5).map(item => item.q);
+  }).filter(item => item !== null).sort((a, b) => a.priority - b.priority || a.roll - b.roll).slice(0, 5).map(item => item.q);
 }
 export function createReviewDraft(uid: string, questions: Question[], mode: Draft["mode"], at = Date.now()): Draft {
   return { id: crypto.randomUUID(), uid, mode, startedAt: at, questionStartedAt: at, questions, answers: [], finishedAt: null };
@@ -62,9 +68,15 @@ export function answerQuestion(draft: Draft, selectedIndex: number, now: number)
 export function nextProgress(previous: Progress | undefined, answer: Answer): Progress {
   if (previous && previous.latestAt > answer.answeredAt) return { ...previous, count: previous.count + 1, recordedAttemptId: answer.id };
   const current = previous?.questionVersion === answer.questionVersion ? previous : undefined;
+  const day = jstDayNumber(answer.answeredAt);
+  const oldStage = current?.reviewStage ?? 0;
+  const advance = answer.mode !== "retry" && (!current || (day > (current.reviewDay ?? jstDayNumber(current.latestAt)) && answer.answeredAt >= reviewDueAt(current)));
+  const stage = !answer.correct ? 0 : advance ? Math.min(3, oldStage + 1) : oldStage;
+  const nextAt = answer.correct && current && !advance ? reviewDueAt(current) : jstMidnight(day + [1, 3, 7, 14][stage]);
   return { questionId: answer.questionId, questionVersion: answer.questionVersion, count: (previous?.count ?? 0) + 1, firstCorrect: previous?.firstCorrect ?? answer.correct,
     previousCorrect: current?.latestCorrect ?? answer.correct, latestCorrect: answer.correct, latestAt: answer.answeredAt,
-    nextAt: answer.answeredAt + (answer.correct ? (answer.mode === "retry" ? 86400000 : 3 * 86400000) : 0), latestAttemptId: answer.id, recordedAttemptId: answer.id, latestMode: answer.mode };
+    nextAt, reviewStage: stage, reviewDay: answer.correct && current && !advance ? (current.reviewDay ?? jstDayNumber(current.latestAt)) : day,
+    latestAttemptId: answer.id, recordedAttemptId: answer.id, latestMode: answer.mode };
 }
 export const progressLabel = (p: Progress | undefined) => !p ? "未回答" : !p.latestCorrect ? "もう一度確認" : p.latestMode === "retry" ? "直後の再挑戦で正解・後日も確認しよう" : !p.previousCorrect ? "前回の誤答から正解！" : "正解できたよ";
 export function restoreDraft(raw: string | null, uid: string): Draft | null {

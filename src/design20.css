@@ -291,3 +291,12 @@
  .design20-series-value { font-size:12px; }
  .design20-app .design20-main :where(.text-[10px],.text-[11px]) { font-size:12px; }
 }
+
+/* Small viewport date filters preserved in v1.88.4. */
+@media(max-width:640px){
+  .design20-history-range { flex-direction:column; }
+  .design20-history-range > div { min-width:0; width:100%; }
+  .design20-history-dates { min-width:0; width:100%; }
+  .design20-history-dates input[type="date"] { flex:1; width:0; min-width:0; font-size:12px; }
+  .design20-history-range > div:last-child > button { white-space:nowrap; font-size:12px; }
+}

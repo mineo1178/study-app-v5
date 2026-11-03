@@ -38,8 +38,8 @@ describe("short review sessions", () => {
   it("prioritizes errors, lowers recent correct answers, shuffles ties and never duplicates", () => {
     const answers = complete(true).answers;
     const recent = nextProgress(undefined, answers[0]);
-    const wrong = nextProgress(undefined, { ...answers[4], correct: false });
-    expect(selectQuestions(sampleQuestions, [recent, wrong], 400000, () => 0).map(q => q.id)).toEqual(["sample-4", "sample-1", "sample-2", "sample-3", "sample-0"]);
+    const wrong = nextProgress(undefined, { ...answers[4], correct: false, answeredAt: 0 });
+    expect(selectQuestions(sampleQuestions, [recent, wrong], 86400000, () => 0).map(q => q.id)).toEqual(["sample-4", "sample-1", "sample-2", "sample-3"]);
     expect(selectQuestions(sampleQuestions, [recent], recent.nextAt, () => 0)[0].id).toBe("sample-0");
     expect(selectQuestions([], [], 0)).toEqual([]);
     expect(selectQuestions(sampleQuestions.slice(0, 2), [], 0)).toHaveLength(2);
@@ -49,9 +49,9 @@ describe("short review sessions", () => {
     const a = complete(false).answers[0], old = nextProgress(undefined, a);
     const retry = nextProgress(old, { ...a, id: "retry_0", mode: "retry", answeredAt: a.answeredAt + 1000, correct: true });
     expect(retry.count).toBe(2); expect(retry.firstCorrect).toBe(false); expect(retry.previousCorrect).toBe(false);
-    expect(retry.nextAt - retry.latestAt).toBe(86400000); expect(progressLabel(retry)).toContain("直後");
+    expect(getJstDay(retry.nextAt)).toBe("1970-01-02"); expect(retry.reviewStage).toBe(0); expect(progressLabel(retry)).toContain("直後");
     const later = nextProgress(retry, { ...a, id: "later_0", answeredAt: retry.nextAt, correct: true });
-    expect(later.nextAt - later.latestAt).toBe(259200000);
+    expect(later.nextAt - later.latestAt).toBe(259200000); expect(later.reviewStage).toBe(1);
     expect(nextProgress(later, a)).toMatchObject({ latestAt: later.latestAt, latestCorrect: true, count: 4, recordedAttemptId: a.id });
     expect(progressLabel(nextProgress(old, { ...a, correct: true }))).toContain("前回の誤答");
   });

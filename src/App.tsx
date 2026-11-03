@@ -173,7 +173,7 @@ if (hasFirebaseConfig) {
 // ==========================================
 
 const FAMILY_ID = "oomine-study-2026";
-const APP_VERSION = "v1.88.3";
+const APP_VERSION = "v1.88.4";
 
 // Firestore Path 固定（変更禁止）
 // 実DB構造:
@@ -2839,9 +2839,9 @@ const AchievementsView = ({ tasks, calculationRecords }: { tasks: Task[]; calcul
         <div><span className="design20-page-eyebrow">LEARNING HISTORY</span><h2>学習の実績</h2><p>教科ごとの学習時間と、毎日計算の記録を見返そう。</p></div>
       </section>
       <div className="bg-white sticky top-0 z-20 px-4 py-3 md:px-6 md:py-4 lg:px-8 lg:py-4 border-b border-slate-200 shadow-sm space-y-2.5 md:space-y-3">
-        <div className="flex gap-2 md:gap-3">
+        <div className="design20-history-range flex gap-2 md:gap-3">
           <div className="flex-1 flex justify-between items-center bg-slate-50 p-1.5 md:p-2 lg:p-2.5 rounded-lg md:rounded-xl border border-slate-200">
-            <div className="flex gap-1.5 md:gap-2 items-center">
+            <div className="design20-history-dates flex gap-1.5 md:gap-2 items-center">
               <CalendarIcon className="text-slate-400 ml-1 w-[14px] h-[14px] md:w-4 md:h-4 lg:w-5 lg:h-5" />
               <input
                 type="date"
