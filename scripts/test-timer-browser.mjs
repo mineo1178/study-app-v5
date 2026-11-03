@@ -182,9 +182,9 @@ try {
   await page.getByRole("button", { name: "実績", exact: true }).tap();
   await page.getByLabel("グラフで見る計算課題", { exact: true }).selectOption("calc-①");
   await page.getByText("最高 7/7 / 解き直し3回 / 7/7達成", { exact: true }).waitFor();
-  await page.getByRole("region", { name: "日付ごとの得点", exact: true }).getByRole("listitem").waitFor();
-  await waitFor(async () => await page.locator(".recharts-line-dots circle").count() >= 9, "Daily bars and three remaining charts missing");
-  assert.deepEqual(await page.locator(".recharts-line-dots").evaluateAll(groups => groups.map(group => group.querySelectorAll("circle").length)), [1, 4, 4]);
+  await page.locator(".design20-calculation-charts > .design20-series").first().getByText("7/7 点").waitFor();
+  assert.equal(await page.locator(".design20-calculation-charts > .design20-series").count(), 2);
+  assert.equal(await page.locator(".design20-calculation-detail .design20-series").count(), 2);
   for (const width of [320, 390]) {
     await page.setViewportSize({ width, height: 844 });
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), `Horizontal overflow at ${width}`);
