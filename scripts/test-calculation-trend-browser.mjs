@@ -49,6 +49,7 @@ try {
   await page.getByLabel("グラフで見る計算課題", { exact: true }).selectOption("calc-①");
   await page.getByText(/比較できる記録：2日分/).waitFor();
   assert.deepEqual(await dates(), ["2026-10-19", "2026-10-31"]);
+  assert.deepEqual(await rows().locator(".design20-series-label").allTextContents(), ["10/19", "10/31"]);
   assert.deepEqual(await scores(), ["7/7", "0/7"]);
   assert.equal(await graph().locator(".recharts-line").count(), 0);
   const widths = await rows().locator(".design20-series-fill").evaluateAll(bars => bars.map(bar => bar.getBoundingClientRect().width));
@@ -85,8 +86,16 @@ try {
   assert.match(await graph().locator(".design20-series-single strong").innerText(), /6\/7/);
   await page.getByLabel("グラフで見る計算課題", { exact: true }).selectOption("calc-③");
   await page.getByText(/比較できる記録：3日分/).waitFor();
-  results.push("single day guidance and task ID separation");
+  await saveDay("2026-02-03", [0], "calc-④", "1日0点④");
+  await page.getByLabel("グラフで見る計算課題", { exact: true }).selectOption("calc-④");
+  await page.getByText(/1日分の記録です。推移を判断するには/).waitFor();
+  assert.match(await graph().locator(".design20-series-single strong").innerText(), /0\/7/);
+  assert.equal(await rows().count(), 0);
+  await page.getByLabel("グラフで見る計算課題", { exact: true }).selectOption("calc-③");
+  results.push("single day 6/7 and 0/7 cards, guidance and task ID separation");
   for (let i = 0; i < 36; i++) await saveDay(new Date(Date.UTC(2026, 2, i + 1)).toISOString().slice(0, 10), [i % 8]);
+  await page.getByRole("button", { name: /^2026-04-05 \/ / }).waitFor();
+  await page.getByText("日付別の記録を読み込み中…", { exact: true }).waitFor({ state: "hidden" });
   await page.getByRole("button", { name: "もっと前の日を見る", exact: true }).click();
   await page.getByText(/比較できる記録：39日分/).waitFor();
   await graph().getByRole("button", { name: /全39件を見る/ }).click();
@@ -102,7 +111,7 @@ try {
   await page.getByText("まだ記録がないよ。「学習 → 算数 → 計算」のカードから結果を保存してね。", { exact: true }).waitFor();
   assert.equal(await page.getByText("第8回 / 計算③（推移テスト）", { exact: true }).count(), 0);
   await page.getByLabel("UID", { exact: true }).selectOption("browser-a");
-  await page.getByText(/2日分だけの参考表示/).waitFor();
+  await page.getByText(/比較できる記録：2日分/).waitFor();
   results.push("UID switch clears old records, selection and older-page state");
   assert.deepEqual(errors, []);
 } catch (error) {

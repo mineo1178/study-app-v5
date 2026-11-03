@@ -6,6 +6,7 @@ import { connectFirestoreEmulator, getDocsFromServer, getFirestore } from "fireb
 import { CalculationInput, DailyCalculation } from "../src/components/DailyCalculation";
 import { getCalculationAttempts, getJstDateKey } from "../src/daily-calculation";
 import "../src/index.css";
+import "../src/design20.css";
 
 const familyId = new URLSearchParams(location.search).get("family") ?? "browser-calculation";
 const uidA = "browser-a", uidB = "browser-b";

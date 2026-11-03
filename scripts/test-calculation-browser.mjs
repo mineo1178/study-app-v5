@@ -157,8 +157,8 @@ try {
   await page.getByLabel("グラフで見る計算課題", { exact: true }).selectOption("calc-①");
   await page.getByText(`初回 3/7 ・ ${Math.floor(first.elapsedSeconds / 60)}:${String(first.elapsedSeconds % 60).padStart(2, "0")}`, { exact: true }).waitFor();
   await page.getByText("最高 7/7 / 解き直し4回 / 7/7達成", { exact: true }).waitFor();
-  await page.locator(".design20-calculation-charts > .design20-series").first().getByText("3/7 点").waitFor();
-  assert.equal(await page.locator(".design20-calculation-charts > .design20-series").count(), 2);
+  await page.locator(".design20-calculation > .design20-calculation-charts > .design20-series").first().getByText("3/7 点").waitFor();
+  assert.equal(await page.locator(".design20-calculation > .design20-calculation-charts > .design20-series").count(), 2);
   assert.equal(await page.locator(".design20-calculation-detail .design20-series").count(), 2);
   const history = page.getByRole("heading", { name: "第1回 / 計算①", exact: true }).locator("..").locator("ol li");
   assert.deepEqual(await history.allTextContents(), expected.map((a, index) => `${index === 0 ? "初回" : `解き直し${index}回目`}${a.score}/7 ・ ${Math.floor(a.elapsedSeconds / 60)}:${String(a.elapsedSeconds % 60).padStart(2, "0")}`));

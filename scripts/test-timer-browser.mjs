@@ -182,8 +182,8 @@ try {
   await page.getByRole("button", { name: "実績", exact: true }).tap();
   await page.getByLabel("グラフで見る計算課題", { exact: true }).selectOption("calc-①");
   await page.getByText("最高 7/7 / 解き直し3回 / 7/7達成", { exact: true }).waitFor();
-  await page.locator(".design20-calculation-charts > .design20-series").first().getByText("3/7 点").waitFor();
-  assert.equal(await page.locator(".design20-calculation-charts > .design20-series").count(), 2);
+  await page.locator(".design20-calculation > .design20-calculation-charts > .design20-series").first().getByText("3/7 点").waitFor();
+  assert.equal(await page.locator(".design20-calculation > .design20-calculation-charts > .design20-series").count(), 2);
   assert.equal(await page.locator(".design20-calculation-detail .design20-series").count(), 2);
   for (const width of [320, 390]) {
     await page.setViewportSize({ width, height: 844 });

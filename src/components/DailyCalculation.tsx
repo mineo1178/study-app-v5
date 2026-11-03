@@ -153,7 +153,7 @@ const CalculationGraph = ({ data, valueKey, title, score }: {
   const first = data[0];
   const limit = score ? 7 : Math.max(1, ...data.map(item => item.elapsedSeconds));
   const valueText = (value: number) => score ? `${value}/7 点` : formatCalculationTime(value);
-  const formatLabel = (label: string) => /^\\d{4}-\\d{2}-\\d{2}$/.test(label) ? label.slice(5).replace("-", "/") : label;
+  const formatLabel = (label: string) => /^\d{4}-\d{2}-\d{2}$/.test(label) ? label.slice(5).replace("-", "/") : label;
   const change = first && last ? last[valueKey] - first[valueKey] : 0;
   return (
     <section className="design20-series" aria-label={title}>
