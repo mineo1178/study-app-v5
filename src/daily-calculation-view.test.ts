@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { summarizeCalculation, type CalculationAttempt } from "./daily-calculation";
-import { calculationAttemptTrend, calculationDateTrend, calculationStartLabel } from "./daily-calculation-view";
+import { calculationChartSeries, calculationGoalMet, calculationAttemptTrend, calculationDateTrend, calculationStartLabel } from "./daily-calculation-view";
 
 const attempt = (attemptNo: number, score = 3, elapsedSeconds = 260, dateKey = "2026-10-10"): CalculationAttempt => ({
   id: `${dateKey}-${attemptNo}`, dateKey, attemptNo, score, elapsedSeconds, maxScore: 7,
@@ -9,6 +9,24 @@ const attempt = (attemptNo: number, score = 3, elapsedSeconds = 260, dateKey = "
 });
 
 describe("daily calculation UX", () => {
+  it("averages exactly the records shown for each chart range", () => {
+    const points = [
+      ...Array.from({ length: 10 }, () => ({ score: 1, elapsedSeconds: 180 })),
+      ...Array.from({ length: 20 }, () => ({ score: 4, elapsedSeconds: 120 })),
+      ...Array.from({ length: 10 }, () => ({ score: 7, elapsedSeconds: 60 })),
+    ];
+    expect(calculationChartSeries(points, 10, "score")).toEqual({ entries: points.slice(30), average: 7 });
+    expect(calculationChartSeries(points, 30, "score").average).toBe(5);
+    expect(calculationChartSeries(points, "all", "score").average).toBe(4);
+    expect(([10, 30, "all"] as const).map(range => calculationChartSeries(points, range, "elapsedSeconds").average)).toEqual([60, 100, 120]);
+    expect(calculationChartSeries([], "all", "score").average).toBeNull();
+  });
+
+  it("counts equality and applies the right direction for each goal", () => {
+    expect([4, 5, 6].map(value => calculationGoalMet("score", value, 5))).toEqual([false, true, true]);
+    expect([59, 60, 61].map(value => calculationGoalMet("elapsedSeconds", value, 60))).toEqual([true, true, false]);
+  });
+
   it("orders saved JST days across month/year boundaries, without inventing missing days", () => {
     const saved = ["2026-02-01", "2025-12-31", "2026-01-01"].map(date => ({ ...attempt(1, 7, 10, date), taskId: "a" }));
     const before = structuredClone(saved);

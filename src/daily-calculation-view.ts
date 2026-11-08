@@ -50,3 +50,16 @@ export const calculationDateTrend = (attempts: CalculationAttempt[], taskId: str
       score: mode === "latest" ? record.latestScore : mode === "best" ? record.bestScore : record.firstScore,
       elapsedSeconds: record.firstElapsedSeconds,
     }));
+
+export type CalculationChartRange = 10 | 30 | "all";
+
+export const calculationChartSeries = <T extends { score: number; elapsedSeconds: number }>(
+  data: T[], range: CalculationChartRange, valueKey: "score" | "elapsedSeconds",
+) => {
+  const entries = range === "all" ? data : data.slice(-range);
+  const average = entries.length ? entries.reduce((sum, entry) => sum + entry[valueKey], 0) / entries.length : null;
+  return { entries, average };
+};
+
+export const calculationGoalMet = (valueKey: "score" | "elapsedSeconds", value: number, goal: number) =>
+  valueKey === "score" ? value >= goal : value <= goal;

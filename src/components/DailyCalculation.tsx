@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { CartesianGrid, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { getDocs, limit, onSnapshot, orderBy, query, where, type Firestore } from "firebase/firestore";
 import { calculationStorageKey, commitCalculationAttempt, formatCalculationTime, getCalculationAttempts, getCalculationDays, getCalculationElapsedSeconds, getJstDateKey, MAX_CALCULATION_SECONDS, type CalculationAttempt, type CalculationDay, type CalculationDraft } from "../daily-calculation";
-import { calculationDateTrend, calculationTaskRecords, calculationStartLabel, type CalculationScoreMode } from "../daily-calculation-view";
+import { calculationChartSeries, calculationGoalMet, type CalculationChartRange, calculationDateTrend, calculationTaskRecords, calculationStartLabel, type CalculationScoreMode } from "../daily-calculation-view";
 import { calculationDiagnosticSource, diagnosticReasonText, normalizeDiagnosticError, recordDiagnostic, scopedDiagnosticRecorder, type DiagnosticCode } from "../device-test";
 import { DiagnosticButton } from "./DiagnosticButton";
 import { useTimerDiagnostics } from "../use-timer-diagnostics";
@@ -141,66 +142,59 @@ export const CalculationInput = ({ db, familyId, uid, sample, sampleAttempts, on
   </div>;
 };
 
-// A single saved day cannot show a trend. Use a compact fact card for one day,
-// then labeled, proportional comparison bars for multiple real saved records.
-const CalculationGraph = ({ data, valueKey, title, score }: {
+type CalculationGoals = { score: number | null; elapsedSeconds: number | null };
+
+const parseGoal = (value: string, max: number, min = 0) => {
+  const number = Number(value);
+  return value.trim() && Number.isInteger(number) && number >= min && number <= max ? number : null;
+};
+
+const readGoals = (key: string): CalculationGoals => {
+  try {
+    const saved = JSON.parse(localStorage.getItem(key) ?? "null");
+    return {
+      score: parseGoal(String(saved?.score ?? ""), 7),
+      elapsedSeconds: parseGoal(String(saved?.elapsedSeconds ?? ""), MAX_CALCULATION_SECONDS, 1),
+    };
+  } catch { return { score: null, elapsedSeconds: null }; }
+};
+
+const CalculationGraph = ({ data, valueKey, title, goal, range = "all" }: {
   data: { label: string; score: number; elapsedSeconds: number }[];
-  valueKey: "score" | "elapsedSeconds"; title: string; score: boolean;
+  valueKey: keyof CalculationGoals; title: string; goal: number | null; range?: CalculationChartRange;
 }) => {
-  const [showAll, setShowAll] = useState(false);
-  const entries = showAll ? data : data.slice(-7);
-  const last = data.at(-1);
-  const first = data[0];
-  const limit = score ? 7 : Math.max(1, ...data.map(item => item.elapsedSeconds));
-  const valueText = (value: number) => score ? `${value}/7 点` : formatCalculationTime(value);
+  const score = valueKey === "score";
+  const { entries, average } = calculationChartSeries(data, range, valueKey);
+  const last = entries.at(-1);
+  const valueText = (value: number) => score ? `${value.toFixed(1).replace(/\.0$/, "")}点` : formatCalculationTime(Math.round(value));
   const formatLabel = (label: string) => /^\d{4}-\d{2}-\d{2}$/.test(label) ? label.slice(5).replace("-", "/") : label;
-  const change = first && last ? last[valueKey] - first[valueKey] : 0;
+  const status = (value: number) => goal === null ? "" : calculationGoalMet(valueKey, value, goal) ? "（達成）" : "（未達成）";
   return (
     <section className="design20-series" aria-label={title}>
       <div className="design20-series-header">
         <h3>{title}</h3>
-        <span className="design20-series-unit">{score ? "7点満点" : "単位：分・秒"}</span>
+        <span className="design20-series-unit">{score ? "7点満点" : "分:秒"}</span>
       </div>
-      {data.length === 0 ? (
-        <p className="design20-series-empty">この課題の記録はまだありません。</p>
-      ) : data.length === 1 && last ? (
-        <div className="design20-series-single" role="status">
-          <div>
-            <span className="design20-series-small">記録された結果</span>
-            <strong>{valueText(last[valueKey])}</strong>
-            <span className="design20-series-date">{last.label}</span>
-          </div>
-          <p>記録はまだ1回分。<b>別の日の記録が増えると比較できます。</b> 現時点では上がった・下がったとは判定しません。</p>
-        </div>
-      ) : (
+      {last && average !== null ? (
         <>
-          <div className="design20-series-overview">
-            <span>最初 <strong>{valueText(first[valueKey])}</strong></span>
-            <span>最新 <strong>{valueText(last![valueKey])}</strong></span>
-            <span className="design20-series-delta">差 {change > 0 ? "+" : ""}{score ? `${change}点` : `${change}秒`}</span>
+          <div className="calculation-chart-legend">
+            <span><i className="calculation-chart-actual" />実績（最新 {valueText(last[valueKey])}{status(last[valueKey])}）</span>
+            <span><i className="calculation-chart-average" />平均 {valueText(average)}</span>
+            {goal !== null && <span><i className="calculation-chart-goal" />目標 {valueText(goal)}</span>}
           </div>
-          <div className="design20-series-bars" role="list">
-            {entries.map((entry, index) => {
-              const v = entry[valueKey];
-              return (
-                <div className="design20-series-row" role="listitem" key={`${entry.label}-${index}`}>
-                  <span className="design20-series-label" title={entry.label}>{formatLabel(entry.label)}</span>
-                  <div className="design20-series-track" role="img" aria-label={`${entry.label}：${valueText(v)}`}>
-                    <div className={`design20-series-fill ${score ? "design20-series-score" : "design20-series-time"}`} style={{ width: `${Math.max(0, Math.min(100, v / limit * 100))}%` }} />
-                  </div>
-                  <strong className="design20-series-value">{valueText(v)}</strong>
-                </div>
-              );
-            })}
-          </div>
-          {data.length > 7 && (
-            <button type="button" className="design20-series-toggle" aria-expanded={showAll} onClick={() => setShowAll(current => !current)}>
-              {showAll ? "最新7件に戻す" : `全${data.length}件を見る（表示中：最新7件）`}
-            </button>
-          )}
-          <p className="design20-series-footnote">{score ? "棒の長さは7点を基準に比較しています。" : "棒の長さは表示中の記録の最大所要時間を基準にしています。"} 日付のない日は追加していません。</p>
+          <ResponsiveContainer width="100%" height={176}>
+            <LineChart data={entries} margin={{ top: 10, right: 14, bottom: 0, left: 0 }}>
+              <CartesianGrid vertical={false} stroke="#e2e8f0" />
+              <XAxis dataKey="label" tickFormatter={formatLabel} tick={{ fontSize: 11 }} minTickGap={20} tickMargin={5} />
+              <YAxis width={score ? 24 : 44} tick={{ fontSize: 11 }} allowDecimals={false} tickFormatter={score ? undefined : valueText} domain={score ? [0, 7] : [0, "auto"]} />
+              <Tooltip formatter={value => [`${valueText(Number(value))}${status(Number(value))}`, "実績"]} />
+              <ReferenceLine className="calculation-chart-average-line" y={average} stroke="#475569" strokeWidth={4} strokeDasharray="6 4" zIndex={100} />
+              {goal !== null && <ReferenceLine className="calculation-chart-goal-line" y={goal} ifOverflow="extendDomain" stroke="#a63a10" strokeWidth={6} strokeDasharray="2 3" zIndex={90} />}
+              <Line dataKey={valueKey} name="実績" type="linear" stroke="#3947bf" strokeWidth={2} dot={entries.length <= 10 ? { r: 3 } : false} isAnimationActive={false} />
+            </LineChart>
+          </ResponsiveContainer>
         </>
-      )}
+      ) : <p className="design20-series-empty">この課題の記録はまだありません。</p>}
     </section>
   );
 };
@@ -209,6 +203,10 @@ const CalculationGraph = ({ data, valueKey, title, score }: {
 export const DailyCalculation = (props: CalculationProps) => <CalculationRecords key={JSON.stringify([props.familyId, props.uid, props.sample])} {...props} />;
 
 const CalculationRecords = ({ db, familyId, uid, sample, sampleAttempts }: CalculationProps) => {
+  const goalsKey = `calculation-goals-${JSON.stringify([familyId, uid, sample])}`;
+  const [goals, setGoals] = useState(() => readGoals(goalsKey));
+  const [range, setRange] = useState<CalculationChartRange>(10);
+  const [goalMessage, setGoalMessage] = useState("");
   const [scoreMode, setScoreMode] = useState<CalculationScoreMode>("first");
   const [days, setDays] = useState<CalculationDay[]>([]);
   const [olderDays, setOlderDays] = useState<CalculationDay[]>([]);
@@ -239,6 +237,7 @@ const CalculationRecords = ({ db, familyId, uid, sample, sampleAttempts }: Calcu
   const taskOptions = [...new Map(records.map(item => [item.taskId, item.taskLabel])).entries()];
   const taskId = selectedTask !== null && taskOptions.some(([id]) => id === selectedTask) ? selectedTask : taskOptions[0]?.[0] ?? "";
   const trend = calculationDateTrend(sample ? sampleAttempts : Object.values(byDate).flat(), taskId, scoreMode);
+  const needsAllPages = range === "all" && days.length === 30 && hasMore;
   const trendLoading = !sample && (loading || dates.split(",").filter(Boolean).some(date => !(date in byDate)));
   const scoreLabel = scoreMode === "latest" ? "最新" : scoreMode === "best" ? "最高" : "初回";
   const selected = records.find(item => item.dateKey === selectedDate && item.taskId === taskId);
@@ -256,13 +255,21 @@ const CalculationRecords = ({ db, familyId, uid, sample, sampleAttempts }: Calcu
     if (dateKey !== selectedDate) setSelectedDate(dateKey);
     else if (!detailLoading) { requestedDetailDate.current = null; requestAnimationFrame(() => detailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })); }
   };
-  const more = async () => {
+  const more = async (all = false) => {
     if (!db || moreBusy || !dates) return;
     setMoreBusy(true);
+    setError("");
     try {
-      const oldest = dates.split(",")[0];
-      const snapshot = await getDocs(query(getCalculationDays(db, familyId, uid), where("dateKey", "<", oldest), orderBy("dateKey", "desc"), limit(30)));
-      setOlderDays(current => [...current, ...snapshot.docs.map(item => item.data() as CalculationDay)]); setHasMore(snapshot.size === 30);
+      let oldest = dates.split(",")[0];
+      let fullPage: boolean;
+      do {
+        const snapshot = await getDocs(query(getCalculationDays(db, familyId, uid), where("dateKey", "<", oldest), orderBy("dateKey", "desc"), limit(30)));
+        const page = snapshot.docs.map(item => item.data() as CalculationDay);
+        setOlderDays(current => [...current, ...page]);
+        fullPage = snapshot.size === 30;
+        setHasMore(fullPage);
+        if (fullPage) oldest = page[page.length - 1].dateKey;
+      } while (all && fullPage);
     } catch { setError("前の記録を読み込めなかったよ。もう一度ためしてね。"); }
     finally { setMoreBusy(false); }
   };
@@ -277,16 +284,43 @@ const CalculationRecords = ({ db, familyId, uid, sample, sampleAttempts }: Calcu
       <label>比較する課題<select aria-label="グラフで見る計算課題" value={taskId} onChange={event => setSelectedTask(event.target.value)}>{taskOptions.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label>
       <label>表示する得点<select aria-label="日付ごとに表示する得点" value={scoreMode} onChange={event => setScoreMode(event.target.value as CalculationScoreMode)}><option value="first">初回</option><option value="latest">最新</option><option value="best">最高</option></select></label>
     </div>
-    <p className="design20-calculation-status" role="status">{trendLoading ? "日付別の記録を読み込み中…" : trend.length === 1 ? "1日分の記録です。推移を判断するには別の日の記録が必要です。" : `比較できる記録：${trend.length}日分（JST）`}</p>
-    <div className="design20-calculation-charts">
-      <CalculationGraph data={trend} valueKey="score" title={`日付別・${scoreLabel}得点`} score />
-      <CalculationGraph data={trend} valueKey="elapsedSeconds" title="日付別・初回所要時間" score={false} />
+    <div className="design20-calculation-filters mt-2">
+      <label>表示する記録<select aria-label="グラフの表示件数" value={range} disabled={loading || moreBusy} onChange={event => {
+        const next = event.target.value;
+        setRange(next === "all" ? next : next === "30" ? 30 : 10);
+        if (next === "all" && hasMore && days.length === 30) void more(true);
+      }}><option value="10">直近10回</option><option value="30">直近30回</option><option value="all">すべて</option></select></label>
     </div>
+    <details className="my-3 text-sm">
+      <summary className="cursor-pointer py-2 font-bold">{goals.score === null || goals.elapsedSeconds === null ? "得点・所要時間の目標を設定しよう" : "目標を変更する"}</summary>
+      <form className="flex flex-wrap items-end gap-2 py-2" onSubmit={event => {
+        event.preventDefault();
+        const fields = new FormData(event.currentTarget);
+        const next = { score: parseGoal(String(fields.get("score")), 7), elapsedSeconds: parseGoal(String(fields.get("seconds")), MAX_CALCULATION_SECONDS, 1) };
+        try {
+          localStorage.setItem(goalsKey, JSON.stringify(next));
+          setGoals(next);
+          setGoalMessage("目標を保存したよ。");
+        } catch { setGoalMessage("目標を保存できなかったよ。ブラウザの設定を確認してね。"); }
+      }} onChange={() => setGoalMessage("")}>
+        <label>得点目標（点）<input className="block w-28 rounded-lg border border-slate-300 bg-white p-2" name="score" type="number" min={0} max={7} defaultValue={goals.score ?? ""} /></label>
+        <label>所要時間目標（秒）<input className="block w-28 rounded-lg border border-slate-300 bg-white p-2" name="seconds" type="number" min={1} max={MAX_CALCULATION_SECONDS} defaultValue={goals.elapsedSeconds ?? ""} /></label>
+        <button className="rounded-lg bg-blue-700 px-3 py-2 font-bold text-white" type="submit">目標を保存</button>
+      </form>
+      <p>空欄で保存すると目標を解除できます。目標はこのブラウザに保存します。</p>
+      <p role="status">{goalMessage}</p>
+    </details>
+    <p className="design20-calculation-status" role="status">{trendLoading || (range === "all" && moreBusy) ? "日付別の記録を読み込み中…" : trend.length === 1 ? "1日分の記録です。推移を判断するには別の日の記録が必要です。" : `比較できる記録：${trend.length}日分（JST）`}</p>
+    {needsAllPages && !moreBusy && !trendLoading && <button type="button" className="rounded-lg bg-slate-100 p-2 font-bold" onClick={() => void more(true)}>すべての記録を読み込む</button>}
+    {!trendLoading && !needsAllPages && <div className="design20-calculation-charts">
+      <CalculationGraph data={trend} valueKey="score" title={`日付別・${scoreLabel}得点`} goal={goals.score} range={range} />
+      <CalculationGraph data={trend} valueKey="elapsedSeconds" title="日付別・初回所要時間" goal={goals.elapsedSeconds} range={range} />
+    </div>}
     <section className="design20-calculation-log"><h3>日ごとの記録</h3><p>選択中の課題を日付順に確認できます。</p><div className="design20-calculation-log-list">{records.filter(record => record.taskId === taskId).map(record => <button key={JSON.stringify([record.dateKey, record.taskId])} className={"w-full rounded-xl border p-3 text-left " + (selectedDate === record.dateKey && taskId === record.taskId ? "border-blue-500 bg-blue-50" : "border-slate-100")} onClick={() => selectDay(record.dateKey, record.taskId)}><strong>{record.dateKey} / {record.taskLabel}</strong><p>初回 {record.firstScore}/7 ・ {formatCalculationTime(record.firstElapsedSeconds)}</p><p>最新 {record.latestScore}/7 ・ {formatCalculationTime(record.latestElapsedSeconds)}</p><p className="text-sm">最高 {record.bestScore}/7 / 解き直し{record.attemptCount - 1}回 / {record.bestScore === 7 ? "7/7達成" : "チャレンジ中"}</p></button>)}</div>{!sample && hasMore && dates.split(",").length >= 30 && <button className="mt-3 w-full rounded-xl bg-slate-100 p-3 font-bold" disabled={moreBusy} onClick={() => void more()}>{moreBusy ? "読み込み中…" : "もっと前の日を見る"}</button>}</section>
     <section ref={detailRef} className="design20-calculation-detail scroll-mt-4">
       <h3 className="font-black">{selectedDate} / {taskOptions.find(([id]) => id === taskId)?.[1] ?? "課題未指定"} / この日の解き直し</h3>
       <p className="text-sm text-slate-600">解き直しで解く問題数が違う場合、時間だけでは比べられないよ。短い時間でも得点が下がったときは、改善したとはいえないよ。</p>
-      {detailLoading ? <p role="status">読み込み中…</p> : <><div className="design20-calculation-charts"><CalculationGraph data={history} valueKey="score" title="この日の各回の得点" score /><CalculationGraph data={history} valueKey="elapsedSeconds" title="この日の各回の所要時間" score={false} /></div>
+      {detailLoading ? <p role="status">読み込み中…</p> : <><div className="design20-calculation-charts"><CalculationGraph data={history} valueKey="score" title="この日の各回の得点" goal={goals.score} /><CalculationGraph data={history} valueKey="elapsedSeconds" title="この日の各回の所要時間" goal={goals.elapsedSeconds} /></div>
       <h4 className="font-bold">この日の全課題・全記録</h4>{dayRecords.length ? dayRecords.map(record => <div key={record.taskId}><h5 className="font-bold">{record.taskLabel}</h5><ol className="mt-3 space-y-2">{record.history.map(attempt => <li key={attempt.id} className="rounded-xl bg-slate-50 p-3"><p className="font-bold">{attempt.label}</p><p>{attempt.score}/7 ・ {formatCalculationTime(attempt.elapsedSeconds)}</p></li>)}</ol></div>) : <p>この日の記録はまだないよ。</p>}</>}
     </section>
   </section>;
