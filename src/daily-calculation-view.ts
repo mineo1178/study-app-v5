@@ -42,12 +42,15 @@ export const isCalculationTask = (task: { subject: string; category: string }) =
 export type CalculationScoreMode = "first" | "latest" | "best";
 
 // dateKey is the saved JST start date. Missing days are never filled with zeroes.
-export const calculationDateTrend = (attempts: CalculationAttempt[], taskId: string, mode: CalculationScoreMode = "first") =>
-  calculationTaskRecords(attempts).filter(record => record.taskId === taskId)
-    .sort((a, b) => a.dateKey.localeCompare(b.dateKey))
+export const calculationDateTrend = (attempts: CalculationAttempt[], taskId: string | null, mode: CalculationScoreMode = "first") =>
+  calculationTaskRecords(attempts)
+    .filter(record => taskId === null || record.taskId === taskId)
+    .sort((a, b) => a.dateKey.localeCompare(b.dateKey) ||
+      (a.history[0].startedAt - b.history[0].startedAt || a.history[0].attemptNo - b.history[0].attemptNo))
+    .filter((record, index, ordered) => record.dateKey !== ordered[index - 1]?.dateKey)
     .map(record => ({
       label: record.dateKey,
-      score: mode === "latest" ? record.latestScore : mode === "best" ? record.bestScore : record.firstScore,
+      score: taskId === null ? record.firstScore : mode === "latest" ? record.latestScore : mode === "best" ? record.bestScore : record.firstScore,
       elapsedSeconds: record.firstElapsedSeconds,
     }));
 

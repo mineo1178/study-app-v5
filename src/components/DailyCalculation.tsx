@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { CartesianGrid, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
-import { getDocs, limit, onSnapshot, orderBy, query, where, type Firestore } from "firebase/firestore";
+import { onSnapshot, orderBy, query, type Firestore } from "firebase/firestore";
 import { calculationStorageKey, commitCalculationAttempt, formatCalculationTime, getCalculationAttempts, getCalculationDays, getCalculationElapsedSeconds, getJstDateKey, MAX_CALCULATION_SECONDS, type CalculationAttempt, type CalculationDay, type CalculationDraft } from "../daily-calculation";
 import { calculationChartSeries, calculationGoalMet, type CalculationChartRange, calculationDateTrend, calculationTaskRecords, calculationStartLabel, type CalculationScoreMode } from "../daily-calculation-view";
 import { calculationDiagnosticSource, diagnosticReasonText, normalizeDiagnosticError, recordDiagnostic, scopedDiagnosticRecorder, type DiagnosticCode } from "../device-test";
@@ -209,87 +209,72 @@ const CalculationRecords = ({ db, familyId, uid, sample, sampleAttempts }: Calcu
   const [goalMessage, setGoalMessage] = useState("");
   const [scoreMode, setScoreMode] = useState<CalculationScoreMode>("first");
   const [days, setDays] = useState<CalculationDay[]>([]);
-  const [olderDays, setOlderDays] = useState<CalculationDay[]>([]);
   const [byDate, setByDate] = useState<Record<string, CalculationAttempt[]>>({});
   const [selectedDate, setSelectedDate] = useState(getJstDateKey);
   const [selectedTask, setSelectedTask] = useState<string | null>(null);
   const [loading, setLoading] = useState(!sample);
   const [error, setError] = useState("");
-  const [moreBusy, setMoreBusy] = useState(false);
-  const [hasMore, setHasMore] = useState(true);
+  const [logLimit, setLogLimit] = useState(30);
+  const [detailTask, setDetailTask] = useState<string | null>(null);
   const detailRef = useRef<HTMLElement>(null);
   const requestedDetailDate = useRef<string | null>(null);
   useEffect(() => {
     if (!db || sample) return;
-    return onSnapshot(query(getCalculationDays(db, familyId, uid), orderBy("dateKey", "desc"), limit(30)), snapshot => {
-      setDays(snapshot.docs.map(item => item.data() as CalculationDay)); setLoading(false); setError("");
+    return onSnapshot(query(getCalculationDays(db, familyId, uid), orderBy("dateKey", "desc")), { includeMetadataChanges: true }, snapshot => {
+      if (snapshot.metadata.fromCache) return;
+      setDays(snapshot.docs.map(item => item.data() as CalculationDay)); setLoading(false);
     }, () => { setLoading(false); setError("記録を読み込めなかったよ。画面を開き直してね。"); });
   }, [db, familyId, uid, sample]);
-  const dates = [...new Set([...days, ...olderDays].map(day => day.dateKey))].sort().join(",");
+  const dates = days.map(day => day.dateKey).sort().join(",");
   useEffect(() => {
     if (!db || sample || !dates) return;
-    const stops = dates.split(",").map(dateKey => onSnapshot(query(getCalculationAttempts(db, familyId, uid, dateKey), orderBy("attemptNo")), snapshot => {
+    const stops = dates.split(",").map(dateKey => onSnapshot(query(getCalculationAttempts(db, familyId, uid, dateKey), orderBy("attemptNo")), { includeMetadataChanges: true }, snapshot => {
+      if (snapshot.metadata.fromCache) return;
       setByDate(current => ({ ...current, [dateKey]: snapshot.docs.map(item => item.data() as CalculationAttempt) }));
     }, () => setError("この日の記録を読み込めなかったよ。画面を開き直してね。")));
     return () => stops.forEach(stop => stop());
   }, [db, familyId, uid, sample, dates]);
-  const records = useMemo(() => calculationTaskRecords(sample ? sampleAttempts : Object.values(byDate).flat()), [sample, sampleAttempts, byDate]);
+  const attempts = useMemo(() => sample ? sampleAttempts : days.flatMap(day => byDate[day.dateKey] ?? []), [sample, sampleAttempts, days, byDate]);
+  const records = useMemo(() => calculationTaskRecords(attempts), [attempts]);
   const taskOptions = [...new Map(records.map(item => [item.taskId, item.taskLabel])).entries()];
-  const taskId = selectedTask !== null && taskOptions.some(([id]) => id === selectedTask) ? selectedTask : taskOptions[0]?.[0] ?? "";
-  const trend = calculationDateTrend(sample ? sampleAttempts : Object.values(byDate).flat(), taskId, scoreMode);
-  const needsAllPages = range === "all" && days.length === 30 && hasMore;
-  const trendLoading = !sample && (loading || dates.split(",").filter(Boolean).some(date => !(date in byDate)));
-  const scoreLabel = scoreMode === "latest" ? "最新" : scoreMode === "best" ? "最高" : "初回";
-  const selected = records.find(item => item.dateKey === selectedDate && item.taskId === taskId);
-  const history = selected?.history ?? [];
+  const taskId = selectedTask;
+  const trend = calculationDateTrend(attempts, taskId, scoreMode);
+  const trendLoading = !sample && !error && (loading || days.some(day => !(day.dateKey in byDate)));
+  const scoreLabel = taskId === null ? "初回" : scoreMode === "latest" ? "最新" : scoreMode === "best" ? "最高" : "初回";
   const dayRecords = records.filter(item => item.dateKey === selectedDate);
-  const detailLoading = !sample && dates.split(",").includes(selectedDate) && !(selectedDate in byDate);
+  const selected = detailTask === null && taskId === null ? dayRecords[0] : dayRecords.find(item => item.taskId === (detailTask ?? taskId));
+  const history = selected?.history ?? [];
+  const detailLoading = trendLoading && dates.split(",").includes(selectedDate) && !(selectedDate in byDate);
+  const logRecords = records.filter(record => taskId === null || record.taskId === taskId);
+  const logDates = [...new Set(logRecords.map(record => record.dateKey))];
+  const visibleDates = new Set(logDates.slice(0, logLimit));
   useEffect(() => {
     if (detailLoading || requestedDetailDate.current !== selectedDate) return;
     requestedDetailDate.current = null;
     requestAnimationFrame(() => detailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
   }, [selectedDate, detailLoading]);
   const selectDay = (dateKey: string, id: string) => {
-    setSelectedTask(id);
+    setDetailTask(id);
     requestedDetailDate.current = dateKey;
     if (dateKey !== selectedDate) setSelectedDate(dateKey);
     else if (!detailLoading) { requestedDetailDate.current = null; requestAnimationFrame(() => detailRef.current?.scrollIntoView({ behavior: "smooth", block: "start" })); }
   };
-  const more = async (all = false) => {
-    if (!db || moreBusy || !dates) return;
-    setMoreBusy(true);
-    setError("");
-    try {
-      let oldest = dates.split(",")[0];
-      let fullPage: boolean;
-      do {
-        const snapshot = await getDocs(query(getCalculationDays(db, familyId, uid), where("dateKey", "<", oldest), orderBy("dateKey", "desc"), limit(30)));
-        const page = snapshot.docs.map(item => item.data() as CalculationDay);
-        setOlderDays(current => [...current, ...page]);
-        fullPage = snapshot.size === 30;
-        setHasMore(fullPage);
-        if (fullPage) oldest = page[page.length - 1].dateKey;
-      } while (all && fullPage);
-    } catch { setError("前の記録を読み込めなかったよ。もう一度ためしてね。"); }
-    finally { setMoreBusy(false); }
-  };
   return <section className="design20-calculation mx-auto w-full max-w-5xl min-w-0" aria-label="計算の記録">
     <div className="design20-calculation-heading">
       <div><span className="design20-calculation-eyebrow">DAILY CALCULATION</span><h2>毎日計算の記録</h2></div>
-      <p>同じ課題を日付ごとに比較します。7点満点、記録のない日は0点にはしません。</p>
+      <p>全課題では、その日に最初に始めた課題の初回を表示します。7点満点、記録のない日は0点にはしません。</p>
     </div>
     {loading && <p role="status">記録を読み込み中…</p>}{error && <p role="alert">{error}</p>}
-    {!loading && !records.length && <p>まだ記録がないよ。「学習 → 算数 → 計算」のカードから結果を保存してね。</p>}
+    {!trendLoading && !error && !records.length && <p>まだ記録がないよ。「学習 → 算数 → 計算」のカードから結果を保存してね。</p>}
     <div className="design20-calculation-filters">
-      <label>比較する課題<select aria-label="グラフで見る計算課題" value={taskId} onChange={event => setSelectedTask(event.target.value)}>{taskOptions.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label>
-      <label>表示する得点<select aria-label="日付ごとに表示する得点" value={scoreMode} onChange={event => setScoreMode(event.target.value as CalculationScoreMode)}><option value="first">初回</option><option value="latest">最新</option><option value="best">最高</option></select></label>
+      <label>比較する課題<select aria-label="グラフで見る計算課題" value={taskId ?? "/all"} onChange={event => { setSelectedTask(event.target.value === "/all" ? null : event.target.value); setDetailTask(null); setLogLimit(30); }}><option value="/all">全課題</option>{taskOptions.map(([id, label]) => <option key={id} value={id}>{label}</option>)}</select></label>
+      <label>表示する得点<select aria-label="日付ごとに表示する得点" value={taskId === null ? "first" : scoreMode} disabled={taskId === null} onChange={event => setScoreMode(event.target.value as CalculationScoreMode)}><option value="first">初回</option><option value="latest">最新</option><option value="best">最高</option></select></label>
     </div>
     <div className="design20-calculation-filters mt-2">
-      <label>表示する記録<select aria-label="グラフの表示件数" value={range} disabled={loading || moreBusy} onChange={event => {
+      <label>表示する記録<select aria-label="グラフの表示件数" value={range} disabled={trendLoading} onChange={event => {
         const next = event.target.value;
         setRange(next === "all" ? next : next === "30" ? 30 : 10);
-        if (next === "all" && hasMore && days.length === 30) void more(true);
-      }}><option value="10">直近10回</option><option value="30">直近30回</option><option value="all">すべて</option></select></label>
+      }}><option value="10">直近10記録日</option><option value="30">直近30記録日</option><option value="all">すべて</option></select></label>
     </div>
     <details className="my-3 text-sm">
       <summary className="cursor-pointer py-2 font-bold">{goals.score === null || goals.elapsedSeconds === null ? "得点・所要時間の目標を設定しよう" : "目標を変更する"}</summary>
@@ -310,17 +295,16 @@ const CalculationRecords = ({ db, familyId, uid, sample, sampleAttempts }: Calcu
       <p>空欄で保存すると目標を解除できます。目標はこのブラウザに保存します。</p>
       <p role="status">{goalMessage}</p>
     </details>
-    <p className="design20-calculation-status" role="status">{trendLoading || (range === "all" && moreBusy) ? "日付別の記録を読み込み中…" : trend.length === 1 ? "1日分の記録です。推移を判断するには別の日の記録が必要です。" : `比較できる記録：${trend.length}日分（JST）`}</p>
-    {needsAllPages && !moreBusy && !trendLoading && <button type="button" className="rounded-lg bg-slate-100 p-2 font-bold" onClick={() => void more(true)}>すべての記録を読み込む</button>}
-    {!trendLoading && !needsAllPages && <div className="design20-calculation-charts">
+    <p className="design20-calculation-status" role="status">{trendLoading ? "日付別の記録を読み込み中…" : error ? "" : trend.length === 1 ? "1日分の記録です。推移を判断するには別の日の記録が必要です。" : `比較できる記録：${range === "all" ? trend.length : Math.min(range, trend.length)}日分（JST）`}</p>
+    {!trendLoading && !error && <div className="design20-calculation-charts">
       <CalculationGraph data={trend} valueKey="score" title={`日付別・${scoreLabel}得点`} goal={goals.score} range={range} />
       <CalculationGraph data={trend} valueKey="elapsedSeconds" title="日付別・初回所要時間" goal={goals.elapsedSeconds} range={range} />
     </div>}
-    <section className="design20-calculation-log"><h3>日ごとの記録</h3><p>選択中の課題を日付順に確認できます。</p><div className="design20-calculation-log-list">{records.filter(record => record.taskId === taskId).map(record => <button key={JSON.stringify([record.dateKey, record.taskId])} className={"w-full rounded-xl border p-3 text-left " + (selectedDate === record.dateKey && taskId === record.taskId ? "border-blue-500 bg-blue-50" : "border-slate-100")} onClick={() => selectDay(record.dateKey, record.taskId)}><strong>{record.dateKey} / {record.taskLabel}</strong><p>初回 {record.firstScore}/7 ・ {formatCalculationTime(record.firstElapsedSeconds)}</p><p>最新 {record.latestScore}/7 ・ {formatCalculationTime(record.latestElapsedSeconds)}</p><p className="text-sm">最高 {record.bestScore}/7 / 解き直し{record.attemptCount - 1}回 / {record.bestScore === 7 ? "7/7達成" : "チャレンジ中"}</p></button>)}</div>{!sample && hasMore && dates.split(",").length >= 30 && <button className="mt-3 w-full rounded-xl bg-slate-100 p-3 font-bold" disabled={moreBusy} onClick={() => void more()}>{moreBusy ? "読み込み中…" : "もっと前の日を見る"}</button>}</section>
+    <section className="design20-calculation-log"><h3>日ごとの記録</h3><p>表示中の課題を日付順に確認できます。</p><div className="design20-calculation-log-list">{logRecords.filter(record => visibleDates.has(record.dateKey)).map(record => <button key={JSON.stringify([record.dateKey, record.taskId])} className={"w-full rounded-xl border p-3 text-left " + (selectedDate === record.dateKey && selected?.taskId === record.taskId ? "border-blue-500 bg-blue-50" : "border-slate-100")} onClick={() => selectDay(record.dateKey, record.taskId)}><strong>{record.dateKey} / {record.taskLabel}</strong><p>初回 {record.firstScore}/7 ・ {formatCalculationTime(record.firstElapsedSeconds)}</p><p>最新 {record.latestScore}/7 ・ {formatCalculationTime(record.latestElapsedSeconds)}</p><p className="text-sm">最高 {record.bestScore}/7 / 解き直し{record.attemptCount - 1}回 / {record.bestScore === 7 ? "7/7達成" : "チャレンジ中"}</p></button>)}</div>{logDates.length > logLimit && <button className="mt-3 w-full rounded-xl bg-slate-100 p-3 font-bold" onClick={() => setLogLimit(logLimit + 30)}>もっと前の日を見る</button>}</section>
     <section ref={detailRef} className="design20-calculation-detail scroll-mt-4">
-      <h3 className="font-black">{selectedDate} / {taskOptions.find(([id]) => id === taskId)?.[1] ?? "課題未指定"} / この日の解き直し</h3>
+      <h3 className="font-black">{selectedDate} / {selected?.taskLabel ?? "課題未指定"} / この日の解き直し</h3>
       <p className="text-sm text-slate-600">解き直しで解く問題数が違う場合、時間だけでは比べられないよ。短い時間でも得点が下がったときは、改善したとはいえないよ。</p>
-      {detailLoading ? <p role="status">読み込み中…</p> : <><div className="design20-calculation-charts"><CalculationGraph data={history} valueKey="score" title="この日の各回の得点" goal={goals.score} /><CalculationGraph data={history} valueKey="elapsedSeconds" title="この日の各回の所要時間" goal={goals.elapsedSeconds} /></div>
+      {detailLoading ? <p role="status">読み込み中…</p> : error ? <p>記録の読み込み状況は上の案内を確認してね。</p> : <><div className="design20-calculation-charts"><CalculationGraph data={history} valueKey="score" title="この日の各回の得点" goal={goals.score} /><CalculationGraph data={history} valueKey="elapsedSeconds" title="この日の各回の所要時間" goal={goals.elapsedSeconds} /></div>
       <h4 className="font-bold">この日の全課題・全記録</h4>{dayRecords.length ? dayRecords.map(record => <div key={record.taskId}><h5 className="font-bold">{record.taskLabel}</h5><ol className="mt-3 space-y-2">{record.history.map(attempt => <li key={attempt.id} className="rounded-xl bg-slate-50 p-3"><p className="font-bold">{attempt.label}</p><p>{attempt.score}/7 ・ {formatCalculationTime(attempt.elapsedSeconds)}</p></li>)}</ol></div>) : <p>この日の記録はまだないよ。</p>}</>}
     </section>
   </section>;

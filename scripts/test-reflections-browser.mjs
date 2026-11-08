@@ -25,9 +25,9 @@ const admin = (path, method, data) => fetch(root + path, {
 });
 assert.equal((await admin("", "PATCH", { memberUids: [uid] })).status, 200);
 const subjects = Object.fromEntries(["math", "japanese", "science", "social"].map(key => [key, { score: 80, avg: 70, dev: 55 }]));
-const test = { name: "同じ名前のテスト", type: "組分け", subjects, total4: { score: 320, avg: 280, dev: 55, rank: "10" } };
+const test = { name: "同じ名前のテスト", type: "curriculum", subjects, total4: { score: 320, avg: 280, dev: 55, rank: "10" } };
 const testA = { ...test, date: "2025/09/01" };
-const testB = { ...test, date: "2025/10/01" };
+const testB = { ...test, date: "2025/10/01", total4: { ...test.total4, dev: 57 } };
 assert.equal((await admin("/tests/A", "PATCH", testA)).status, 200);
 assert.equal((await admin("/tests/B", "PATCH", testB)).status, 200);
 
@@ -107,6 +107,69 @@ try {
   await login();
   await selector.selectOption("B");
   assert.equal(await good.inputValue(), "見直しができた");
+
+  const openRegistration = () => page.getByRole("button", { name: "テスト記録を追加" }).click();
+  const enterTest = async (date, name) => {
+    await page.getByLabel("実施日", { exact: true }).fill(date);
+    await page.getByLabel("テスト名", { exact: true }).fill(name);
+    await page.getByRole("button", { name: "追加する", exact: true }).click();
+  };
+  const recent = panel.getByRole("region", { name: "最近のテスト" });
+  const boost = page.getByText("現在のブースト：", { exact: false });
+  const beforeBoost = await boost.innerText();
+
+  await openRegistration();
+  await enterTest("2025-11-02", "未確定テスト");
+  const pending = recent.getByRole("button", { name: /2025\/11\/02 未確定テスト/ });
+  await pending.waitFor();
+  assert.match(await pending.innerText(), /成績未登録.*振り返り未登録/);
+  assert.equal(await boost.innerText(), beforeBoost);
+  assert.equal(await page.locator(".design22-chart-heading").getByText("2件の記録 · 偏差値").count(), 1);
+  await pending.click();
+  const pendingId = await selector.inputValue();
+  assert.ok(pendingId && pendingId !== "A" && pendingId !== "B");
+  const pendingData = await (await admin("/tests/" + pendingId, "GET")).json();
+  assert.equal(pendingData.fields.total4, undefined);
+  assert.equal(pendingData.fields.subjects, undefined);
+  await good.fill("成績が出る前に書いた");
+  await save.click();
+  await saved.waitFor();
+
+  await openRegistration();
+  await enterTest("2025-11-02", "未確定テスト");
+  await page.getByText("同じ名前・開催日のテストが登録済みです。").waitFor();
+  await page.getByRole("button", { name: "登録済みのテストを選ぶ" }).click();
+  assert.equal(await selector.inputValue(), pendingId);
+
+  await openRegistration();
+  await enterTest("2025-11-01", "未確定テスト");
+  await recent.getByRole("button", { name: /2025\/11\/01 未確定テスト/ }).waitFor();
+  assert.deepEqual((await recent.getByRole("button").allTextContents()).map(text => text.slice(0, 10)),
+    ["2025/11/02", "2025/11/01", "2025/10/01"]);
+
+  await pending.click();
+  await panel.getByRole("button", { name: "このテストの成績を入力" }).click();
+  await page.getByLabel("4科の偏差値").fill("61");
+  await page.getByText("得点・平均点・順位（任意）").click();
+  await page.getByLabel("4科の得点", { exact: true }).fill("0");
+  await page.getByRole("button", { name: "更新する", exact: true }).click();
+  await page.getByRole("button", { name: "テスト成績を編集" }).waitFor();
+  assert.match(await pending.innerText(), /成績あり.*振り返り済み/);
+  assert.equal(await selector.inputValue(), pendingId);
+  assert.equal(await good.inputValue(), "成績が出る前に書いた");
+  const graded = await (await admin("/tests/" + pendingId, "GET")).json();
+  assert.deepEqual(graded.fields.total4.mapValue.fields.score, { integerValue: "0" });
+  assert.equal(graded.fields.total4.mapValue.fields.avg, undefined);
+  assert.equal(graded.fields.subjects, undefined);
+  assert.ok(graded.fields.reflection);
+
+  await page.reload();
+  await openTests();
+  await pending.click();
+  assert.equal(await selector.inputValue(), pendingId);
+  assert.equal(await good.inputValue(), "成績が出る前に書いた");
+  assert.equal(await selector.locator('option').count(), 5);
+  assert.equal(await history.count(), 3);
 
   const bounds = await panel.boundingBox();
   assert.ok(bounds && bounds.x >= 0 && bounds.x + bounds.width <= 375);

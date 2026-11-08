@@ -18,7 +18,7 @@ const browser = await chromium.launch({ headless: true, channel: process.env.PLA
 const results = [];
 const errors = [];
 const warnings = [];
-const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+const context = await browser.newContext({ viewport: { width: 375, height: 844 }, hasTouch: true, isMobile: true });
 await mkdir(".calculation-browser-results.local", { recursive: true });
 await context.route("**/*", route => new URL(route.request().url()).hostname === "127.0.0.1" ? route.continue() : route.abort());
 const page = await context.newPage();
@@ -157,7 +157,7 @@ try {
   await page.getByLabel("グラフで見る計算課題", { exact: true }).selectOption("calc-①");
   await page.getByText(`初回 3/7 ・ ${Math.floor(first.elapsedSeconds / 60)}:${String(first.elapsedSeconds % 60).padStart(2, "0")}`, { exact: true }).waitFor();
   await page.getByText("最高 7/7 / 解き直し4回 / 7/7達成", { exact: true }).waitFor();
-  await page.locator(".design20-calculation > .design20-calculation-charts > .design20-series").first().getByText("3/7 点").waitFor();
+  await page.locator(".design20-calculation > .design20-calculation-charts > .design20-series").first().getByText(/実績（最新 3点/).waitFor();
   assert.equal(await page.locator(".design20-calculation > .design20-calculation-charts > .design20-series").count(), 2);
   assert.equal(await page.locator(".design20-calculation-detail .design20-series").count(), 2);
   const history = page.getByRole("heading", { name: "第1回 / 計算①", exact: true }).locator("..").locator("ol li");
@@ -172,6 +172,49 @@ try {
   await page.getByRole("button", { name: "実績", exact: true }).click();
   await page.getByText("最高 7/7 / 解き直し4回 / 7/7達成", { exact: true }).waitFor();
   results.push("first/latest/best, complete history, 4 charts, reload, 320px/390px");
+
+  await Promise.all(Array.from({ length: 31 }, async (_, index) => {
+    const dateKey = new Date(Date.UTC(2025, 0, index + 1)).toISOString().slice(0, 10);
+    const path = `families/${familyId}/dailyCalculations/browser-a/days/${dateKey}`;
+    const fields = value => Object.fromEntries(Object.entries(value).map(([key, entry]) =>
+      [key, typeof entry === "number" ? { integerValue: String(entry) } : { stringValue: entry }]));
+    const score = index === 0 ? 7 : 0;
+    const startedAt = Date.parse(dateKey + "T00:00:00+09:00");
+    await seed(path, fields({ dateKey, attemptCount: 1, firstScore: score, firstElapsedSeconds: 90,
+      latestScore: score, latestElapsedSeconds: 90, bestScore: score, latestAttemptId: "a" }));
+    await seed(path + "/attempts/a", fields({ id: "a", dateKey, attemptNo: 1, taskId: "older-task", taskLabel: "過去の別課題",
+      score, maxScore: 7, elapsedSeconds: 90, startedAt, finishedAt: startedAt + 90000, createdAt: startedAt + 90000, attemptType: "first" }));
+  }));
+  await page.setViewportSize({ width: 375, height: 844 });
+  await page.reload();
+  await page.getByRole("button", { name: "実績", exact: true }).click();
+  const taskFilter = page.getByLabel("グラフで見る計算課題");
+  const range = page.getByLabel("グラフの表示件数");
+  const scoreGraph = page.getByRole("region", { name: "日付別・初回得点" });
+  const timeGraph = page.getByRole("region", { name: "日付別・初回所要時間" });
+  await scoreGraph.getByText("平均 0.3点").waitFor();
+  assert.equal(await taskFilter.locator("option:checked").innerText(), "全課題");
+  await range.selectOption("30");
+  await page.getByText(/比較できる記録：30日分/).waitFor();
+  await scoreGraph.getByText("平均 0.1点").waitFor();
+  await range.selectOption("all");
+  await page.getByText(/比較できる記録：32日分/).waitFor();
+  await scoreGraph.getByText("平均 0.3点").waitFor();
+  await page.getByText("得点・所要時間の目標を設定しよう").click();
+  await page.getByLabel("得点目標（点）").fill("5");
+  await page.getByLabel("所要時間目標（秒）").fill("100");
+  await page.getByRole("button", { name: "目標を保存" }).click();
+  await scoreGraph.getByText("目標 5点").waitFor();
+  await timeGraph.getByText("目標 1:40").waitFor();
+  assert.equal(await scoreGraph.locator(".calculation-chart-average-line").count(), 1);
+  assert.equal(await timeGraph.locator(".calculation-chart-goal-line").count(), 1);
+  await taskFilter.selectOption("older-task");
+  await page.getByText(/比較できる記録：31日分/).waitFor();
+  await timeGraph.getByText("平均 1:30").waitFor();
+  await taskFilter.selectOption("calc-①");
+  await page.getByText(/1日分の記録です/).waitFor();
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+  results.push("375px: cross-task history, 10/30/all, both average/goal lines, task filter");
 
   // Exercise the real App/modal integration, using sample mode without writes.
   await page.goto(base);

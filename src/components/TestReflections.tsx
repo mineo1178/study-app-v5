@@ -1,14 +1,16 @@
-import { useRef, useState } from "react";
+import { useImperativeHandle, useRef, useState, type Ref } from "react";
 import { hasReflection, reflectionFields, reflectionSubjects, type TestReflection } from "../test-reflection";
 
 const subjects = { math: "算数", japanese: "国語", science: "理科", social: "社会" };
 const fields = { good: "よかった点", bad: "悪かった点", nextTry: "次回に向けてTryすること" };
 
-type Test = { id: string; name: string; date: string; reflection?: TestReflection };
+type Test = { id: string; name: string; date: string; reflection?: TestReflection; hasGrades: boolean };
 type Draft = { original: TestReflection; values: TestReflection };
 
-export function TestReflections({ tests, onSave }: {
+export function TestReflections({ tests, onSave, onEditGrades, ref }: {
   tests: Test[];
+  onEditGrades: (id: string) => void;
+  ref: Ref<{ select: (id: string) => void }>;
   onSave: (id: string, original: TestReflection, draft: TestReflection) => Promise<void>;
 }) {
   const [selectedId, setSelectedId] = useState("");
@@ -29,6 +31,13 @@ export function TestReflections({ tests, onSave }: {
     setSubject("math");
     setStatus("idle");
   }
+
+  function openTest(id: string) {
+    selectTest(id);
+    requestAnimationFrame(() => selector.current?.focus());
+  }
+
+  useImperativeHandle(ref, () => ({ select: openTest }));
 
   async function save() {
     if (!selected || !draft || !hasReflection(values) || saving.current) return;
@@ -52,6 +61,20 @@ export function TestReflections({ tests, onSave }: {
   return (
     <section className="min-w-0 space-y-4 rounded-2xl border border-slate-200 bg-white p-4 text-slate-700">
       <h3 className="font-bold">テストの振り返り</h3>
+      {ordered.length > 0 && (
+        <section className="space-y-2" aria-label="最近のテスト">
+          <h4 className="text-sm font-bold">最近のテスト</h4>
+          {ordered.slice(0, 3).map(test => (
+            <button key={test.id} type="button" disabled={busy} onClick={() => openTest(test.id)}
+              className="block min-h-11 w-full rounded-lg bg-slate-50 px-3 py-2 text-left hover:bg-blue-50">
+              <span className="block break-words text-sm font-bold">{test.date} {test.name}</span>
+              <span className="block text-xs text-slate-600">
+                {test.hasGrades ? "成績あり" : "成績未登録"} ・ {hasReflection(test.reflection) ? "振り返り済み" : "振り返り未登録"}
+              </span>
+            </button>
+          ))}
+        </section>
+      )}
       {ordered.length === 0 ? <p className="text-sm">テスト記録を追加すると、振り返りを書けます。</p> : (
         <label className="block text-sm font-medium">
           振り返るテスト
@@ -64,6 +87,10 @@ export function TestReflections({ tests, onSave }: {
       )}
       {selected && (
         <form className="space-y-3" onSubmit={event => { event.preventDefault(); void save(); }}>
+          <button type="button" disabled={busy} onClick={() => onEditGrades(selected.id)}
+            className="min-h-11 rounded-lg bg-blue-50 px-3 text-sm font-bold text-blue-700">
+            {selected.hasGrades ? "テスト成績を編集" : "このテストの成績を入力"}
+          </button>
           <div className="grid grid-cols-4 gap-1" role="group" aria-label="教科">
             {reflectionSubjects.map(key => (
               <button key={key} type="button" aria-pressed={subject === key} onClick={() => setSubject(key)}
@@ -125,7 +152,7 @@ export function TestReflections({ tests, onSave }: {
                 </dl>
               </div>
             ))}
-            <button type="button" disabled={busy} onClick={() => { selectTest(test.id); selector.current?.focus(); }}
+            <button type="button" disabled={busy} onClick={() => openTest(test.id)}
               className="min-h-11 rounded-lg bg-blue-50 px-4 font-bold text-blue-700 disabled:opacity-50">
               この振り返りを編集
             </button>

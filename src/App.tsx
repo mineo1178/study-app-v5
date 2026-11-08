@@ -5,7 +5,7 @@ import { TestReflections } from "./components/TestReflections";
 import { mergeReflection, saveTestReflection, type TestReflection } from "./test-reflection";
 import { ReviewWorkspace } from "./components/ReviewWorkspace";
 import { isCalculationTask } from "./daily-calculation-view";
-import type { CalculationAttempt } from "./daily-calculation";
+import { getJstDateKey, type CalculationAttempt } from "./daily-calculation";
 import { StudyReview } from "./components/StudyReview";
 import { useStudyObserver } from "./use-study-observer";
 import type { StudyObservation } from "./study-idle";
@@ -175,7 +175,7 @@ if (hasFirebaseConfig) {
 // ==========================================
 
 const FAMILY_ID = "oomine-study-2026";
-const APP_VERSION = "v1.88.6";
+const APP_VERSION = "v1.88.7";
 
 // Firestore Path 固定（変更禁止）
 // 実DB構造:
@@ -258,18 +258,25 @@ interface Task extends StudyObservation {
   createdAt: string;
 }
 
+type TestGrade = { score?: number | null; avg?: number | null; dev?: number | null; rank?: string };
+
 interface TestResult {
   reflection?: TestReflection;
   id: string;
   date: string;
   name: string;
   type: string;
-  subjects: Record<
-    Subject,
-    { score: number; avg: number; dev: number; rank?: string }
-  >;
-  total4: { score: number; avg: number; dev: number; rank: string };
+  subjects?: Partial<Record<Subject, TestGrade>>;
+  total4?: TestGrade;
 }
+
+const testIdentity = (test: Pick<TestResult, "date" | "name">) =>
+  JSON.stringify([test.date.replace(/\//g, "-"), test.name.trim()]);
+const hasTestGrades = (test: TestResult) =>
+  [test.total4, ...Object.values(test.subjects ?? {})].some(grade =>
+    grade && (grade.score != null || grade.avg != null || grade.dev != null || Boolean(grade.rank)));
+const hasTotalDeviation = (test: TestResult): test is TestResult & { total4: { dev: number } } =>
+  typeof test.total4?.dev === "number" && Number.isFinite(test.total4.dev);
 
 const SUBJECT_CONFIG: Record<Subject, SubjectConfig> = {
   math: {
@@ -940,122 +947,91 @@ const AddCustomTaskModal = ({ isOpen, onClose, onAdd }: any) => {
 };
 
 const TestResultModal = ({
-  isOpen,
   onClose,
   onSave,
   initialData,
+  onSelectExisting,
 }: {
-  isOpen: boolean;
   onClose: () => void;
-  onSave: (data: TestResult) => void;
+  onSave: (data: TestResult) => Promise<string | null>;
+  onSelectExisting: (id: string) => void;
   initialData?: TestResult | null;
 }) => {
-  const [date, setDate] = useState("");
-  const [name, setName] = useState("");
-  const [type, setType] = useState("curriculum");
-  const [devs, setDevs] = useState({
-    math: "",
-    japanese: "",
-    science: "",
-    social: "",
-  });
-  const [totalDev, setTotalDev] = useState("");
-  const [totalRank, setTotalRank] = useState("");
+  const [date, setDate] = useState(() => initialData?.date.replace(/\//g, "-") ?? getJstDateKey());
+  const [name, setName] = useState(initialData?.name ?? "");
+  const [type, setType] = useState(initialData?.type ?? "curriculum");
+  const gradeKeys = ["math", "japanese", "science", "social", "total4"] as const;
+  const [grades, setGrades] = useState<Partial<Record<typeof gradeKeys[number], TestGrade>>>(
+    () => ({ ...initialData?.subjects, total4: initialData?.total4 }),
+  );
+  const [busy, setBusy] = useState(false);
+  const [duplicateId, setDuplicateId] = useState<string | null>(null);
+  const [totalRank, setTotalRank] = useState(initialData?.total4?.rank ?? "");
   const [errorMsg, setErrorMsg] = useState("");
 
-  useEffect(() => {
-    if (initialData) {
-      setDate(initialData.date.replace(/\//g, "-"));
-      setName(initialData.name);
-      setType(initialData.type);
-      setDevs({
-        math: initialData.subjects.math.dev.toString(),
-        japanese: initialData.subjects.japanese.dev.toString(),
-        science: initialData.subjects.science.dev.toString(),
-        social: initialData.subjects.social.dev.toString(),
-      });
-      setTotalDev(initialData.total4.dev.toString());
-      setTotalRank(initialData.total4.rank || "");
-      setErrorMsg("");
-    } else {
-      setDate(new Date().toISOString().split("T")[0]);
-      setName("");
-      setType("curriculum");
-      setDevs({ math: "", japanese: "", science: "", social: "" });
-      setTotalDev("");
-      setTotalRank("");
-      setErrorMsg("");
-    }
-  }, [initialData, isOpen]);
-
-  if (!isOpen) return null;
-
-  const handleSubmit = () => {
-    if (!name || !date) {
+  const handleSubmit = async () => {
+    if (busy) return;
+    if (!name.trim() || !date) {
       setErrorMsg("日付とテスト名は必須です。");
       return;
     }
     setErrorMsg("");
-
-    const resultData: TestResult = {
-      id: initialData ? initialData.id : Date.now().toString(),
-      date: date.replace(/-/g, "/"),
-      name,
-      type,
-      subjects: {
-        math: {
-          score: initialData?.subjects.math.score || 0,
-          avg: initialData?.subjects.math.avg || 0,
-          dev: Number(devs.math),
-        },
-        japanese: {
-          score: initialData?.subjects.japanese.score || 0,
-          avg: initialData?.subjects.japanese.avg || 0,
-          dev: Number(devs.japanese),
-        },
-        science: {
-          score: initialData?.subjects.science.score || 0,
-          avg: initialData?.subjects.science.avg || 0,
-          dev: Number(devs.science),
-        },
-        social: {
-          score: initialData?.subjects.social.score || 0,
-          avg: initialData?.subjects.social.avg || 0,
-          dev: Number(devs.social),
-        },
-      },
-      total4: {
-        score: initialData?.total4.score || 0,
-        avg: initialData?.total4.avg || 0,
-        dev: Number(totalDev),
-        rank: totalRank,
-      },
-    };
-    onSave(resultData);
-    onClose();
+    setDuplicateId(null);
+    setBusy(true);
+    try {
+      const duplicate = await onSave({
+        id: initialData?.id ?? "",
+        date: date.replace(/-/g, "/"),
+        name: name.trim(),
+        type,
+        subjects: Object.fromEntries(gradeKeys.slice(0, 4).flatMap(key => grades[key] ? [[key, grades[key]]] : [])),
+        total4: { ...grades.total4, rank: totalRank.trim() },
+      });
+      if (duplicate) {
+        setErrorMsg("同じ名前・開催日のテストが登録済みです。");
+        setDuplicateId(duplicate);
+      } else {
+        onClose();
+      }
+    } catch {
+      setErrorMsg("保存できませんでした。接続を確認して、もう一度お試しください。");
+    } finally {
+      setBusy(false);
+    }
   };
+
+  const gradeInput = (key: typeof gradeKeys[number], field: "dev" | "score" | "avg", label: string) => (
+    <input aria-label={label} type="number" step="any" value={grades[key]?.[field] ?? ""}
+      onChange={event => {
+        const value = event.target.value === "" ? null : Number(event.target.value);
+        setGrades(current => ({ ...current, [key]: { ...current[key], [field]: value } }));
+      }}
+      className="min-w-0 w-full rounded-lg border border-slate-200 bg-slate-50 px-2 py-2 text-base" />
+  );
 
   return (
     <div className="fixed inset-0 bg-slate-900/50 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-in fade-in">
-      <div className="bg-white w-full max-w-sm md:max-w-xl lg:max-w-2xl rounded-3xl md:rounded-[2rem] p-5 md:p-8 shadow-2xl">
+      <div className="bg-white w-full max-h-[90dvh] overflow-y-auto max-w-sm md:max-w-xl lg:max-w-2xl rounded-3xl md:rounded-[2rem] p-5 md:p-8 shadow-2xl">
         <div className="flex justify-between items-center mb-4 md:mb-6">
           <h3 className="text-lg md:text-2xl font-black text-slate-800">
             {initialData ? "テスト結果を編集" : "テスト結果を追加"}
           </h3>
           <button
             onClick={onClose}
+            disabled={busy}
             className="p-1 md:p-2 rounded-full bg-slate-100 text-slate-400 active:scale-95 hover:text-slate-600"
           >
             <X className="w-4 h-4 md:w-5 md:h-5" />
           </button>
         </div>
-        <div className="space-y-3 md:space-y-5">
+        <fieldset disabled={busy} className="min-w-0 space-y-3 md:space-y-5">
           <div className="grid grid-cols-2 gap-3 md:gap-5">
             <div>
               <label className="block text-[10px] md:text-xs lg:text-sm font-bold text-slate-400 mb-1 md:mb-2">
                 実施日
               </label>
               <input
+                aria-label="実施日"
                 type="date"
                 value={date}
                 onChange={(e) => setDate(e.target.value)}
@@ -1067,6 +1043,7 @@ const TestResultModal = ({
                 種類
               </label>
               <select
+                aria-label="種類"
                 value={type}
                 onChange={(e) => setType(e.target.value)}
                 className="w-full bg-slate-50 border border-slate-200 rounded-lg md:rounded-xl px-2 py-1.5 md:px-3 md:py-2 text-sm md:text-base font-bold focus:outline-none focus:border-blue-400"
@@ -1084,6 +1061,7 @@ const TestResultModal = ({
               テスト名
             </label>
             <input
+              aria-label="テスト名"
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
@@ -1092,77 +1070,50 @@ const TestResultModal = ({
             />
           </div>
 
-          <div className="border-t border-slate-100 pt-3 md:pt-5">
-            <h4 className="font-bold text-slate-600 mb-2 md:mb-3 text-xs md:text-sm">
-              各教科の偏差値
-            </h4>
-            <div className="grid grid-cols-4 gap-2 md:gap-3">
-              {(["math", "japanese", "science", "social"] as Subject[]).map(
-                (subj) => (
-                  <div key={subj}>
-                    <label
-                      className={`block text-[10px] md:text-xs lg:text-sm text-center font-bold ${SUBJECT_CONFIG[subj].color} mb-1 md:mb-2`}
-                    >
-                      {SUBJECT_CONFIG[subj].short}
-                    </label>
-                    <input
-                      type="number"
-                      step="0.1"
-                      value={devs[subj]}
-                      onChange={(e) =>
-                        setDevs({ ...devs, [subj]: e.target.value })
-                      }
-                      className="w-full bg-slate-50 border border-slate-200 rounded-lg md:rounded-xl px-1 py-1.5 md:px-2 md:py-2 text-xs md:text-sm text-center font-bold focus:outline-none focus:border-blue-400"
-                    />
-                  </div>
-                ),
-              )}
+          <div className="border-t border-slate-100 pt-3">
+            <h4 className="mb-2 text-sm font-bold text-slate-600">偏差値（任意）</h4>
+            <div className="grid grid-cols-5 gap-1">
+              {gradeKeys.map(key => {
+                const label = key === "total4" ? "4科" : SUBJECT_CONFIG[key].short;
+                return <label key={key} className="min-w-0 text-center text-xs">{label}{gradeInput(key, "dev", label + "の偏差値")}</label>;
+              })}
             </div>
           </div>
-          <div className="border-t border-slate-100 pt-3 md:pt-5">
-            <h4 className="font-bold text-slate-600 mb-2 md:mb-3 text-xs md:text-sm">
-              4科合計
-            </h4>
-            <div className="grid grid-cols-2 gap-3 md:gap-5">
-              <div>
-                <label className="block text-[10px] md:text-xs lg:text-sm font-bold text-slate-400 mb-1 md:mb-2">
-                  偏差値
-                </label>
-                <input
-                  type="number"
-                  step="0.1"
-                  value={totalDev}
-                  onChange={(e) => setTotalDev(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-lg md:rounded-xl px-2 py-1.5 md:px-3 md:py-2 text-sm md:text-base font-bold focus:outline-none focus:border-blue-400"
-                />
-              </div>
-              <div>
-                <label className="block text-[10px] md:text-xs lg:text-sm font-bold text-slate-400 mb-1 md:mb-2">
-                  順位
-                </label>
-                <input
-                  type="text"
-                  value={totalRank}
-                  onChange={(e) => setTotalRank(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-lg md:rounded-xl px-2 py-1.5 md:px-3 md:py-2 text-sm md:text-base font-bold focus:outline-none focus:border-blue-400"
-                />
-              </div>
-            </div>
-          </div>
+          <details className="border-t border-slate-100 pt-3 text-sm">
+            <summary className="cursor-pointer font-bold">得点・平均点・順位（任意）</summary>
+            {gradeKeys.map(key => {
+              const label = key === "total4" ? "4科" : SUBJECT_CONFIG[key].label;
+              return (
+                <div key={key} className="mt-2 grid grid-cols-[3rem_1fr_1fr] items-end gap-2">
+                  <span className="pb-2">{label}</span>
+                  <label>得点{gradeInput(key, "score", label + "の得点")}</label>
+                  <label>平均点{gradeInput(key, "avg", label + "の平均点")}</label>
+                </div>
+              );
+            })}
+            <label className="mt-2 block">4科の順位
+              <input type="text" value={totalRank} onChange={event => setTotalRank(event.target.value)}
+                className="block w-full rounded-lg border border-slate-200 bg-slate-50 p-2 text-base" />
+            </label>
+          </details>
 
           {errorMsg && (
-            <div className="text-xs md:text-sm text-red-500 font-bold text-center mt-2 md:mt-3">
+            <div role="alert" className="text-sm text-red-700 font-bold">
               {errorMsg}
             </div>
           )}
 
-          <button
-            onClick={handleSubmit}
+          {duplicateId && (
+            <button type="button" onClick={() => onSelectExisting(duplicateId)}
+              className="min-h-11 w-full rounded-lg bg-blue-50 font-bold text-blue-700">登録済みのテストを選ぶ</button>
+          )}
+          <button type="button"
+            onClick={() => void handleSubmit()}
             className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3.5 md:py-4 text-base md:text-lg rounded-xl md:rounded-2xl shadow-lg mt-2 md:mt-4 active:scale-95 transition-colors"
           >
-            {initialData ? "更新する" : "追加する"}
+            {busy ? "保存中…" : initialData ? "更新する" : "追加する"}
           </button>
-        </div>
+        </fieldset>
       </div>
     </div>
   );
@@ -2441,11 +2392,12 @@ const DailyView = ({
   );
 };
 
-const TestsView = ({ tests, onSaveTest, onDeleteTest, reflections }: { tests: TestResult[]; onSaveTest: (test: TestResult) => void; onDeleteTest: (id: string) => void; reflections: React.ReactNode }) => {
+const TestsView = ({ tests, onSaveTest, onDeleteTest, onSaveReflection }: { tests: TestResult[]; onSaveTest: (test: TestResult) => Promise<string | null>; onDeleteTest: (id: string) => void; onSaveReflection: (id: string, original: TestReflection, draft: TestReflection) => Promise<void>; }) => {
   const [selectedSubjects, setSelectedSubjects] = useState<string[]>(["4ko"]);
   const [isModalOpen, setModalOpen] = useState(false);
   const [editingTest, setEditingTest] = useState<TestResult | null>(null);
   const [filterType, setFilterType] = useState("all");
+  const reflectionSelector = useRef<{ select: (id: string) => void }>(null);
 
   const toggleSubject = (subj: string) => {
     setSelectedSubjects((prev) =>
@@ -2464,26 +2416,27 @@ const TestsView = ({ tests, onSaveTest, onDeleteTest, reflections }: { tests: Te
           new Date(a.date).getTime() - new Date(b.date).getTime(),
       )
       .map((t: TestResult) => {
-        const dp: any = { name: t.date.slice(5), testName: t.name };
-        if (selectedSubjects.includes("4ko")) dp["4ko"] = t.total4.dev;
+        const dp: { name: string; testName: string; [key: string]: string | number | null | undefined } = { name: t.date.slice(5), testName: t.name };
+        if (selectedSubjects.includes("4ko")) dp["4ko"] = t.total4?.dev;
         ["math", "japanese", "science", "social"].forEach((s) => {
           if (selectedSubjects.includes(s))
-            dp[s] = t.subjects[s as Subject].dev;
+            dp[s] = t.subjects?.[s as Subject]?.dev;
         });
         return dp;
-      });
+      }).filter(point => selectedSubjects.some(key => point[key] != null));
   }, [tests, selectedSubjects, filterType]);
 
   const tableData = [...tests].sort(
     (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime(),
   );
   const producerBonus = useMemo(() => {
-    const latest = [...tests].sort((a: TestResult, b: TestResult) => new Date(b.date).getTime() - new Date(a.date).getTime())[0] as TestResult | undefined;
+    const ranked = tests.filter(hasTotalDeviation).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    const latest = ranked[0];
     if (!latest) return null;
     const kindByType: Record<string, TestKind> = { curriculum: "カリテ", kumiwake: "組分け", hantei: "判定" };
     const kind = kindByType[latest.type];
     if (!kind) return null;
-    const previous = [...tests].filter((test: TestResult) => test.type === latest.type && test.id !== latest.id).sort((a: TestResult, b: TestResult) => new Date(b.date).getTime() - new Date(a.date).getTime())[0] as TestResult | undefined;
+    const previous = ranked.find(test => test.type === latest.type && test.id !== latest.id);
     const improvement = previous ? latest.total4.dev - previous.total4.dev : 0;
     return { kind, previous: previous?.total4.dev, current: latest.total4.dev, improvement, boost: getTestBoost(kind, improvement), gap: getNextBonusGap(improvement) };
   }, [tests]);
@@ -2547,7 +2500,11 @@ const TestsView = ({ tests, onSaveTest, onDeleteTest, reflections }: { tests: Te
 
       <div className="design22-tests-content flex-1 overflow-y-auto px-3 py-4 md:px-6 md:py-6 lg:px-8 lg:py-8 space-y-5 md:space-y-6 lg:space-y-8 pb-20 md:pb-32">
         {producerBonus && <div className="rounded-2xl bg-violet-50 border border-violet-200 p-4"><p className="font-black text-violet-800">プロデューサーブースト（{producerBonus.kind}）</p><p className="mt-1 text-sm text-violet-700">{producerBonus.previous === undefined ? "次回の同じテストから上昇ボーナスを判定します" : `${producerBonus.previous.toFixed(1)} → ${producerBonus.current.toFixed(1)}（${producerBonus.improvement >= 0 ? "+" : ""}${producerBonus.improvement.toFixed(1)}）`}</p><p className="mt-2 font-bold text-violet-900">現在のブースト：+{producerBonus.boost}% {producerBonus.gap > 0 && `／次のBONUSまであと偏差値 +${producerBonus.gap.toFixed(1)}`}</p></div>}
-        {reflections}
+        <TestReflections ref={reflectionSelector} tests={tests.map(test => ({ ...test, hasGrades: hasTestGrades(test) }))}
+          onSave={onSaveReflection} onEditGrades={id => {
+            setEditingTest(tests.find(test => test.id === id) ?? null);
+            setModalOpen(true);
+          }} />
         {chartData.length < 2 || selectedSubjects.length === 0 ? (
           <section className="design22-test-single" aria-label="テストの記録">
             {selectedSubjects.length === 0 ? (
@@ -2700,15 +2657,15 @@ const TestsView = ({ tests, onSaveTest, onDeleteTest, reflections }: { tests: Te
                     </div>
                   </td>
                   <td className="py-2 md:py-3 lg:py-4 font-black text-slate-700 bg-slate-50/50">
-                    {t.total4.dev}
+                    {t.total4?.dev ?? (hasTestGrades(t) ? "—" : "成績未登録")}
                   </td>
                   {(["math", "japanese", "science", "social"] as Subject[]).map(
                     (s) => (
                       <td
                         key={s}
-                        className={`py-2 md:py-3 lg:py-4 font-bold ${t.subjects[s].dev >= 60 ? "text-rose-500" : "text-slate-500"}`}
+                        className={`py-2 md:py-3 lg:py-4 font-bold ${(t.subjects?.[s]?.dev ?? -Infinity) >= 60 ? "text-rose-500" : "text-slate-500"}`}
                       >
-                        {t.subjects[s].dev}
+                        {t.subjects?.[s]?.dev ?? "—"}
                       </td>
                     ),
                   )}
@@ -2743,12 +2700,12 @@ const TestsView = ({ tests, onSaveTest, onDeleteTest, reflections }: { tests: Te
           </table>
         </div>
       </div>
-      <TestResultModal
-        isOpen={isModalOpen}
+      {isModalOpen && <TestResultModal
         onClose={() => setModalOpen(false)}
         onSave={onSaveTest}
         initialData={editingTest}
-      />
+        onSelectExisting={id => { setModalOpen(false); reflectionSelector.current?.select(id); }}
+      />}
     </div>
   );
 };
@@ -3775,37 +3732,70 @@ function SessionApp({ session, logout, initialSample }: { session?: FamilySessio
     return () => clearInterval(interval);
   }, [syncTaskToCloud]);
 
-  const saveTestToCloud = async (testResult: TestResult) => {
-    setTests((prev) => {
-      const existing = prev.find((t) => t.id === testResult.id);
-      if (existing) {
-        return prev.map((t) => (t.id === testResult.id ? { ...testResult, reflection: t.reflection } : t));
-      }
-      return [testResult, ...prev];
-    });
+  const saveTestToCloud = async (testResult: TestResult): Promise<string | null> => {
+    const database = getSafeDb();
+    const identity = testIdentity(testResult);
+    const matches = (test: TestResult) => test.id !== testResult.id && testIdentity(test) === identity;
+    const original = tests.find(test => test.id === testResult.id);
+    const checkDuplicate = !original || testIdentity(original) !== identity;
+    const localDuplicate = checkDuplicate ? tests.find(matches) : undefined;
+    if (localDuplicate) return localDuplicate.id;
+    if (!isSampleMode && !database) throw new Error("Inactive session");
 
-    const dbInstance = getSafeDb();
-    if (!dbInstance || !auth?.currentUser || isSampleMode) return;
-    try {
-      const testRef = getTestDoc(dbInstance, testResult.id);
-      await setDoc(
-        testRef,
-        {
-          ...testResult,
-          updatedAt: serverTimestamp(),
-        },
-        { merge: true },
-      );
-      setSyncState("synced");
-      setLastSync(
-        new Date().toLocaleTimeString("ja-JP", {
-          hour: "2-digit",
-          minute: "2-digit",
-        }),
-      );
-    } catch (e) {
-      setSyncState("offline");
+    const { id, subjects, total4, date, name, type } = testResult;
+    const fields = {
+      date, name, type,
+      ...(subjects && Object.keys(subjects).length ? { subjects } : {}),
+      ...(total4 && (Object.keys(total4).length > 1 || total4.rank || id) ? { total4 } : {}),
+    };
+    let saved: TestResult;
+    if (isSampleMode) {
+      saved = { ...tests.find(test => test.id === id), ...fields, id: id || crypto.randomUUID() };
+    } else {
+      try {
+        // Check legacy IDs too. New registrations also use a transaction on the
+        // same name/date key so simultaneous registrations cannot create two rows.
+        const cloudTests = checkDuplicate ? await getDocsFromServer(getTestsCol(database!)) : null;
+        const duplicate = cloudTests?.docs.map(item => ({ ...item.data(), id: item.id }) as TestResult).find(matches);
+        if (getSafeDb() !== database) throw new Error("Inactive session");
+        if (duplicate) {
+          setTests(current => current.some(test => test.id === duplicate.id) ? current : [duplicate, ...current]);
+          return duplicate.id;
+        }
+        const digest = id ? null : await crypto.subtle.digest("SHA-256", new TextEncoder().encode(identity));
+        const key = digest ? "test-" + Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("") : id;
+        const result = await runTransaction(database!, async transaction => {
+          let ref = getTestDoc(database!, key);
+          let snapshot = await transaction.get(ref);
+          if (id && !snapshot.exists()) throw new Error("Test no longer exists");
+          // An earlier test may have been renamed while retaining its ID.
+          for (let suffix = 1; !id && snapshot.exists(); suffix++) {
+            const existing = { ...snapshot.data(), id: snapshot.id } as TestResult;
+            if (testIdentity(existing) === identity) return { test: existing, duplicate: true };
+            ref = getTestDoc(database!, key + "-" + suffix);
+            snapshot = await transaction.get(ref);
+          }
+          if (getSafeDb() !== database) throw new Error("Inactive session");
+          transaction.set(ref, { ...fields, ...(!id ? { id: ref.id } : {}), updatedAt: serverTimestamp() }, { merge: true });
+          return { test: { ...snapshot.data(), ...fields, id: ref.id } as TestResult, duplicate: false };
+        });
+        if (getSafeDb() !== database) throw new Error("Inactive session");
+        if (result.duplicate) {
+          setTests(current => current.some(test => test.id === result.test.id) ? current : [result.test, ...current]);
+          return result.test.id;
+        }
+        saved = result.test;
+        setSyncState("synced");
+        setLastSync(new Date().toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" }));
+      } catch (error) {
+        setSyncState("offline");
+        throw error;
+      }
     }
+    setTests(current => current.some(test => test.id === saved.id)
+      ? current.map(test => test.id === saved.id ? { ...saved, reflection: test.reflection ?? saved.reflection } : test)
+      : [saved, ...current]);
+    return null;
   };
 
   const saveReflection = async (id: string, original: TestReflection, draft: TestReflection) => {
@@ -3914,7 +3904,7 @@ function SessionApp({ session, logout, initialSample }: { session?: FamilySessio
   const currentBoostPercent = useMemo(() => {
     const kinds: Record<string, TestKind> = { curriculum: "カリテ", kumiwake: "組分け", hantei: "判定" };
     const boosts = Object.entries(kinds).map(([type, kind]) => {
-      const sameType = tests.filter((test) => test.type === type).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      const sameType = tests.filter(hasTotalDeviation).filter(test => test.type === type).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
       return sameType.length > 1 ? getTestBoost(kind, sameType[0].total4.dev - sameType[1].total4.dev) : 0;
     });
     return getHighestBoost(boosts);
@@ -4541,7 +4531,7 @@ function SessionApp({ session, logout, initialSample }: { session?: FamilySessio
             tests={tests}
             onSaveTest={saveTestToCloud}
             onDeleteTest={deleteTestFromCloud}
-            reflections={<TestReflections tests={tests} onSave={saveReflection} />}
+            onSaveReflection={saveReflection}
           />
         ) : activeTab === "review" ? (
           <ReviewWorkspace key={`${user?.uid ?? "sample"}-${isSampleMode}`} familyId={FAMILY_ID} sample={isSampleMode} session={session} enabled={isSampleMode || import.meta.env.VITE_REVIEW_STORAGE_ENABLED === "true"} />

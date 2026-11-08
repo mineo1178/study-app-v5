@@ -43,6 +43,18 @@ describe("daily calculation UX", () => {
     expect(calculationDateTrend(saved, "other")[0].score).toBe(1);
     expect(calculationDateTrend([attempt(1)], "")).toEqual([{ label: "2026-10-10", score: 3, elapsedSeconds: 260 }]);
   });
+  it("uses the first attempt of the earliest-started task per saved day across task IDs", () => {
+    const later = { ...attempt(1, 2, 120), taskId: "later" };
+    later.startedAt += 60_000;
+    const earliest = { ...attempt(2, 0, 80), taskId: "earliest" };
+    const redo = { ...attempt(3, 7, 45), taskId: "earliest" };
+    const nextDay = { ...attempt(1, 5, 90, "2026-10-12"), taskId: "different" };
+    expect(calculationDateTrend([later, earliest, redo, nextDay], null, "best")).toEqual([
+      { label: "2026-10-10", score: 0, elapsedSeconds: 80 },
+      { label: "2026-10-12", score: 5, elapsedSeconds: 90 },
+    ]);
+  });
+
   it("retains all loaded days beyond 30 and preserves a genuine saved zero", () => {
     const saved = Array.from({ length: 40 }, (_, i) => ({ ...attempt(1, i === 39 ? 0 : 7, 10, new Date(Date.UTC(2026, 0, i + 1)).toISOString().slice(0, 10)), taskId: "a" }));
     const trend = calculationDateTrend(saved, "a");
