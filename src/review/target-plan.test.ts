@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { getJstDay, jstDayNumber, nextProgress, reviewDueAt, sampleQuestions, selectQuestions, type Answer, type Progress } from "./model";
-import { activeTargetPlan, parseTargetPlan, targetCandidates, type TargetPlan } from "./target-plan";
+import { activeTargetPlan, dailyQuestionRank, parseTargetPlan, targetCandidates, type TargetPlan } from "./target-plan";
 const at = (s: string) => Date.parse(`${s}T12:00:00+09:00`);
 const answer = (day: string, correct = true, mode: Answer["mode"] = "daily", id = day): Answer => ({ id, uid: "a", sessionId: id, questionId: sampleQuestions[0].id, questionVersion: sampleQuestions[0].version, selectedIndex: 1, correct, answeredAt: at(day), elapsedMs: 1000, mode, prompt: "fictional", selected: "42", expected: "42", explanation: "fictional" });
 const plan: TargetPlan = { schemaVersion: 1, label: "架空テスト", testDay: "2027-02-01", items: sampleQuestions.slice(0, 2).map((q, i) => ({ questionId: q.id, questionVersion: q.version, priority: i + 1, reason: "架空の誤答を再確認しよう", evidence: "架空答案の観察", scopeBasis: "架空の範囲資料" })), gaps: ["記述は未確認"], notes: ["実資料ではない"] };
@@ -55,6 +55,43 @@ describe("JST spaced review and evidence-based selection", () => {
     expect(targetCandidates(pool, done, null, at("2026-11-02"))).toHaveLength(1);
     done.push(nextProgress(undefined, { ...answer("2026-11-02"), questionId: pool[4].id }));
     expect(targetCandidates(pool, done, null, at("2026-11-02"))).toEqual([]);
+  });
+
+  it("rotates equal-priority new questions by JST day without changing a same-day selection", () => {
+    const pool = Array.from({ length: 15 }, (_, i) => ({ ...sampleQuestions[i % sampleQuestions.length], id: `question_${String(i + 1).padStart(2, "0")}` }));
+    const day1 = at("2026-11-08"), day2 = at("2026-11-09");
+    const first = targetCandidates(pool, [], null, day1).map(c => c.question.id);
+    const reload = targetCandidates([...pool].reverse(), [], null, day1 + 1000).map(c => c.question.id);
+    const tomorrow = targetCandidates(pool, [], null, day2).map(c => c.question.id);
+    expect(first).toHaveLength(5);
+    expect(new Set(first).size).toBe(5);
+    expect(reload).toEqual(first);
+    expect(tomorrow).toHaveLength(5);
+    expect(tomorrow).not.toEqual(first);
+    expect(tomorrow.some(id => !first.includes(id))).toBe(true);
+    expect(dailyQuestionRank("question_01", getJstDay(day1))).toBe(dailyQuestionRank("question_01", getJstDay(day1 + 1000)));
+    expect(dailyQuestionRank("question_01", getJstDay(day1))).not.toBe(dailyQuestionRank("question_01", getJstDay(day2)));
+  });
+  it("keeps due reviews ahead of new rotations and never pads with early problems", () => {
+    const pool = Array.from({ length: 12 }, (_, i) => ({ ...sampleQuestions[i % sampleQuestions.length], id: `due-rotation-${i}` }));
+    const now = at("2026-11-08");
+    const due = nextProgress(undefined, { ...answer("2026-11-07", false), questionId: pool[0].id });
+    const early = nextProgress(undefined, { ...answer("2026-11-08", true), questionId: pool[1].id });
+    const original = structuredClone([due, early]);
+    const choices = targetCandidates(pool, [due, early], null, now);
+    expect(choices[0].question.id).toBe(pool[0].id);
+    expect(choices.map(c => c.question.id)).not.toContain(pool[1].id);
+    expect(choices).toHaveLength(5);
+    expect([due, early]).toEqual(original);
+    expect(targetCandidates(pool.slice(0, 2), [due, early], null, now).map(c => c.question.id)).toEqual([pool[0].id]);
+  });
+  it("cannot manufacture variety from a bank containing only five verified questions", () => {
+    const today = at("2026-11-08");
+    const questions = [...sampleQuestions];
+    expect(targetCandidates(questions, [], null, today)).toHaveLength(5);
+    expect(new Set(targetCandidates(questions, [], null, today).map(c => c.question.id))).toEqual(new Set(questions.map(q => q.id)));
+    const allJustAnswered = questions.map(q => nextProgress(undefined, { ...answer("2026-11-08", true), questionId: q.id }));
+    expect(targetCandidates(questions, allJustAnswered, null, at("2026-11-09"))).toEqual([]);
   });
   it("validates import boundaries, evidence, date, duplicates, and strips extra fields", () => {
     expect(parseTargetPlan(JSON.stringify({ ...plan, privateExtra: "not retained" }))).toEqual(plan);
