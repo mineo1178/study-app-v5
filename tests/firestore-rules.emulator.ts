@@ -1,6 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { deleteApp, initializeApp } from "firebase/app";
 import { collection, connectFirestoreEmulator, deleteDoc, doc, getDocFromServer, getDocsFromServer, getFirestore, setDoc, terminate, updateDoc } from "firebase/firestore";
+import { saveTestReflection } from "../src/test-reflection";
 import { seedFamily } from "./emulator-admin";
 import { commitStudySessionOperation, getStudySessionId, type SessionTask } from "../src/study-session";
 
@@ -79,6 +80,24 @@ describe("repository Firestore Rules", () => {
     expect((await getDocsFromServer(collection(member.db, `${root}/${name}`))).size).toBeGreaterThan(0);
     await deleteDoc(ref);
   });
+  it("saves a test reflection only for family members and merges changes to different fields", async () => {
+    const path = `${root}/tests/reflection`;
+    const ref = doc(member.db, path);
+    const score = { total4: { score: 320 } };
+    const first = { math: { good: "最後まで進めた" } };
+    const second = { japanese: { nextTry: "見直す" } };
+    const active = () => true;
+    await setDoc(ref, score);
+    await saveTestReflection(ref, {}, first, active);
+    await saveTestReflection(ref, {}, second, active);
+    await expect(saveTestReflection(ref, first, { math: { good: "   " } }, active)).rejects.toThrow("Empty reflection");
+    await expect(saveTestReflection(doc(member.db, `${path}-missing`), {}, first, active)).rejects.toThrow("Test unavailable");
+    for (const client of [anonymous, outsider]) {
+      await denied(saveTestReflection(doc(client.db, path), {}, first, active));
+    }
+    expect((await getDocFromServer(ref)).data()).toEqual({ ...score, reflection: { ...first, ...second } });
+  });
+
   const records = [
     `${root}/rewardLedger/reward`, `${game}/weeks/week`, `${game}/performances/performance`,
     `${game}/rivalBattles/battle`, `${game}/gachaWeeks/week`, `${game}/gachaDraws/draw`, `${game}/gachaExchanges/exchange`,

@@ -33,7 +33,7 @@ try {
   vite = await createServer({ logLevel: "error", configFile: join(root, "tests/vite-timer.config.ts") }); await vite.listen();
   const suites = process.argv.slice(2); if (!suites.length) suites.push("auth");
   for (const suite of suites) {
-    const file = { encore: "test-encore-browser.mjs", auth: "test-auth-browser.mjs", timer: "test-timer-browser.mjs", calculation: "test-calculation-browser.mjs", review: "test-review-browser.mjs", roles: "test-review-role-browser.mjs", v187: "test-timer-browser.mjs" }[suite];
+    const file = { encore: "test-encore-browser.mjs", auth: "test-auth-browser.mjs", timer: "test-timer-browser.mjs", calculation: "test-calculation-browser.mjs", review: "test-review-browser.mjs", roles: "test-review-role-browser.mjs", reflections: "test-reflections-browser.mjs", v187: "test-timer-browser.mjs" }[suite];
     if (!file) throw new Error("Unknown suite");
     let source=readFileSync(join(root,'scripts',file),'utf8');for(const d of ['.auth-results.local','.timer-browser-results.local','.calculation-browser-results.local','.encore-results.local','.review-results.local','.review-role-results.local'])source=source.replaceAll(d,join(resultRoot,d).replaceAll('\\','/'));
     const script=join(resultRoot,file);writeFileSync(script,source);

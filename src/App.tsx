@@ -1,6 +1,8 @@
 import { commitTokyoDomePerformance, prepareTokyoDomePerformance, type TokyoDomeResult } from "./game/tokyo-dome";
 import { getStudyRewardPreview } from "./game/study-reward-preview";
 import { DailyCalculation, CalculationInput } from "./components/DailyCalculation";
+import { TestReflections } from "./components/TestReflections";
+import { mergeReflection, saveTestReflection, type TestReflection } from "./test-reflection";
 import { ReviewWorkspace } from "./components/ReviewWorkspace";
 import { isCalculationTask } from "./daily-calculation-view";
 import type { CalculationAttempt } from "./daily-calculation";
@@ -173,7 +175,7 @@ if (hasFirebaseConfig) {
 // ==========================================
 
 const FAMILY_ID = "oomine-study-2026";
-const APP_VERSION = "v1.88.5";
+const APP_VERSION = "v1.88.6";
 
 // Firestore Path 固定（変更禁止）
 // 実DB構造:
@@ -257,6 +259,7 @@ interface Task extends StudyObservation {
 }
 
 interface TestResult {
+  reflection?: TestReflection;
   id: string;
   date: string;
   name: string;
@@ -2438,7 +2441,7 @@ const DailyView = ({
   );
 };
 
-const TestsView = ({ tests, onSaveTest, onDeleteTest }: any) => {
+const TestsView = ({ tests, onSaveTest, onDeleteTest, reflections }: { tests: TestResult[]; onSaveTest: (test: TestResult) => void; onDeleteTest: (id: string) => void; reflections: React.ReactNode }) => {
   const [selectedSubjects, setSelectedSubjects] = useState<string[]>(["4ko"]);
   const [isModalOpen, setModalOpen] = useState(false);
   const [editingTest, setEditingTest] = useState<TestResult | null>(null);
@@ -2544,6 +2547,7 @@ const TestsView = ({ tests, onSaveTest, onDeleteTest }: any) => {
 
       <div className="design22-tests-content flex-1 overflow-y-auto px-3 py-4 md:px-6 md:py-6 lg:px-8 lg:py-8 space-y-5 md:space-y-6 lg:space-y-8 pb-20 md:pb-32">
         {producerBonus && <div className="rounded-2xl bg-violet-50 border border-violet-200 p-4"><p className="font-black text-violet-800">プロデューサーブースト（{producerBonus.kind}）</p><p className="mt-1 text-sm text-violet-700">{producerBonus.previous === undefined ? "次回の同じテストから上昇ボーナスを判定します" : `${producerBonus.previous.toFixed(1)} → ${producerBonus.current.toFixed(1)}（${producerBonus.improvement >= 0 ? "+" : ""}${producerBonus.improvement.toFixed(1)}）`}</p><p className="mt-2 font-bold text-violet-900">現在のブースト：+{producerBonus.boost}% {producerBonus.gap > 0 && `／次のBONUSまであと偏差値 +${producerBonus.gap.toFixed(1)}`}</p></div>}
+        {reflections}
         {chartData.length < 2 || selectedSubjects.length === 0 ? (
           <section className="design22-test-single" aria-label="テストの記録">
             {selectedSubjects.length === 0 ? (
@@ -3775,7 +3779,7 @@ function SessionApp({ session, logout, initialSample }: { session?: FamilySessio
     setTests((prev) => {
       const existing = prev.find((t) => t.id === testResult.id);
       if (existing) {
-        return prev.map((t) => (t.id === testResult.id ? testResult : t));
+        return prev.map((t) => (t.id === testResult.id ? { ...testResult, reflection: t.reflection } : t));
       }
       return [testResult, ...prev];
     });
@@ -3802,6 +3806,15 @@ function SessionApp({ session, logout, initialSample }: { session?: FamilySessio
     } catch (e) {
       setSyncState("offline");
     }
+  };
+
+  const saveReflection = async (id: string, original: TestReflection, draft: TestReflection) => {
+    const database = getSafeDb();
+    if (!isSampleMode && !database) throw new Error("Inactive session");
+    const reflection = isSampleMode
+      ? mergeReflection(tests.find(test => test.id === id)?.reflection ?? {}, original, draft)
+      : await saveTestReflection(getTestDoc(database!, id), original, draft, () => getSafeDb() === database);
+    setTests(current => current.map(test => test.id === id ? { ...test, reflection } : test));
   };
 
   const deleteTestFromCloud = (id: string) => {
@@ -4528,6 +4541,7 @@ function SessionApp({ session, logout, initialSample }: { session?: FamilySessio
             tests={tests}
             onSaveTest={saveTestToCloud}
             onDeleteTest={deleteTestFromCloud}
+            reflections={<TestReflections tests={tests} onSave={saveReflection} />}
           />
         ) : activeTab === "review" ? (
           <ReviewWorkspace key={`${user?.uid ?? "sample"}-${isSampleMode}`} familyId={FAMILY_ID} sample={isSampleMode} session={session} enabled={isSampleMode || import.meta.env.VITE_REVIEW_STORAGE_ENABLED === "true"} />
