@@ -18,6 +18,21 @@ export function parseTargetPlan(raw: string): TargetPlan {
     items: p.items.map(i => ({ questionId: i.questionId, questionVersion: i.questionVersion, priority: i.priority, reason: i.reason, evidence: i.evidence, scopeBasis: i.scopeBasis })), gaps: p.gaps, notes: p.notes };
 }
 const classificationRank = (value: string) => ["observed_error", "recurring_error_pattern", "needs_retention_check", "improved_in_new_test", "demonstrated_strength", "not_assessed_for_target_scope"].indexOf(value);
+
+// Stable within the same JST day and UID-independent: do not reshuffle on reload.
+// Only break ties *after* the existing due-date, correctness, and plan-priority rules.
+// This rotates eligible new questions without pulling not-yet-due reviews forward.
+export function dailyQuestionRank(questionId: string, jstDay: string): number {
+  let hash = 2166136261;
+  const value = `${jstDay}:${questionId}`;
+  for (let index = 0; index < value.length; index++) hash = Math.imul(hash ^ value.charCodeAt(index), 16777619);
+  hash ^= hash >>> 16;
+  hash = Math.imul(hash, 0x7feb352d);
+  hash ^= hash >>> 15;
+  hash = Math.imul(hash, 0x846ca68b);
+  hash ^= hash >>> 16;
+  return hash >>> 0;
+}
 export function activeTargetPlan(plan: TargetPlan | null, now: number): TargetPlan | null {
   return plan && getJstDay(now) <= plan.testDay ? plan : null;
 }
@@ -36,7 +51,9 @@ export function targetCandidates(questions: Question[], progress: Progress[], pl
   }).sort((a, b) => (a.dueAt === null ? 1 : 0) - (b.dueAt === null ? 1 : 0) ||
     (plan?.integration && Date.parse(plan.testDay) - Date.parse(today) <= 3 * 86400000 ? Number(a.stage >= 3) - Number(b.stage >= 3) : 0) ||
     (plan?.integration ? Number(b.wrong) - Number(a.wrong) || a.priority - b.priority || classificationRank(a.classification) - classificationRank(b.classification) : 0) ||
-    (a.dueAt ?? 0) - (b.dueAt ?? 0) || a.priority - b.priority || a.question.id.localeCompare(b.question.id));
+    (a.dueAt ?? 0) - (b.dueAt ?? 0) || a.priority - b.priority ||
+    dailyQuestionRank(a.question.id, today) - dailyQuestionRank(b.question.id, today) ||
+    a.question.id.localeCompare(b.question.id));
   const policy = plan?.integration?.source.reviewPolicy;
   const selected: typeof pool = [], topicCounts = new Map<string, number>();
   if (policy) for (const p of progress.filter(p => getJstDay(p.latestAt) === today)) {
