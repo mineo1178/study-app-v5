@@ -160,7 +160,7 @@ export function TestReview({ db, familyId, uid, sample, session, enabled }: { db
       <div className="space-y-3 rounded-2xl border border-blue-100 bg-white p-4">
         <h3 className="text-lg font-black">今日の5問</h3><p className="text-sm text-slate-600">最大5問。復習期限が来た問題を先に、次にテストとの関連と確認の優先度で選ぶよ。期限前の問題で数を埋めません。</p>
         <p className="text-sm">利用できる問題：{availableQuestions.length}問 ／ 今日の候補：{candidates.length}問</p>
-        <p className="text-xs text-slate-600">候補の内訳：復習期限が来た問題 {candidates.filter(c => c.dueAt !== null).length}問 ／ 初めての確認 {candidates.filter(c => c.dueAt === null).length}問。同じ条件の候補が多い場合は、JSTの日付で出題を入れ替えます。同じ日に再表示しても順番は変わりません。</p>
+        <p className="text-xs text-slate-600">候補の内訳：復習期限が来た問題 {candidates.filter(c => c.dueAt !== null).length}問 ／ 初めての確認 {candidates.filter(c => c.dueAt === null).length}問。同じ条件の候補が多い場合は、JSTの日付で出題を入れ替えます。回答状況が同じなら、同じ日に再表示しても順番は変わりません。</p>
         {availableQuestions.length > 0 && availableQuestions.length <= 5 && <p className="rounded-xl bg-amber-50 p-3 text-xs text-amber-900">公開されている問題は{availableQuestions.length}問です。問題数が5問以下では毎日別の5問を用意できません。保護者が内容を確認した問題の追加登録が必要です。</p>}
         {activePlan && <p className="text-sm font-bold">{activePlan.label}（{activePlan.testDay}）向け · この端末の計画</p>}
         {!activePlan && <p className="text-xs text-amber-800">{plan ? "計画の試験日が過ぎたため、一般復習に戻っています。復習期限は変わりません。保護者と次の計画を確認しよう。" : "一般復習：次回テストの範囲は未設定です。保護者の根拠付き計画を読み込むと、対象を絞れます。"}</p>}
