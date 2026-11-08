@@ -84,23 +84,29 @@ try {
   results.push('single UID; trusted fixture registration; no live management UI; 320/390 navigation');
   // Start in the past so >3min elapsed can be verified without forging future answer timestamps.
   await page.clock.fastForward(200000);
-  await panel().getByRole("button", { name: "今日の5問を始める", exact: true }).click();
+  // One question was answered earlier on this same JST day: 4 of the 5 daily slots remain.
+  await panel().getByText("利用できる問題：5問 ／ 今日の候補：4問", { exact: true }).waitFor();
+  await panel().getByRole("button", { name: "今日の4問を始める", exact: true }).click();
   assert.equal(await panel().getByRole("button", { name: "回答を決めて次へ", exact: true }).isDisabled(), true);
   await answer(false, 1);
   await page.getByRole("button", { name: "成績", exact: true }).click(); await tab().click(); await waitLoaded();
   await page.clock.fastForward(190000);
-  await panel().getByText(/2 \/ 5 問 · 3分/).waitFor();
+  await panel().getByText(/2 \/ 4 問 · 3分/).waitFor();
   await page.reload(); await tab().click(); await waitLoaded();
-  await panel().getByText(/2 \/ 5 問/).waitFor(); await answer(false, 4); await panel().getByText("0 / 5 問 正解", { exact: true }).waitFor();
+  await panel().getByText(/2 \/ 4 問/).waitFor(); await answer(false, 3); await panel().getByText("0 / 4 問 正解", { exact: true }).waitFor();
   await noOverflow(320); await page.screenshot({ path: ".review-results.local/320-result.png", fullPage: true });
   const draft = await page.evaluate(() => JSON.parse(localStorage.getItem(Object.keys(localStorage).find(k => k.startsWith("study-review-v1:") && k.endsWith(":draft")))));
   await context.setOffline(true); await panel().getByRole("button", { name: "結果を保存する（失敗時は再試行）", exact: true }).click();
   await panel().getByRole("alert").filter({ hasText: "保存できませんでした" }).waitFor(); await context.setOffline(false);
-  await save(); await reviewCall("replay", draft); const saved = await reviewCall("inspect"); assert.equal(saved.history.length, 6);
+  await save(); await reviewCall("replay", draft); const saved = await reviewCall("inspect"); assert.equal(saved.history.length, 5);
   assert.equal(saved.progress.length, 5); assert.ok(saved.progress.every(p => !p.latestCorrect));
-  results.push("five questions; zero score; >3min; tab switch/reload draft restore; explanation; offline save retry; duplicate save");
-  await panel().getByRole("button", { name: "間違えた問題をもう一度", exact: true }).click(); await answer(true, 5); await panel().getByText("5 / 5 問 正解", { exact: true }).waitFor();
-  await save(); await home(); await panel().getByText("今は間違い直しの候補はありません。", { exact: true }).waitFor();
+  results.push("one already answered plus four remaining daily slots; zero score; >3min; tab switch/reload draft restore; explanation; offline save retry; duplicate save");
+  await panel().getByRole("button", { name: "間違えた問題をもう一度", exact: true }).click(); await answer(true, 4); await panel().getByText("4 / 4 問 正解", { exact: true }).waitFor();
+  await save(); await home();
+  // The question answered incorrectly before the four-question session stays wrong.
+  // It is not due again until tomorrow, and same-day retry must not pull it forward.
+  await panel().getByText("1問を確認中。期限と対策範囲に合う日に取り組もう。", { exact: true }).waitFor();
+  assert.equal(await panel().getByRole("button", { name: "間違い直しを始める", exact: true }).isDisabled(), true);
   await panel().getByText("復習問題一覧（5問）", { exact: true }).click(); await panel().getByText("直後の再挑戦で正解・後日も確認しよう", { exact: true }).first().waitFor();
   await noOverflow(390); await page.screenshot({ path: ".review-results.local/390-home.png", fullPage: true });
   const after = await invoke("read"); const { uid: beforeUid, ...beforeShared } = before; const { uid: afterUid, ...afterShared } = after; void beforeUid; void afterUid;
@@ -109,15 +115,15 @@ try {
   results.push("existing grade input/edit/reload and review isolation");
   assert.ok(await reviewCall("foreignFamilyDenied"));
   await login(0); await tab().click(); await waitLoaded();
-  await panel().getByText("利用できる問題：0問（今回は0問。重複出題しません）", { exact: true }).waitFor();
+  await panel().getByText("利用できる問題：0問 ／ 今日の候補：0問", { exact: true }).waitFor();
   assert.equal(await panel().getByText("保護者の確認事項", { exact: false }).count(), 0);
   assert.ok(await reviewCall("crossUidDenied", accounts[1].uid));
   await login(2); await page.getByText("このアカウントでは利用できません。", { exact: true }).waitFor(); assert.equal(await page.locator("[data-protected-session]").count(), 0);
   await login(1); await tab().click(); await waitLoaded();
   // Saved result can be shown after reload; replay remains idempotent.
   if (await panel().getByRole("button", { name: "結果を保存する（失敗時は再試行）", exact: true }).count()) { await save(); await home(); }
-  assert.equal((await reviewCall("inspect")).history.length, 11);
-  results.push("five correct retry; progress improvement; same-question retry label; no study/calculation/game/reward changes; UID/family separation and restoration");
+  assert.equal((await reviewCall("inspect")).history.length, 9);
+  results.push("four correct retry while prior wrong question remains due tomorrow; progress improvement; no study/calculation/game/reward changes; UID/family separation and restoration");
   // Exercise failed reads without using a cached snapshot as success.
   await context.setOffline(true); await panel().getByRole("button", { name: "復習データを再読込", exact: true }).click();
   await panel().getByRole("alert").filter({ hasText: "読み込めませんでした" }).waitFor();
