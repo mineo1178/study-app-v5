@@ -107,7 +107,7 @@ try {
   // It is not due again until tomorrow, and same-day retry must not pull it forward.
   await panel().getByText("1問を確認中。期限と対策範囲に合う日に取り組もう。", { exact: true }).waitFor();
   assert.equal(await panel().getByRole("button", { name: "間違い直しを始める", exact: true }).isDisabled(), true);
-  await panel().getByText("復習問題一覧（5問）", { exact: true }).click(); await panel().getByText("直後の再挑戦で正解・後日も確認しよう", { exact: true }).first().waitFor();
+  await panel().getByText("復習問題一覧（5問）", { exact: true }).click(); await panel().getByText(/^直後の再挑戦で正解・後日も確認しよう ／ 次の確認 /).first().waitFor();
   await noOverflow(390); await page.screenshot({ path: ".review-results.local/390-home.png", fullPage: true });
   const after = await invoke("read"); const { uid: beforeUid, ...beforeShared } = before; const { uid: afterUid, ...afterShared } = after; void beforeUid; void afterUid;
   assert.deepEqual(afterShared, beforeShared, "review must not change study/calculation/game rewards");
