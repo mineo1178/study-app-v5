@@ -59,7 +59,7 @@ describe("JST spaced review and evidence-based selection", () => {
 
   it("rotates equal-priority new questions by JST day without changing a same-day selection", () => {
     const pool = Array.from({ length: 15 }, (_, i) => ({ ...sampleQuestions[i % sampleQuestions.length], id: `question_${String(i + 1).padStart(2, "0")}` }));
-    const day1 = at("2026-11-08"), day2 = at("2026-11-09");
+    const day2 = Date.parse("2026-11-09T00:00:00+09:00"), day1 = day2 - 2000;
     const first = targetCandidates(pool, [], null, day1).map(c => c.question.id);
     const reload = targetCandidates([...pool].reverse(), [], null, day1 + 1000).map(c => c.question.id);
     const tomorrow = targetCandidates(pool, [], null, day2).map(c => c.question.id);
@@ -81,7 +81,7 @@ describe("JST spaced review and evidence-based selection", () => {
     const choices = targetCandidates(pool, [due, early], null, now);
     expect(choices[0].question.id).toBe(pool[0].id);
     expect(choices.map(c => c.question.id)).not.toContain(pool[1].id);
-    expect(choices).toHaveLength(5);
+    expect(choices).toHaveLength(4); // One question already counts toward today's limit.
     expect([due, early]).toEqual(original);
     expect(targetCandidates(pool.slice(0, 2), [due, early], null, now).map(c => c.question.id)).toEqual([pool[0].id]);
   });
