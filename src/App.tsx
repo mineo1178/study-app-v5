@@ -175,7 +175,7 @@ if (hasFirebaseConfig) {
 // ==========================================
 
 const FAMILY_ID = "oomine-study-2026";
-const APP_VERSION = "v1.88.7";
+const APP_VERSION = "v1.88.8";
 
 // Firestore Path 固定（変更禁止）
 // 実DB構造:

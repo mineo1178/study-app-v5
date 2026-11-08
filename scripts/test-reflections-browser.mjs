@@ -5,7 +5,7 @@ const require = createRequire(import.meta.url);
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE_PATH || "playwright");
 const base = "http://127.0.0.1:5178";
 const root = "http://127.0.0.1:8086/v1/projects/demo-study-hotfix/databases/(default)/documents/families/hotfix-study-family";
-const email = "reflections@example.invalid";
+const email = `reflections-${Date.now()}@example.invalid`;
 const password = "emulator-only-password";
 const account = await fetch("http://127.0.0.1:9098/identitytoolkit.googleapis.com/v1/accounts:signUp?key=emulator-only", {
   method: "POST",
@@ -27,7 +27,7 @@ assert.equal((await admin("", "PATCH", { memberUids: [uid] })).status, 200);
 const subjects = Object.fromEntries(["math", "japanese", "science", "social"].map(key => [key, { score: 80, avg: 70, dev: 55 }]));
 const test = { name: "同じ名前のテスト", type: "curriculum", subjects, total4: { score: 320, avg: 280, dev: 55, rank: "10" } };
 const testA = { ...test, date: "2025/09/01" };
-const testB = { ...test, date: "2025/10/01", total4: { ...test.total4, dev: 57 } };
+const testB = { ...test, date: "2025/10/01", subjects: { ...subjects, japanese: { ...subjects.japanese, dev: 58 } }, total4: { ...test.total4, dev: 57 } };
 assert.equal((await admin("/tests/A", "PATCH", testA)).status, 200);
 assert.equal((await admin("/tests/B", "PATCH", testB)).status, 200);
 
@@ -41,7 +41,9 @@ try {
   page.setDefaultTimeout(15000);
   const panel = page.locator("section").filter({ has: page.getByRole("heading", { name: "テストの振り返り", exact: true }) });
   const selector = panel.getByLabel("振り返るテスト");
-  const history = panel.locator("details");
+  const fullHistory = panel.locator("details").filter({ has: page.getByText("すべての振り返り履歴", { exact: true }) });
+  const history = fullHistory.locator("details");
+  const past = panel.getByRole("region", { name: "過去の振り返り", exact: true });
   const good = panel.getByRole("textbox", { name: "よかった点" });
   const bad = panel.getByRole("textbox", { name: "悪かった点" });
   const save = panel.getByRole("button", { name: "振り返りを保存", exact: true });
@@ -74,6 +76,11 @@ try {
   assert.equal(await history.count(), 1);
 
   await selector.selectOption("B");
+  assert.match(await past.innerText(), /算数の偏差値 55.*最後まで進めた/s);
+  await panel.getByRole("button", { name: "国語", exact: true }).click();
+  assert.equal(await panel.getByText("偏差値 58", { exact: true }).count(), 1);
+  assert.match(await past.innerText(), /この教科の過去の振り返りはまだありません/);
+  await panel.getByRole("button", { name: "算数", exact: true }).click();
   await good.fill("見直しができた");
   assert.equal((await admin("/tests/B", "DELETE")).status, 200);
   await save.click();
@@ -83,6 +90,7 @@ try {
   await panel.getByRole("button", { name: "もう一度保存する", exact: true }).click();
   await saved.waitFor();
   assert.equal(await history.count(), 2);
+  await fullHistory.locator(":scope > summary").click();
   assert.match(await history.first().locator("summary").innerText(), /2025\/10\/01.*同じ名前のテスト/s);
 
   const older = history.last();
@@ -114,20 +122,19 @@ try {
     await page.getByLabel("テスト名", { exact: true }).fill(name);
     await page.getByRole("button", { name: "追加する", exact: true }).click();
   };
-  const recent = panel.getByRole("region", { name: "最近のテスト" });
+  const pending = selector.locator("option").filter({ hasText: "2025/11/02 未確定テスト" });
   const boost = page.getByText("現在のブースト：", { exact: false });
   const beforeBoost = await boost.innerText();
 
   await openRegistration();
   await enterTest("2025-11-02", "未確定テスト");
-  const pending = recent.getByRole("button", { name: /2025\/11\/02 未確定テスト/ });
-  await pending.waitFor();
-  assert.match(await pending.innerText(), /成績未登録.*振り返り未登録/);
+  await pending.waitFor({ state: "attached" });
   assert.equal(await boost.innerText(), beforeBoost);
   assert.equal(await page.locator(".design22-chart-heading").getByText("2件の記録 · 偏差値").count(), 1);
-  await pending.click();
-  const pendingId = await selector.inputValue();
+  const pendingId = await pending.getAttribute("value");
   assert.ok(pendingId && pendingId !== "A" && pendingId !== "B");
+  await selector.selectOption(pendingId);
+  assert.equal(await panel.getByText("偏差値 未登録", { exact: true }).count(), 1);
   const pendingData = await (await admin("/tests/" + pendingId, "GET")).json();
   assert.equal(pendingData.fields.total4, undefined);
   assert.equal(pendingData.fields.subjects, undefined);
@@ -143,18 +150,18 @@ try {
 
   await openRegistration();
   await enterTest("2025-11-01", "未確定テスト");
-  await recent.getByRole("button", { name: /2025\/11\/01 未確定テスト/ }).waitFor();
-  assert.deepEqual((await recent.getByRole("button").allTextContents()).map(text => text.slice(0, 10)),
+  await selector.locator("option").filter({ hasText: "2025/11/01 未確定テスト" }).waitFor({ state: "attached" });
+  assert.deepEqual((await selector.locator("option").allTextContents()).slice(1, 4).map(text => text.slice(0, 10)),
     ["2025/11/02", "2025/11/01", "2025/10/01"]);
 
-  await pending.click();
+  await selector.selectOption(pendingId);
   await panel.getByRole("button", { name: "このテストの成績を入力" }).click();
   await page.getByLabel("4科の偏差値").fill("61");
   await page.getByText("得点・平均点・順位（任意）").click();
   await page.getByLabel("4科の得点", { exact: true }).fill("0");
   await page.getByRole("button", { name: "更新する", exact: true }).click();
   await page.getByRole("button", { name: "テスト成績を編集" }).waitFor();
-  assert.match(await pending.innerText(), /成績あり.*振り返り済み/);
+  assert.match(await panel.getByLabel("偏差値サマリー").innerText(), /4科総合\s*61/);
   assert.equal(await selector.inputValue(), pendingId);
   assert.equal(await good.inputValue(), "成績が出る前に書いた");
   const graded = await (await admin("/tests/" + pendingId, "GET")).json();
@@ -165,21 +172,64 @@ try {
 
   await page.reload();
   await openTests();
-  await pending.click();
+  await selector.selectOption(pendingId);
   assert.equal(await selector.inputValue(), pendingId);
   assert.equal(await good.inputValue(), "成績が出る前に書いた");
   assert.equal(await selector.locator('option').count(), 5);
   assert.equal(await history.count(), 3);
 
+  for (const [id, date, good] of [
+    ["older", "2025/08/01", "途中式を書く\n式を見直す"],
+    ["fourth", "2025/07/01", "4件目"],
+    ["same-day", "2025/11/02", "同日の記録"],
+    ["newer", "2025/11/03", "新しい記録"],
+  ]) {
+    assert.equal((await admin("/tests/" + id, "PATCH", {
+      name: id, type: "curriculum", date, reflection: { math: { good } },
+    })).status, 200);
+  }
+  await page.reload();
+  await openTests();
+  await selector.locator('option[value="older"]').waitFor({ state: "attached" });
+  await selector.selectOption(pendingId);
+  const cards = past.getByRole("article");
+  assert.deepEqual(await cards.getByRole("heading").allTextContents(), [
+    "2025/10/01 同じ名前のテスト", "2025/09/01 同じ名前のテスト", "2025/08/01 older",
+  ]);
+  assert.match(await cards.last().innerText(), /算数の偏差値 未登録.*途中式を書く\n式を見直す.*未記入/s);
+  const carousel = cards.first().locator("..");
+  assert.equal(await carousel.evaluate(element => element.scrollWidth > element.clientWidth), true);
+  const firstCard = await cards.first().boundingBox();
+  const secondCard = await cards.nth(1).boundingBox();
+  const strip = await carousel.boundingBox();
+  assert.ok(firstCard.x < secondCard.x && secondCard.x < strip.x + strip.width);
+  await carousel.evaluate(element => element.scrollTo({ left: element.scrollWidth, behavior: "instant" }));
+  assert.ok(await carousel.evaluate(element => element.scrollLeft) > 0);
+
+  await panel.getByRole("button", { name: "国語", exact: true }).click();
+  assert.equal(await good.inputValue(), "");
+  assert.equal(await panel.getByText("偏差値 未登録", { exact: true }).count(), 1);
+  assert.match(await past.innerText(), /この教科の過去の振り返りはまだありません/);
+  await panel.getByRole("button", { name: "算数", exact: true }).click();
+  assert.equal(await good.inputValue(), "成績が出る前に書いた");
+
   const bounds = await panel.boundingBox();
   assert.ok(bounds && bounds.x >= 0 && bounds.x + bounds.width <= 375);
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), 375);
+  for (const width of [768, 1280]) {
+    await page.setViewportSize({ width, height: 900 });
+    const editor = await panel.locator("form").boundingBox();
+    const reference = await past.boundingBox();
+    assert.ok(editor.x + editor.width <= reference.x && editor.y === reference.y);
+    assert.ok((await cards.first().boundingBox()).y < (await cards.nth(1).boundingBox()).y);
+  }
   for (const [id, original] of [["A", testA], ["B", testB]]) {
     const { fields } = await (await admin("/tests/" + id, "GET")).json();
     delete fields.reflection;
     assert.deepEqual(fields, encode(original).mapValue.fields);
   }
   assert.deepEqual(errors, []);
-  console.log("375px: save, drafts, retry, history, reload, relogin, unchanged test scores");
+  console.log("375/768/1280px: layout, history selection, subject switching, saved grades, drafts, save/retry/edit");
 } finally {
   await browser.close();
 }

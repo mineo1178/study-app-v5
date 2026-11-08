@@ -4,8 +4,22 @@ import { hasReflection, reflectionFields, reflectionSubjects, type TestReflectio
 const subjects = { math: "算数", japanese: "国語", science: "理科", social: "社会" };
 const fields = { good: "よかった点", bad: "悪かった点", nextTry: "次回に向けてTryすること" };
 
-type Test = { id: string; name: string; date: string; reflection?: TestReflection; hasGrades: boolean };
+type Subject = typeof reflectionSubjects[number];
+type Grade = { dev?: number | null };
+type Test = {
+  id: string;
+  name: string;
+  date: string;
+  reflection?: TestReflection;
+  hasGrades: boolean;
+  total4?: Grade;
+  subjects?: Partial<Record<Subject, Grade>>;
+};
 type Draft = { original: TestReflection; values: TestReflection };
+
+const testDate = (test: Test) => Date.parse(test.date.replace(/-/g, "/"));
+const deviation = (grade?: Grade) =>
+  typeof grade?.dev === "number" && Number.isFinite(grade.dev) ? grade.dev : "未登録";
 
 export function TestReflections({ tests, onSave, onEditGrades, ref }: {
   tests: Test[];
@@ -14,14 +28,25 @@ export function TestReflections({ tests, onSave, onEditGrades, ref }: {
   onSave: (id: string, original: TestReflection, draft: TestReflection) => Promise<void>;
 }) {
   const [selectedId, setSelectedId] = useState("");
-  const [subject, setSubject] = useState<typeof reflectionSubjects[number]>("math");
+  const [subject, setSubject] = useState<Subject>("math");
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [status, setStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const saving = useRef(false);
   const selector = useRef<HTMLSelectElement>(null);
-  const ordered = [...tests].sort((a, b) => Date.parse(b.date) - Date.parse(a.date));
+  const ordered = [...tests].sort((a, b) => testDate(b) - testDate(a));
   const selected = ordered.find(test => test.id === selectedId);
   const history = ordered.filter(test => hasReflection(test.reflection));
+  const past = new Map<string, Test>();
+  if (selected) {
+    const selectedDate = testDate(selected);
+    for (const test of history) {
+      if (test.id !== selected.id && testDate(test) < selectedDate && !past.has(test.id)
+        && hasReflection({ [subject]: test.reflection?.[subject] })) {
+        past.set(test.id, test);
+        if (past.size === 3) break;
+      }
+    }
+  }
   const draft = drafts[selectedId];
   const values = draft?.values ?? selected?.reflection ?? {};
   const busy = status === "saving";
@@ -61,20 +86,6 @@ export function TestReflections({ tests, onSave, onEditGrades, ref }: {
   return (
     <section className="min-w-0 space-y-4 rounded-2xl border border-slate-200 bg-white p-4 text-slate-700">
       <h3 className="font-bold">テストの振り返り</h3>
-      {ordered.length > 0 && (
-        <section className="space-y-2" aria-label="最近のテスト">
-          <h4 className="text-sm font-bold">最近のテスト</h4>
-          {ordered.slice(0, 3).map(test => (
-            <button key={test.id} type="button" disabled={busy} onClick={() => openTest(test.id)}
-              className="block min-h-11 w-full rounded-lg bg-slate-50 px-3 py-2 text-left hover:bg-blue-50">
-              <span className="block break-words text-sm font-bold">{test.date} {test.name}</span>
-              <span className="block text-xs text-slate-600">
-                {test.hasGrades ? "成績あり" : "成績未登録"} ・ {hasReflection(test.reflection) ? "振り返り済み" : "振り返り未登録"}
-              </span>
-            </button>
-          ))}
-        </section>
-      )}
       {ordered.length === 0 ? <p className="text-sm">テスト記録を追加すると、振り返りを書けます。</p> : (
         <label className="block text-sm font-medium">
           振り返るテスト
@@ -86,7 +97,19 @@ export function TestReflections({ tests, onSave, onEditGrades, ref }: {
         </label>
       )}
       {selected && (
-        <form className="space-y-3" onSubmit={event => { event.preventDefault(); void save(); }}>
+        <div className="space-y-3">
+          <dl aria-label="偏差値サマリー" className="grid grid-cols-5 gap-1 rounded-lg bg-slate-50 py-2 text-center text-xs">
+            <div>
+              <dt>4科総合</dt>
+              <dd className="mt-1 font-bold">{deviation(selected.total4)}</dd>
+            </div>
+            {reflectionSubjects.map(key => (
+              <div key={key}>
+                <dt>{subjects[key]}</dt>
+                <dd className="mt-1 font-bold">{deviation(selected.subjects?.[key])}</dd>
+              </div>
+            ))}
+          </dl>
           <button type="button" disabled={busy} onClick={() => onEditGrades(selected.id)}
             className="min-h-11 rounded-lg bg-blue-50 px-3 text-sm font-bold text-blue-700">
             {selected.hasGrades ? "テスト成績を編集" : "このテストの成績を入力"}
@@ -99,66 +122,98 @@ export function TestReflections({ tests, onSave, onEditGrades, ref }: {
               </button>
             ))}
           </div>
-          <fieldset disabled={busy} className="min-w-0 space-y-3">
-            {reflectionFields.map(field => (
-              <label key={field} className="block text-sm font-medium">
-                {fields[field]}
-                <textarea value={values[subject]?.[field] ?? ""} rows={3} maxLength={1000}
-                  onChange={event => {
-                    const value = event.target.value;
-                    setDrafts(current => ({
-                      ...current,
-                      [selected.id]: {
-                        original: draft?.original ?? selected.reflection ?? {},
-                        values: { ...values, [subject]: { ...values[subject], [field]: value } },
-                      },
-                    }));
-                    setStatus("idle");
-                  }}
-                  className="mt-1 block w-full rounded-lg border border-slate-300 p-2 text-base" />
-              </label>
-            ))}
-          </fieldset>
-          <button type="submit" disabled={busy || !draft || !hasReflection(values)}
-            className="min-h-11 rounded-lg bg-blue-600 px-4 font-bold text-white disabled:opacity-50">
-            {busy ? "保存中…" : status === "error" ? "もう一度保存する" : "振り返りを保存"}
-          </button>
-          {draft && !hasReflection(values) && <p className="text-sm">1項目以上書くと保存できます。</p>}
-          {status === "saved" && <p role="status" className="text-sm text-emerald-700">振り返りを保存しました。</p>}
-          {status === "error" && <p role="alert" className="text-sm text-red-700">保存できませんでした。入力は残っています。接続を確認して、もう一度お試しください。</p>}
-        </form>
-      )}
-      <h4 className="text-sm font-bold">振り返りの履歴</h4>
-      {history.length === 0 && <p className="text-sm">保存した振り返りがここに表示されます。</p>}
-      {history.map(test => (
-        <details key={test.id} className="min-w-0 rounded-xl border border-slate-200 px-3">
-          <summary className="min-h-11 cursor-pointer break-words py-2 font-bold">
-            {test.date} {test.name}
-            <span className="block text-sm font-medium text-slate-600">
-              {reflectionSubjects.filter(key => hasReflection({ [key]: test.reflection?.[key] })).map(key => subjects[key]).join("・")}
-            </span>
-          </summary>
-          <div className="space-y-3 pb-3">
-            {reflectionSubjects.map(key => (
-              <div key={key} className="rounded-lg bg-slate-50 p-3">
-                <h5 className="font-bold">{subjects[key]}</h5>
-                <dl className="space-y-2 text-sm">
-                  {reflectionFields.map(field => (
-                    <div key={field}>
-                      <dt className="font-medium">{fields[field]}</dt>
-                      <dd className="whitespace-pre-wrap break-words">{test.reflection?.[key]?.[field] || "—"}</dd>
-                    </div>
-                  ))}
-                </dl>
+          <div className="grid gap-4 md:grid-cols-[minmax(0,11fr)_minmax(0,9fr)]">
+            <form className="min-w-0 space-y-3" onSubmit={event => { event.preventDefault(); void save(); }}>
+              <div>
+                <h4 className="font-bold">{subjects[subject]}の振り返り</h4>
+                <p className="text-sm">偏差値 {deviation(selected.subjects?.[subject])}</p>
               </div>
-            ))}
-            <button type="button" disabled={busy} onClick={() => openTest(test.id)}
-              className="min-h-11 rounded-lg bg-blue-50 px-4 font-bold text-blue-700 disabled:opacity-50">
-              この振り返りを編集
-            </button>
+              <fieldset disabled={busy} className="min-w-0 space-y-3">
+                {reflectionFields.map(field => (
+                  <label key={field} className="block text-sm font-medium">
+                    {fields[field]}
+                    <textarea value={values[subject]?.[field] ?? ""} rows={2} maxLength={1000}
+                      onChange={event => {
+                        const value = event.target.value;
+                        setDrafts(current => ({
+                          ...current,
+                          [selected.id]: {
+                            original: draft?.original ?? selected.reflection ?? {},
+                            values: { ...values, [subject]: { ...values[subject], [field]: value } },
+                          },
+                        }));
+                        setStatus("idle");
+                      }}
+                      className="mt-1 block min-h-16 w-full rounded-lg border border-slate-300 p-2 text-base [field-sizing:content]" />
+                  </label>
+                ))}
+              </fieldset>
+              <button type="submit" disabled={busy || !draft || !hasReflection(values)}
+                className="min-h-11 rounded-lg bg-blue-600 px-4 font-bold text-white disabled:opacity-50">
+                {busy ? "保存中…" : status === "error" ? "もう一度保存する" : "振り返りを保存"}
+              </button>
+              {draft && !hasReflection(values) && <p className="text-sm">1項目以上書くと保存できます。</p>}
+              {status === "saved" && <p role="status" className="text-sm text-emerald-700">振り返りを保存しました。</p>}
+              {status === "error" && <p role="alert" className="text-sm text-red-700">保存できませんでした。入力は残っています。接続を確認して、もう一度お試しください。</p>}
+            </form>
+            <section className="min-w-0 space-y-2" aria-label="過去の振り返り">
+              <h4 className="font-bold">過去の振り返り</h4>
+              {past.size === 0 ? <p className="text-sm">この教科の過去の振り返りはまだありません</p> : (
+                <div key={`${selected.id}:${subject}`}
+                  className="flex snap-x snap-mandatory items-start gap-2 overflow-x-auto pb-2 md:block md:space-y-2 md:overflow-visible md:pb-0">
+                  {[...past.values()].map(test => (
+                    <article key={test.id} className="w-full min-w-0 shrink-0 snap-start rounded-xl border border-slate-200 bg-slate-50 p-3 only:w-full max-md:w-[88%]">
+                      <h5 className="break-words text-sm font-bold">{test.date} {test.name}</h5>
+                      <p className="mt-1 text-sm">{subjects[subject]}の偏差値 {deviation(test.subjects?.[subject])}</p>
+                      <dl className="mt-2 space-y-2">
+                        {reflectionFields.map(field => (
+                          <div key={field}>
+                            <dt className="text-xs font-medium">{fields[field]}</dt>
+                            <dd className="whitespace-pre-wrap break-words text-sm">{test.reflection?.[subject]?.[field]?.trim() ? test.reflection[subject][field] : "未記入"}</dd>
+                          </div>
+                        ))}
+                      </dl>
+                    </article>
+                  ))}
+                </div>
+              )}
+            </section>
           </div>
-        </details>
-      ))}
+        </div>
+      )}
+      <details className="space-y-2">
+        <summary className="min-h-11 cursor-pointer py-2 text-sm font-bold">すべての振り返り履歴</summary>
+        {history.length === 0 && <p className="text-sm">保存した振り返りがここに表示されます。</p>}
+        {history.map(test => (
+          <details key={test.id} className="min-w-0 rounded-xl border border-slate-200 px-3">
+            <summary className="min-h-11 cursor-pointer break-words py-2 font-bold">
+              {test.date} {test.name}
+              <span className="block text-sm font-medium text-slate-600">
+                {reflectionSubjects.filter(key => hasReflection({ [key]: test.reflection?.[key] })).map(key => subjects[key]).join("・")}
+              </span>
+            </summary>
+            <div className="space-y-3 pb-3">
+              {reflectionSubjects.map(key => (
+                <div key={key} className="rounded-lg bg-slate-50 p-3">
+                  <h5 className="font-bold">{subjects[key]}</h5>
+                  <dl className="space-y-2 text-sm">
+                    {reflectionFields.map(field => (
+                      <div key={field}>
+                        <dt className="font-medium">{fields[field]}</dt>
+                        <dd className="whitespace-pre-wrap break-words">{test.reflection?.[key]?.[field] || "—"}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                </div>
+              ))}
+              <button type="button" disabled={busy} onClick={() => openTest(test.id)}
+                className="min-h-11 rounded-lg bg-blue-50 px-4 font-bold text-blue-700 disabled:opacity-50">
+                この振り返りを編集
+              </button>
+            </div>
+          </details>
+        ))}
+      </details>
     </section>
   );
 }
