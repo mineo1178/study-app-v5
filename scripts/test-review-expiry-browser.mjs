@@ -17,13 +17,24 @@ const page = await context.newPage(); page.setDefaultTimeout(15000);
 page.on("pageerror", e => errors.push(e.message));
 const panel = () => page.getByRole("region", { name: "テスト対策・復習", exact: true });
 const tab = async () => { await page.getByRole("navigation", { name: "メインナビゲーション", exact: true }).getByRole("button", { name: "対策・復習", exact: true }).click(); await panel().getByText("復習データを読み込み中…", { exact: true }).waitFor({ state: "hidden" }); };
-const reloadSample = async () => { await page.reload(); await page.getByRole("button", { name: "サンプルデータで試す", exact: true }).click(); };
+const enterSample = async () => {
+  const button = page.getByRole("button", { name: "サンプルデータで試す", exact: true });
+  const nav = page.getByRole("navigation", { name: "メインナビゲーション", exact: true });
+  await button.or(nav).first().waitFor();
+  if (await button.isVisible()) await button.click();
+};
+const reloadSample = async () => { await page.reload(); await enterSample(); };
 const details = async () => { if (!await panel().getByLabel("根拠付き対策計画", { exact: true }).isVisible()) await panel().getByText("この端末のテスト対策計画", { exact: true }).click(); };
-const upload = async (value, label = "根拠付き対策計画") => { await details(); await panel().getByLabel(label, { exact: true }).setInputFiles({ name: "fictional.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(value)) }); };
+const upload = async (value, label = "根拠付き対策計画") => {
+  await details();
+  const completed = Number(await panel().locator("[data-review-import-completed]").getAttribute("data-review-import-completed"));
+  await panel().getByLabel(label, { exact: true }).setInputFiles({ name: "fictional.json", mimeType: "application/json", buffer: Buffer.from(JSON.stringify(value)) });
+  await page.waitForFunction(n => Number(document.querySelector("[data-review-import-completed]")?.getAttribute("data-review-import-completed")) > n, completed);
+};
 const saved = () => page.evaluate(() => { const key = Object.keys(localStorage).find(k => k.endsWith(":target-plan")); return { key, plan: JSON.parse(localStorage.getItem(key)), data: JSON.parse(localStorage.getItem(key.replace(":target-plan", ":sample-data"))) }; });
 try {
   await page.clock.install({ time: new Date("2026-11-08T23:59:00+09:00") });
-  await page.goto(base); await page.getByRole("button", { name: "サンプルデータで試す", exact: true }).click(); await tab();
+  await page.goto(base); await enterSample(); await tab();
   const fixture = await page.evaluate(async () => {
     const { sampleQuestions, nextProgress } = await import("/src/review/model.ts");
     const { fictionalPlan } = await import("/tests/review-plan-fixture.ts");
