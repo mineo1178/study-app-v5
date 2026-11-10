@@ -175,7 +175,7 @@ if (hasFirebaseConfig) {
 // ==========================================
 
 const FAMILY_ID = "oomine-study-2026";
-const APP_VERSION = "v1.88.8";
+const APP_VERSION = "v1.88.9";
 
 // Firestore Path 固定（変更禁止）
 // 実DB構造:
@@ -4534,7 +4534,7 @@ function SessionApp({ session, logout, initialSample }: { session?: FamilySessio
             onSaveReflection={saveReflection}
           />
         ) : activeTab === "review" ? (
-          <ReviewWorkspace key={`${user?.uid ?? "sample"}-${isSampleMode}`} familyId={FAMILY_ID} sample={isSampleMode} session={session} enabled={isSampleMode || import.meta.env.VITE_REVIEW_STORAGE_ENABLED === "true"} />
+          <ReviewWorkspace key={`${user?.uid ?? "sample"}-${isSampleMode}`} familyId={FAMILY_ID} sample={isSampleMode} session={session} enabled={isSampleMode || import.meta.env.VITE_REVIEW_STORAGE_ENABLED === "true"} tests={tests} />
         ) : activeTab === "produce" ? (
           <ProducerHome
             encore={{

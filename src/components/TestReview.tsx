@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { Firestore } from "firebase/firestore";
 import type { FamilySession } from "../use-family-session";
 import { SUBJECTS, createReviewDraft, visibleQuestions, answerQuestion, getJstDay, nextProgress, progressLabel, restoreDraft, sampleQuestions, reviewDueAt, type Draft, type Question, type Weakness } from "../review/model";
-import { activeTargetPlan, targetCandidates } from "../review/target-plan";
+import { dailyReviewSelection, nextReviewTarget, targetCandidates, type RegisteredTest } from "../review/target-plan";
 import { useReviewPlan } from "../review/use-review-plan";
 import { ReviewTargetPlan } from "./ReviewTargetPlan";
 import { loadReview, saveReview, type ReviewData } from "../review/repository";
@@ -13,7 +13,7 @@ const primary = "rounded-2xl bg-blue-600 px-5 py-3 font-bold text-white disabled
 const secondary = "rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-bold disabled:opacity-40";
 function readLocal(key: string) { try { return { raw: localStorage.getItem(key), error: "" }; } catch { return { raw: null, error: "この端末に途中経過を保存できません。再読込前に結果を保存してください。" }; } }
 
-export function TestReview({ db, familyId, uid, sample, session, enabled }: { db: Firestore | null; familyId: string; uid: string; sample: boolean; session?: FamilySession; enabled: boolean }) {
+export function TestReview({ db, familyId, uid, sample, session, enabled, tests = [] }: { db: Firestore | null; familyId: string; uid: string; sample: boolean; session?: FamilySession; enabled: boolean; tests?: RegisteredTest[] }) {
   const scope = `${db?.app.options.projectId ?? "sample"}:${familyId}:${uid}:${sample ? "sample" : "live"}`;
   const draftKey = `study-review-v1:${scope}:draft`, dataKey = `study-review-v1:${scope}:sample-data`;
   const [draftState, setDraftState] = useState(() => { const saved = readLocal(draftKey); return { draft: restoreDraft(saved.raw, uid), warning: saved.error }; });
@@ -64,7 +64,7 @@ export function TestReview({ db, familyId, uid, sample, session, enabled }: { db
   function begin(questions: Question[], mode: Draft["mode"]) {
     if (!questions.length || pending.current || !active() || planState.error || planState.restoring) return;
     const started = createReviewDraft(uid, questions, mode);
-    const picked = mode === "daily" ? targetCandidates(questions, data.progress, plan, started.startedAt).map(c => c.question) : questions;
+    const picked = mode === "daily" ? targetCandidates(questions, data.progress, nextReviewTarget(tests, plan, started.startedAt).activePlan, started.startedAt).map(c => c.question) : questions;
     if (!picked.length) { setNow(started.startedAt); return; }
     const next = { ...started, questions: picked }; setNow(next.startedAt); setSaved(false); setSelected(null); setDiscard(false); setError("");
     persistDraft(next);
@@ -119,8 +119,9 @@ export function TestReview({ db, familyId, uid, sample, session, enabled }: { db
   const todayCount = data.history.filter(a => getJstDay(a.answeredAt) === getJstDay(now)).length;
   const availableQuestions = visibleQuestions(data.questions, sample);
   const wrong = availableQuestions.filter(q => data.progress.some(p => p.questionId === q.id && p.questionVersion === q.version && !p.latestCorrect));
-  const candidates = targetCandidates(availableQuestions, data.progress, plan, now);
-  const activePlan = activeTargetPlan(plan, now);
+  const { target, activePlan, status } = nextReviewTarget(tests, plan, now);
+  const { selected: candidates, eligibleCount, scopeCount, remaining } = dailyReviewSelection(availableQuestions, data.progress, activePlan, now);
+  const missing = activePlan ? activePlan.items.length - scopeCount : 0;
   function beginDaily(wrongOnly = false) {
     begin(wrongOnly ? wrong : availableQuestions, "daily");
   }
@@ -137,7 +138,7 @@ export function TestReview({ db, familyId, uid, sample, session, enabled }: { db
         <p className="text-sm font-bold">{draft.answers.length + 1} / {draft.questions.length} 問 · {time(Math.max(0, now - draft.startedAt))}</p>
         <p className="text-xs text-slate-500">目安は3分。時間を超えても大丈夫。焦らず考えよう。途中経過はこの端末に保存します。</p>
         <p className="text-sm">{SUBJECTS[draft.questions[draft.answers.length].subject]} ／ {draft.questions[draft.answers.length].unit}</p>
-        <p className="rounded-xl bg-blue-50 p-3 text-sm">選んだ理由：{plan?.items.find(i => i.questionId === draft.questions[draft.answers.length].id && i.questionVersion === draft.questions[draft.answers.length].version)?.reason ?? "日を空けて、自分で思い出せるか確かめよう。"}</p>
+        <p className="rounded-xl bg-blue-50 p-3 text-sm">選んだ理由：{nextReviewTarget(tests, plan, draft.startedAt).activePlan?.items.find(i => i.questionId === draft.questions[draft.answers.length].id && i.questionVersion === draft.questions[draft.answers.length].version)?.reason ?? "日を空けて、自分で思い出せるか確かめよう。"}</p>
         <h3 className="whitespace-pre-wrap text-lg font-bold">{draft.questions[draft.answers.length].prompt}</h3>
         <div role="group" aria-label="解答候補" className="space-y-2">{draft.questions[draft.answers.length].choices.map((choice, index) => <button key={index} aria-pressed={selected === index} className={`block w-full break-words rounded-xl border-2 p-3 text-left ${selected === index ? "border-blue-600 bg-blue-50" : "border-slate-200"}`} onClick={() => setSelected(index)}>{index + 1}. {choice}</button>)}</div>
         <button className={primary} disabled={selected === null} onClick={() => { if (selected === null) return; const next = answerQuestion(draft, selected, Date.now()); setSelected(null); setNow(Date.now()); persistDraft(next); }}>{draft.answers.length + 1 === draft.questions.length ? "最後の回答を決めて採点" : "回答を決めて次へ"}</button>
@@ -159,11 +160,23 @@ export function TestReview({ db, familyId, uid, sample, session, enabled }: { db
     </> : <>
       <div className="space-y-3 rounded-2xl border border-blue-100 bg-white p-4">
         <h3 className="text-lg font-black">今日の5問</h3><p className="text-sm text-slate-600">最大5問。復習期限が来た問題を先に、次にテストとの関連と確認の優先度で選ぶよ。期限前の問題で数を埋めません。</p>
-        <p className="text-sm">利用できる問題：{availableQuestions.length}問 ／ 今日の候補：{candidates.length}問</p>
-        <p className="text-xs text-slate-600">候補の内訳：復習期限が来た問題 {candidates.filter(c => c.dueAt !== null).length}問 ／ 初めての確認 {candidates.filter(c => c.dueAt === null).length}問。同じ条件の候補が多い場合は、JSTの日付で出題を入れ替えます。回答状況が同じなら、同じ日に再表示しても順番は変わりません。</p>
-        {availableQuestions.length > 0 && availableQuestions.length <= 5 && <p className="rounded-xl bg-amber-50 p-3 text-xs text-amber-900">公開されている問題は{availableQuestions.length}問です。問題数が5問以下では毎日別の5問を用意できません。保護者が内容を確認した問題の追加登録が必要です。</p>}
-        {activePlan && <p className="text-sm font-bold">{activePlan.label}（{activePlan.testDay}）向け · この端末の計画</p>}
-        {!activePlan && <p className="text-xs text-amber-800">{plan ? "計画の試験日が過ぎたため、一般復習に戻っています。復習期限は変わりません。保護者と次の計画を確認しよう。" : "一般復習：次回テストの範囲は未設定です。保護者の根拠付き計画を読み込むと、対象を絞れます。"}</p>}
+        <div className="space-y-1 rounded-xl bg-slate-50 p-3 text-sm">
+          <p className="font-bold">{activePlan ? "テスト対策" : "一般復習"}</p>
+          <p>現在の対策：{target?.label ?? "次回カリテ未登録"} ／ 開催日：{target?.testDay ?? "未登録"}</p>
+          <p>対策計画：{status} ／ 今日の候補：{eligibleCount}問</p>
+          <p>公開済み：{availableQuestions.length}問 ／ {activePlan ? "計画に対応" : "一般復習の対象"}：{scopeCount}問 ／ 今日の出題：{candidates.length}問</p>
+          {!activePlan && <p className="text-amber-900">次回カリテの対策範囲が未設定です。下の対策計画からJSONを取り込めます。</p>}
+          {activePlan && (scopeCount < 5 || missing > 0 || activePlan.gaps.length > 0) && <p className="text-amber-900">
+            対象問題の不足：対応済みは{scopeCount}問。{missing > 0 && `計画内の${missing}問は未公開・未登録、または問題の版が一致しません。`}{activePlan.gaps.length > 0 && `計画に記載された不足・未確認は${activePlan.gaps.length}件です。`}
+          </p>}
+          {candidates.length < 5 && <p className="text-slate-600">
+            {remaining < 5 && `今日の残り枠は${remaining}問です。`}
+            {scopeCount === 0 ? "対象の公開済み問題がありません。" : scopeCount < 5 ? `対象の公開済み問題は${scopeCount}問です。` : ""}
+            {scopeCount > eligibleCount && `${scopeCount - eligibleCount}問は復習期限前です。`}
+            {candidates.length < Math.min(remaining, eligibleCount) && "計画の単元ごとの上限があります。"}
+          </p>}
+        </div>
+        <ReviewTargetPlan plan={plan} expired={status === "期限切れ"} onImport={async (raw, kind) => { if (!active() || pending.current) return; pending.current = true; setBusy(true); try { await planState.importFile(raw, kind, Date.now()); if (active()) setError(""); } finally { pending.current = false; if (active()) setBusy(false); } }} onClear={() => { if (active()) { planState.clear(); setError(""); } }} onError={setError} disabled={busy || loading || planState.restoring} />
         {candidates.map(c => <p key={c.question.id} className="rounded-xl bg-blue-50 p-2 text-sm">{SUBJECTS[c.question.subject]}／{c.question.unit}：{c.reason}（{c.dueAt === null ? "初めての確認" : getJstDay(c.dueAt) + "が復習期限"}）</p>)}
         {!candidates.length && <p className="text-sm">{activePlan ? "今日は期限と対策範囲に合う問題がありません。" : "今日は復習対象の問題がありません。"}無理に追加しなくて大丈夫。</p>}
         <button className={primary} disabled={!candidates.length || !!error || !!planState.error || planState.restoring || busy} onClick={() => beginDaily()}>今日の{candidates.length}問を始める</button>
@@ -173,7 +186,6 @@ export function TestReview({ db, familyId, uid, sample, session, enabled }: { db
         {!sample && <button className={secondary} disabled={busy} onClick={() => { setLoading(true); setReload(n => n + 1); }}>復習データを再読込</button>}
       </div>
       <div className="rounded-2xl bg-white p-4"><h3 className="mb-2 font-bold">苦手分野</h3><p className="mb-2 text-xs text-slate-500">保護者の入力です。教科の点数から単元の苦手を推測しません。小問の正解だけで元の弱点を解消済みにはしません。</p>{!data.weaknesses.length && <p className="text-sm">まだ登録されていません。</p>}{data.weaknesses.map(w => <article key={w.id} className="my-2 space-y-1 rounded-xl bg-slate-50 p-3 text-sm"><p className="font-bold">{SUBJECTS[w.subject]} ／ {w.unit}（{w.testKind}）</p><p>間違えた内容：{w.mistake}</p><p>復習ポイント：{w.point}</p>{w.questionIds.map(id => <p key={id}>対応問題：{data.questions.find(q => q.id === id)?.prompt ?? "未登録・確認待ち"}</p>)}</article>)}</div>
-      <ReviewTargetPlan plan={plan} expired={!!plan && !activePlan} onImport={async (raw, kind) => { if (!active() || pending.current) return; pending.current = true; setBusy(true); try { await planState.importFile(raw, kind, Date.now()); if (active()) setError(""); } finally { pending.current = false; if (active()) setBusy(false); } }} onClear={() => { if (active()) { planState.clear(); setError(""); } }} onError={setError} disabled={busy || loading || planState.restoring} />
       <div className="space-y-2 rounded-2xl bg-white p-4"><h3 className="font-bold">間違い直し</h3><p className="text-sm">{wrong.length ? `${wrong.length}問を確認中。期限と対策範囲に合う日に取り組もう。` : "今は間違い直しの候補はありません。"}</p>{wrong.map(q => <p key={q.id} className="text-sm">{q.unit}：{q.prompt}</p>)}{wrong.length > 0 && <button disabled={!!error || busy || !candidates.some(c => wrong.some(q => q.id === c.question.id))} className={secondary} onClick={() => beginDaily(true)}>間違い直しを始める</button>}</div>
       <details className="rounded-2xl bg-white p-4"><summary className="cursor-pointer font-bold">復習問題一覧（{data.questions.length}問）</summary>{data.questions.map(q => <article key={q.id} className="my-3 space-y-1 border-b border-slate-100 pb-2 text-sm"><p className="font-bold">{SUBJECTS[q.subject]}／{q.unit}：{q.prompt}</p><p>{progressLabel(data.progress.find(p => p.questionId === q.id && p.questionVersion === q.version))}{(() => { const p = data.progress.find(p => p.questionId === q.id && p.questionVersion === q.version); return p ? " ／ 次の確認 " + getJstDay(reviewDueAt(p)) + "（JST）" : ""; })()}</p></article>)}</details>
       <details className="rounded-2xl bg-white p-4"><summary className="cursor-pointer font-bold">回答履歴・改善記録（最近50回答）</summary>{data.history.map(a => <p key={a.id} className="my-2 text-sm">{new Date(a.answeredAt).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" })} · {a.prompt}：{a.correct ? "正解" : "誤答"} ／ {time(a.elapsedMs)} ／ {a.mode === "retry" ? "直後の再挑戦" : "再確認"}</p>)}</details>

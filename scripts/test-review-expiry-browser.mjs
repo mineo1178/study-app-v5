@@ -38,12 +38,15 @@ try {
   await upload(fixture.plan);
   await page.evaluate(data => { const key = Object.keys(localStorage).find(k => k.endsWith(":target-plan")); localStorage.setItem(key.replace(":target-plan", ":sample-data"), JSON.stringify(data)); }, fixture.data);
   await reloadSample(); await tab(); await upload(fixture.bindings, "内容照合済み問題対応表");
-  await panel().getByText(/2026-11-08.*向け/).waitFor();
+  await panel().getByText(/現在の対策：.*開催日：2026-11-08/).waitFor();
+  await panel().getByText(/対策計画：設定済み ／ 今日の候補：0問/).waitFor();
+  await panel().getByText(/対象問題の不足：対応済みは1問/).waitFor();
   assert.equal(await panel().getByRole("button", { name: "今日の0問を始める", exact: true }).isDisabled(), true);
   const before = await saved();
   await page.clock.fastForward(60000); await page.evaluate(() => window.dispatchEvent(new Event("focus")));
-  await panel().getByText(/計画の試験日が過ぎたため、一般復習/).waitFor();
-  assert.equal(await panel().getByText(/2026-11-08.*向け/).count(), 0);
+  await panel().getByText("一般復習", { exact: true }).waitFor();
+  await panel().getByText(/対策計画：期限切れ ／ 今日の候補：1問/).waitFor();
+  assert.equal(await panel().getByText(/現在の対策：.*開催日：2026-11-08/).count(), 0);
   await panel().getByText(/期限切れ・保存済み計画/).waitFor();
   await panel().getByRole("button", { name: "今日の1問を始める", exact: true }).waitFor();
   assert.deepEqual(await saved(), before);
@@ -56,7 +59,7 @@ try {
   await panel().getByRole("button", { name: "未保存の回答を破棄してホームへ", exact: true }).click();
   results.push("reload and actual daily start use general candidates; 320/390px no overflow");
   const newer = structuredClone(fixture.plan); newer.revision = 3; newer.targetExam.date = "2026-11-15";
-  await upload(newer); await panel().getByText(/2026-11-15.*向け/).waitFor();
+  await upload(newer); await panel().getByText(/現在の対策：.*開催日：2026-11-15/).waitFor();
   assert.equal(await panel().getByRole("button", { name: "今日の0問を始める", exact: true }).isDisabled(), true);
   assert.deepEqual((await saved()).data, before.data);
   await upload(fixture.plan); await panel().getByRole("alert").filter({ hasText: "旧revision" }).waitFor();

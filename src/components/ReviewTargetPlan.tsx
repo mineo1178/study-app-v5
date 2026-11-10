@@ -15,7 +15,7 @@ export function ReviewTargetPlan({ plan, expired, onImport, onClear, onError, di
   return <details data-review-import-completed={completed} className="space-y-2 rounded-2xl bg-white p-4 text-sm">
     <summary className="cursor-pointer font-bold">この端末のテスト対策計画</summary>
     <p className="mt-2">成績や元資料はアプリに組み込みません。保護者が資料と照合した計画を、この利用者・端末だけに読み込みます。Firestoreには送信しません。</p>
-    <p>端末間の自動同期はありません。更新時は新しいrevisionのJSONを選びます。非公開の根拠ファイルは取り込みません。</p>
+    <p>取り込みに成功すると、この端末の計画1件を差し替えます。新しいJSONを選んでください。同じ計画の改訂には新しいrevisionを使います。次回カリテが登録済みの場合は、計画のテスト名と開催日を日程に合わせてください。復習履歴は引き継ぎます。</p>
     {fileInput("根拠付き対策計画", "plan")}
     {importing && <p role="status">計画を確認中…</p>}
     {plan?.integration && fileInput("内容照合済み問題対応表", "bindings")}

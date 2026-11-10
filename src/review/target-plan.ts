@@ -1,4 +1,4 @@
-import { getJstDay, reviewDueAt, validId, type Progress, type Question } from "./model";
+import { getJstDay, jstDayNumber, reviewDueAt, validId, type Progress, type Question } from "./model";
 import type { Integration } from "./exchange-plan";
 
 // Personal observations are imported on the device; never bundled with the app or sent to Firestore.
@@ -19,44 +19,72 @@ export function parseTargetPlan(raw: string): TargetPlan {
 }
 const classificationRank = (value: string) => ["observed_error", "recurring_error_pattern", "needs_retention_check", "improved_in_new_test", "demonstrated_strength", "not_assessed_for_target_scope"].indexOf(value);
 
-// Stable within the same JST day and UID-independent: do not reshuffle on reload.
-// Only break ties *after* the existing due-date, correctness, and plan-priority rules.
-// This rotates eligible new questions without pulling not-yet-due reviews forward.
-export function dailyQuestionRank(questionId: string, jstDay: string): number {
-  let hash = 2166136261;
-  const value = `${jstDay}:${questionId}`;
-  for (let index = 0; index < value.length; index++) hash = Math.imul(hash ^ value.charCodeAt(index), 16777619);
-  hash ^= hash >>> 16;
-  hash = Math.imul(hash, 0x7feb352d);
-  hash ^= hash >>> 15;
-  hash = Math.imul(hash, 0x846ca68b);
-  hash ^= hash >>> 16;
-  return hash >>> 0;
-}
 export function activeTargetPlan(plan: TargetPlan | null, now: number): TargetPlan | null {
   return plan && getJstDay(now) <= plan.testDay ? plan : null;
 }
-export function targetCandidates(questions: Question[], progress: Progress[], plan: TargetPlan | null, now: number) {
+export type RegisteredTest = { name: string; date: string; type: string };
+
+export function nextReviewTarget(tests: RegisteredTest[], plan: TargetPlan | null, now: number) {
+  const today = getJstDay(now);
+  const current = activeTargetPlan(plan, now);
+  const exam = current?.integration?.source.targetExam;
+  const names = [current?.label, exam?.officialName, ...exam?.aliases ?? []].map(name => name?.trim());
+  const upcoming = tests.flatMap(test => {
+    if (test.type !== "curriculum") return [];
+    const parts = /^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/.exec(test.date);
+    if (!parts) return [];
+    const day = `${parts[1]}-${parts[2].padStart(2, "0")}-${parts[3].padStart(2, "0")}`;
+    const at = Date.parse(day);
+    return day >= today && Number.isFinite(at) && new Date(at).toISOString().slice(0, 10) === day
+      ? [{ label: test.name, testDay: day }] : [];
+  }).sort((a, b) => a.testDay.localeCompare(b.testDay) || a.label.localeCompare(b.label));
+  const matching = upcoming.find(test => test.testDay === upcoming[0].testDay &&
+    test.testDay === current?.testDay && names.includes(test.label.trim()));
+  const activePlan = !upcoming.length || matching ? current : null;
+  return {
+    target: matching ?? upcoming[0] ?? (current ? { label: current.label, testDay: current.testDay } : null),
+    activePlan,
+    status: activePlan ? "設定済み" : plan && !current ? "期限切れ" : "未設定",
+  };
+}
+
+export function dailyReviewSelection(questions: Question[], progress: Progress[], plan: TargetPlan | null, now: number) {
   plan = activeTargetPlan(plan, now);
   const today = getJstDay(now);
-  const remaining = Math.max(0, 5 - new Set(progress.filter(p => getJstDay(p.latestAt) === today).map(p => p.questionId)).size);
-  const pool = questions.flatMap(q => {
+  const answeredToday = progress.filter(p => getJstDay(p.latestAt) === today);
+  const remaining = Math.max(0, 5 - new Set(answeredToday.map(p => p.questionId)).size);
+  const inScope = questions.flatMap(q => {
     const item = plan?.items.find(i => i.questionId === q.id && i.questionVersion === q.version);
     if (plan && !item) return [];
+    return [{ q, item }];
+  });
+  const pool = inScope.flatMap(({ q, item }) => {
     const p = progress.find(p => p.questionId === q.id && p.questionVersion === q.version);
     if (p && reviewDueAt(p) > now) return [];
     const reason = item?.reason ?? "登録されている問題を、日を空けて確かめよう。テスト範囲との関係は未確認です。";
     return [{ question: q, reason, dueAt: p ? reviewDueAt(p) : null, priority: item?.priority ?? 3, topicId: item?.topicId ?? q.id,
       stage: p?.reviewStage ?? 0, wrong: p ? !p.latestCorrect : false, classification: item?.classification ?? "" }];
-  }).sort((a, b) => (a.dueAt === null ? 1 : 0) - (b.dueAt === null ? 1 : 0) ||
+  });
+  const comparePriority = (a: typeof pool[number], b: typeof pool[number]) =>
+    Number(a.dueAt === null) - Number(b.dueAt === null) ||
     (plan?.integration && Date.parse(plan.testDay) - Date.parse(today) <= 3 * 86400000 ? Number(a.stage >= 3) - Number(b.stage >= 3) : 0) ||
     (plan?.integration ? Number(b.wrong) - Number(a.wrong) || a.priority - b.priority || classificationRank(a.classification) - classificationRank(b.classification) : 0) ||
-    (a.dueAt ?? 0) - (b.dueAt ?? 0) || a.priority - b.priority ||
-    dailyQuestionRank(a.question.id, today) - dailyQuestionRank(b.question.id, today) ||
-    a.question.id.localeCompare(b.question.id));
+    (a.dueAt ?? 0) - (b.dueAt ?? 0) || a.priority - b.priority;
+  pool.sort((a, b) => comparePriority(a, b) || a.question.id.localeCompare(b.question.id));
+  // Rotate tied new questions by one place each JST day so an unchanged pool
+  // with more questions than slots has a different selection on the next day.
+  for (let start = pool.findIndex(c => c.dueAt === null); start >= 0 && start < pool.length;) {
+    let end = start + 1;
+    while (end < pool.length && comparePriority(pool[start], pool[end]) === 0) end++;
+    const size = end - start;
+    const offset = ((jstDayNumber(now) % size) + size) % size;
+    const group = pool.slice(start, end);
+    pool.splice(start, size, ...group.slice(offset), ...group.slice(0, offset));
+    start = end;
+  }
   const policy = plan?.integration?.source.reviewPolicy;
   const selected: typeof pool = [], topicCounts = new Map<string, number>();
-  if (policy) for (const p of progress.filter(p => getJstDay(p.latestAt) === today)) {
+  if (policy) for (const p of answeredToday) {
     const topic = plan?.items.find(i => i.questionId === p.questionId)?.topicId;
     if (topic) topicCounts.set(topic, (topicCounts.get(topic) ?? 0) + 1);
   }
@@ -68,5 +96,9 @@ export function targetCandidates(questions: Question[], progress: Progress[], pl
     const candidate = remaining - selected.length <= minimum - subjects.size ? eligible.find(c => !subjects.has(c.question.subject)) ?? eligible[0] : eligible[0];
     selected.push(candidate); topicCounts.set(candidate.topicId, (topicCounts.get(candidate.topicId) ?? 0) + 1);
   }
-  return selected;
+  return { selected, eligibleCount: pool.length, scopeCount: inScope.length, remaining };
+}
+
+export function targetCandidates(questions: Question[], progress: Progress[], plan: TargetPlan | null, now: number) {
+  return dailyReviewSelection(questions, progress, plan, now).selected;
 }

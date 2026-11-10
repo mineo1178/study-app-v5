@@ -85,7 +85,7 @@ try {
   // Start in the past so >3min elapsed can be verified without forging future answer timestamps.
   await page.clock.fastForward(200000);
   // One question was answered earlier on this same JST day: 4 of the 5 daily slots remain.
-  await panel().getByText("利用できる問題：5問 ／ 今日の候補：4問", { exact: true }).waitFor();
+  await panel().getByText("公開済み：5問 ／ 一般復習の対象：5問 ／ 今日の出題：4問", { exact: true }).waitFor();
   await panel().getByRole("button", { name: "今日の4問を始める", exact: true }).click();
   assert.equal(await panel().getByRole("button", { name: "回答を決めて次へ", exact: true }).isDisabled(), true);
   await answer(false, 1);
@@ -115,7 +115,7 @@ try {
   results.push("existing grade input/edit/reload and review isolation");
   assert.ok(await reviewCall("foreignFamilyDenied"));
   await login(0); await tab().click(); await waitLoaded();
-  await panel().getByText("利用できる問題：0問 ／ 今日の候補：0問", { exact: true }).waitFor();
+  await panel().getByText("公開済み：0問 ／ 一般復習の対象：0問 ／ 今日の出題：0問", { exact: true }).waitFor();
   assert.equal(await panel().getByText("保護者の確認事項", { exact: false }).count(), 0);
   assert.ok(await reviewCall("crossUidDenied", accounts[1].uid));
   await login(2); await page.getByText("このアカウントでは利用できません。", { exact: true }).waitFor(); assert.equal(await page.locator("[data-protected-session]").count(), 0);

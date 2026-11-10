@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { getJstDay, jstDayNumber, nextProgress, reviewDueAt, sampleQuestions, selectQuestions, type Answer, type Progress } from "./model";
-import { activeTargetPlan, dailyQuestionRank, parseTargetPlan, targetCandidates, type TargetPlan } from "./target-plan";
+import { activeTargetPlan, dailyReviewSelection, nextReviewTarget, parseTargetPlan, targetCandidates, type TargetPlan } from "./target-plan";
 const at = (s: string) => Date.parse(`${s}T12:00:00+09:00`);
 const answer = (day: string, correct = true, mode: Answer["mode"] = "daily", id = day): Answer => ({ id, uid: "a", sessionId: id, questionId: sampleQuestions[0].id, questionVersion: sampleQuestions[0].version, selectedIndex: 1, correct, answeredAt: at(day), elapsedMs: 1000, mode, prompt: "fictional", selected: "42", expected: "42", explanation: "fictional" });
 const plan: TargetPlan = { schemaVersion: 1, label: "架空テスト", testDay: "2027-02-01", items: sampleQuestions.slice(0, 2).map((q, i) => ({ questionId: q.id, questionVersion: q.version, priority: i + 1, reason: "架空の誤答を再確認しよう", evidence: "架空答案の観察", scopeBasis: "架空の範囲資料" })), gaps: ["記述は未確認"], notes: ["実資料ではない"] };
@@ -69,8 +69,12 @@ describe("JST spaced review and evidence-based selection", () => {
     expect(tomorrow).toHaveLength(5);
     expect(tomorrow).not.toEqual(first);
     expect(tomorrow.some(id => !first.includes(id))).toBe(true);
-    expect(dailyQuestionRank("question_01", getJstDay(day1))).toBe(dailyQuestionRank("question_01", getJstDay(day1 + 1000)));
-    expect(dailyQuestionRank("question_01", getJstDay(day1))).not.toBe(dailyQuestionRank("question_01", getJstDay(day2)));
+    const six = pool.slice(0, 6);
+    for (let offset = 0; offset < six.length; offset++) {
+      const start = day2 + offset * 86400000;
+      const ids = (when: number) => targetCandidates(six, [], null, when).map(c => c.question.id).sort();
+      expect(ids(start)).not.toEqual(ids(start - 1));
+    }
   });
   it("keeps due reviews ahead of new rotations and never pads with early problems", () => {
     const pool = Array.from({ length: 12 }, (_, i) => ({ ...sampleQuestions[i % sampleQuestions.length], id: `due-rotation-${i}` }));
@@ -128,5 +132,32 @@ describe("JST spaced review and evidence-based selection", () => {
     expect(activeTargetPlan(replacement, now)).toBe(replacement);
     expect(targetCandidates(sampleQuestions, progress, replacement, now).map(c => c.question.id)).toEqual([sampleQuestions[1].id]);
     expect(progress).toEqual(before);
+  });
+  it("uses the nearest registered curriculum exam and requires a matching plan", () => {
+    const tests = [
+      { name: "次々回カリテ", date: "2026/11/22", type: "curriculum" },
+      { name: "次回カリテ", date: "2026/11/15", type: "curriculum" },
+      { name: "組分け", date: "2026/11/12", type: "kumiwake" },
+      { name: "旧カリテ", date: "2026/11/8", type: "curriculum" },
+    ];
+    const now = at("2026-11-09");
+    expect(nextReviewTarget(tests, { ...plan, testDay: "2026-11-08" }, now)).toEqual({
+      target: { label: "次回カリテ", testDay: "2026-11-15" }, activePlan: null, status: "期限切れ",
+    });
+    expect(nextReviewTarget(tests, { ...plan, label: "別のテスト", testDay: "2026-11-15" }, now).status).toBe("未設定");
+    const replacement = { ...plan, label: "次回カリテ", testDay: "2026-11-15" };
+    expect(nextReviewTarget(tests, replacement, at("2026-11-15")).activePlan).toBe(replacement);
+    expect(nextReviewTarget(tests, replacement, at("2026-11-16")).target?.label).toBe("次々回カリテ");
+  });
+  it("counts eligible questions before the five-question cap and distinguishes missing and early questions", () => {
+    const [early] = sampleQuestions;
+    const progress = [nextProgress(undefined, answer("2026-11-08"))];
+    const pool = [...sampleQuestions, { ...early, id: "extra-1" }, { ...early, id: "extra-2" }];
+    expect(dailyReviewSelection(pool, progress, null, at("2026-11-09"))).toMatchObject({
+      scopeCount: 7, eligibleCount: 6, remaining: 5,
+    });
+    expect(dailyReviewSelection([early], progress, plan, at("2026-11-09"))).toMatchObject({
+      scopeCount: 1, eligibleCount: 0, selected: [],
+    });
   });
 });
