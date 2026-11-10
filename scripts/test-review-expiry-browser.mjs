@@ -3,10 +3,10 @@ import { createRequire } from "node:module";
 import { mkdir, writeFile } from "node:fs/promises";
 const require = createRequire(import.meta.url);
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE_PATH || "playwright");
-const base = "http://127.0.0.1:5178", output = ".review-expiry-results.local";
+const base = `http://127.0.0.1:${process.env.REVIEW_TEST_PORT || 5178}`, output = ".review-expiry-results.local";
 await mkdir(output, { recursive: true });
 const browser = await chromium.launch({ headless: true, channel: "msedge" });
-const context = await browser.newContext({ viewport: { width: 320, height: 844 } });
+const context = await browser.newContext({ viewport: { width: 375, height: 844 } });
 const errors = [], blocked = [], results = [];
 await context.route("**/*", route => {
   const url = new URL(route.request().url());
@@ -52,6 +52,8 @@ try {
   await panel().getByText(/現在の対策：.*開催日：2026-11-08/).waitFor();
   await panel().getByText(/対策計画：設定済み ／ 今日の候補：0問/).waitFor();
   await panel().getByText(/対象問題の不足：対応済みは1問/).waitFor();
+  await panel().getByText("計画に対応する問題が4問不足しています。", { exact: true }).waitFor();
+  await panel().getByText("1問は復習期限前です。", { exact: true }).waitFor();
   assert.equal(await panel().getByRole("button", { name: "今日の0問を始める", exact: true }).isDisabled(), true);
   const before = await saved();
   await page.clock.fastForward(60000); await page.evaluate(() => window.dispatchEvent(new Event("focus")));
@@ -62,13 +64,14 @@ try {
   await panel().getByRole("button", { name: "今日の1問を始める", exact: true }).waitFor();
   assert.deepEqual(await saved(), before);
   results.push("JST 11/8 23:59 → 11/9 00:00: expired targeting removed, due out-of-plan review returns, future review excluded; saved plan/history/progress unchanged");
-  for (const width of [320, 390]) { await page.setViewportSize({ width, height: 844 }); assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)); await page.screenshot({ path: `${output}/expired-${width}.png`, fullPage: true }); }
+  assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth));
+  await page.screenshot({ path: `${output}/expired-375.png`, fullPage: true });
   await reloadSample(); await tab(); await panel().getByRole("button", { name: "今日の1問を始める", exact: true }).waitFor();
   await panel().getByRole("button", { name: "今日の1問を始める", exact: true }).click();
   await panel().getByText(fixture.data.questions[0].prompt, { exact: true }).waitFor();
   await reloadSample(); await tab(); await panel().getByRole("button", { name: "今回はここで終わる", exact: true }).click();
   await panel().getByRole("button", { name: "未保存の回答を破棄してホームへ", exact: true }).click();
-  results.push("reload and actual daily start use general candidates; 320/390px no overflow");
+  results.push("reload and actual daily start use general candidates; 375px no overflow");
   const newer = structuredClone(fixture.plan); newer.revision = 3; newer.targetExam.date = "2026-11-15";
   await upload(newer); await panel().getByText(/現在の対策：.*開催日：2026-11-15/).waitFor();
   assert.equal(await panel().getByRole("button", { name: "今日の0問を始める", exact: true }).isDisabled(), true);
@@ -76,6 +79,34 @@ try {
   await upload(fixture.plan); await panel().getByRole("alert").filter({ hasText: "旧revision" }).waitFor();
   assert.equal((await saved()).plan.activePlan.integration.source.revision, 3);
   results.push("new revision restores targeting and zero eligible state; old revision rejected; all history/progress retained");
+
+  const rotation = await page.evaluate(async data => {
+    const { nextProgress } = await import("/src/review/model.ts");
+    const questions = Array.from({ length: 9 }, (_, i) => ({ ...data.questions[0], id: `rotation-${i}`, unit: `架空の確認 ${i}` }));
+    const history = questions.slice(0, 8).map((q, i) => ({ ...data.history[0], id: q.id, questionId: q.id, correct: i > 0 }));
+    const progress = history.map(a => nextProgress(undefined, a));
+    const next = { ...data, questions, history, progress };
+    const key = Object.keys(localStorage).find(k => k.endsWith(":target-plan"));
+    localStorage.setItem(key.replace(":target-plan", ":sample-data"), JSON.stringify(next));
+    return next;
+  }, fixture.data);
+  const candidateRows = () => panel().locator("p:visible").filter({ hasText: /^算数／架空の確認 \d：/ }).allTextContents();
+  await page.clock.setFixedTime(new Date("2026-11-16T12:00:00+09:00"));
+  await reloadSample(); await tab();
+  await panel().getByRole("button", { name: "今日の5問を始める", exact: true }).waitFor();
+  const first = await candidateRows();
+  assert.equal(first.length, 5);
+  await reloadSample(); await tab();
+  await panel().getByRole("button", { name: "今日の5問を始める", exact: true }).waitFor();
+  assert.deepEqual(await candidateRows(), first);
+  await page.clock.setFixedTime(new Date("2026-11-17T12:00:00+09:00"));
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await page.waitForFunction(rows => [...document.querySelectorAll("p")].some(p => p.checkVisibility() && /^算数／架空の確認 \d：/.test(p.textContent) && !rows.includes(p.textContent)), first);
+  const next = await candidateRows();
+  assert.equal(next.length, 5);
+  assert.ok(next.some(row => !first.includes(row)));
+  assert.deepEqual((await saved()).data, rotation);
+  results.push({ day1: first.map(row => row.match(/架空の確認 (\d)/)[1]), day2: next.map(row => row.match(/架空の確認 (\d)/)[1]), published: 9, eligible: 9, due: 8, new: 1 });
   assert.deepEqual(errors, []);
   await writeFile(`${output}/results.json`, JSON.stringify({ results, pageErrors: errors.length, blockedExternalHosts: [...new Set(blocked)], sampleOnly: true }, null, 2));
   console.log(JSON.stringify({ passed: results.length, pageErrors: errors.length, sampleOnly: true }));

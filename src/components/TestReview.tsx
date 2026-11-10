@@ -119,8 +119,9 @@ export function TestReview({ db, familyId, uid, sample, session, enabled, tests 
   const todayCount = data.history.filter(a => getJstDay(a.answeredAt) === getJstDay(now)).length;
   const availableQuestions = visibleQuestions(data.questions, sample);
   const wrong = availableQuestions.filter(q => data.progress.some(p => p.questionId === q.id && p.questionVersion === q.version && !p.latestCorrect));
-  const { target, activePlan, status } = nextReviewTarget(tests, plan, now);
-  const { selected: candidates, eligibleCount, scopeCount, remaining } = dailyReviewSelection(availableQuestions, data.progress, activePlan, now);
+  const { target, activePlan, status, hasRegisteredTarget } = nextReviewTarget(tests, plan, now);
+  const { selected: candidates, eligibleCount, scopeCount, remaining, notDueCount, answeredInScope, answeredCount, newCount, topicLimited } =
+    dailyReviewSelection(availableQuestions, data.progress, activePlan, now);
   const missing = activePlan ? activePlan.items.length - scopeCount : 0;
   function beginDaily(wrongOnly = false) {
     begin(wrongOnly ? wrong : availableQuestions, "daily");
@@ -165,19 +166,30 @@ export function TestReview({ db, familyId, uid, sample, session, enabled, tests 
           <p>現在の対策：{target?.label ?? "次回カリテ未登録"} ／ 開催日：{target?.testDay ?? "未登録"}</p>
           <p>対策計画：{status} ／ 今日の候補：{eligibleCount}問</p>
           <p>公開済み：{availableQuestions.length}問 ／ {activePlan ? "計画に対応" : "一般復習の対象"}：{scopeCount}問 ／ 今日の出題：{candidates.length}問</p>
-          {!activePlan && <p className="text-amber-900">次回カリテの対策範囲が未設定です。下の対策計画からJSONを取り込めます。</p>}
+          {activePlan && !hasRegisteredTarget &&
+            <p>登録済みの次回カリテ日程がないため、この端末の計画の日付を使います。</p>}
+          {!activePlan && <p className="text-amber-900">
+            {status === "期限切れ" ? `保存済み計画（${plan?.testDay}）の期限が過ぎました。`
+              : status === "日程不一致" ? `保存済み計画（${plan?.label}／${plan?.testDay}）は次回カリテの名前または開催日と一致しません。`
+                : "次回カリテの対策計画が未設定です。"}
+            下の「この端末のテスト対策計画」から新しいJSONを取り込めます。
+          </p>}
           {activePlan && (scopeCount < 5 || missing > 0 || activePlan.gaps.length > 0) && <p className="text-amber-900">
             対象問題の不足：対応済みは{scopeCount}問。{missing > 0 && `計画内の${missing}問は未公開・未登録、または問題の版が一致しません。`}{activePlan.gaps.length > 0 && `計画に記載された不足・未確認は${activePlan.gaps.length}件です。`}
           </p>}
-          {candidates.length < 5 && <p className="text-slate-600">
-            {remaining < 5 && `今日の残り枠は${remaining}問です。`}
-            {scopeCount === 0 ? "対象の公開済み問題がありません。" : scopeCount < 5 ? `対象の公開済み問題は${scopeCount}問です。` : ""}
-            {scopeCount > eligibleCount && `${scopeCount - eligibleCount}問は復習期限前です。`}
-            {candidates.length < Math.min(remaining, eligibleCount) && "計画の単元ごとの上限があります。"}
+          {candidates.length < 5 && <ul className="list-inside list-disc text-slate-600">
+            {scopeCount < 5 && <li>{activePlan ? "計画に対応する問題" : "公開済みの登録問題"}が{5 - scopeCount}問不足しています。</li>}
+            {notDueCount > 0 && <li>{notDueCount}問は復習期限前です。</li>}
+            {answeredCount > 0 && <li>今日は{answeredCount}問に回答済みです（対象内{answeredInScope}問）。残り枠は{remaining}問です。</li>}
+            {topicLimited && <li>計画の単元ごとの出題上限に達しました。</li>}
+          </ul>}
+          {eligibleCount > 0 && <p className="text-slate-600">
+            期限到来：{eligibleCount - newCount}問 ／ 未出題：{newCount}問。
+            {eligibleCount <= remaining ? "候補が残り枠以内の日は、同じ問題が並ぶことがあります。" : "期限到来・誤答履歴を優先するため、同じ問題が続くことがあります。同順位の候補はJSTの日付で順番が変わります。"}
           </p>}
         </div>
         <ReviewTargetPlan plan={plan} expired={status === "期限切れ"} onImport={async (raw, kind) => { if (!active() || pending.current) return; pending.current = true; setBusy(true); try { await planState.importFile(raw, kind, Date.now()); if (active()) setError(""); } finally { pending.current = false; if (active()) setBusy(false); } }} onClear={() => { if (active()) { planState.clear(); setError(""); } }} onError={setError} disabled={busy || loading || planState.restoring} />
-        {candidates.map(c => <p key={c.question.id} className="rounded-xl bg-blue-50 p-2 text-sm">{SUBJECTS[c.question.subject]}／{c.question.unit}：{c.reason}（{c.dueAt === null ? "初めての確認" : getJstDay(c.dueAt) + "が復習期限"}）</p>)}
+        {candidates.map(c => <p key={c.question.id} className="rounded-xl bg-blue-50 p-2 text-sm">{SUBJECTS[c.question.subject]}／{c.question.unit}：{c.reason}（{c.dueAt === null ? "初めての確認" : getJstDay(c.dueAt) + "が復習期限"}{c.wrong && "・誤答履歴あり"}）</p>)}
         {!candidates.length && <p className="text-sm">{activePlan ? "今日は期限と対策範囲に合う問題がありません。" : "今日は復習対象の問題がありません。"}無理に追加しなくて大丈夫。</p>}
         <button className={primary} disabled={!candidates.length || !!error || !!planState.error || planState.restoring || busy} onClick={() => beginDaily()}>今日の{candidates.length}問を始める</button>
         <p className="text-xs text-slate-600">間違えたら翌日。同じ日の再挑戦では段階を進めず、別の日に期限を迎えて正解したら3日・7日・14日へ。14日後も確認を続けます。元のテストの苦手を解消した判定ではありません。</p>

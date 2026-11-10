@@ -89,6 +89,29 @@ describe("JST spaced review and evidence-based selection", () => {
     expect([due, early]).toEqual(original);
     expect(targetCandidates(pool.slice(0, 2), [due, early], null, now).map(c => c.question.id)).toEqual([pool[0].id]);
   });
+  it("rotates overdue ties across different due dates and preserves the priority of known errors", () => {
+    const pool = Array.from({ length: 9 }, (_, i) => ({ ...sampleQuestions[0], id: `due-${i}` }));
+    const progress = pool.slice(0, 8).map((q, i) => nextProgress(undefined, {
+      ...answer(i % 2 ? "2026-11-01" : "2026-11-02", i !== 0), questionId: q.id,
+    }));
+    const ids = (day: string) => targetCandidates(pool, progress, null, at(day)).map(c => c.question.id);
+    const first = ids("2026-11-10"), next = ids("2026-11-11");
+    expect(first[0]).toBe("due-0");
+    expect(next[0]).toBe("due-0");
+    expect(first).not.toContain("due-8");
+    expect(next.some(id => !first.includes(id))).toBe(true);
+  });
+  it("rotates verified plan candidates without using fine-grained plan ranks or adding unrelated new questions", () => {
+    const pool = Array.from({ length: 9 }, (_, i) => ({ ...sampleQuestions[0], id: `plan-${i}` }));
+    const target = { ...plan, items: pool.slice(0, 8).map((q, i) => ({
+      ...plan.items[0], questionId: q.id, priority: i < 5 ? 1 : 2,
+    })) };
+    const ids = (day: string) => targetCandidates(pool, [], target, at(day)).map(c => c.question.id);
+    const first = ids("2026-11-10"), next = ids("2026-11-11");
+    expect(first).toHaveLength(5);
+    expect(next.some(id => !first.includes(id))).toBe(true);
+    expect([...first, ...next]).not.toContain("plan-8");
+  });
   it("cannot manufacture variety from a bank containing only five verified questions", () => {
     const today = at("2026-11-08");
     const questions = [...sampleQuestions];
@@ -142,11 +165,13 @@ describe("JST spaced review and evidence-based selection", () => {
     ];
     const now = at("2026-11-09");
     expect(nextReviewTarget(tests, { ...plan, testDay: "2026-11-08" }, now)).toEqual({
-      target: { label: "次回カリテ", testDay: "2026-11-15" }, activePlan: null, status: "期限切れ",
+      target: { label: "次回カリテ", testDay: "2026-11-15" }, activePlan: null, status: "期限切れ", hasRegisteredTarget: true,
     });
-    expect(nextReviewTarget(tests, { ...plan, label: "別のテスト", testDay: "2026-11-15" }, now).status).toBe("未設定");
+    expect(nextReviewTarget(tests, { ...plan, label: "別のテスト", testDay: "2026-11-15" }, now).status).toBe("日程不一致");
     const replacement = { ...plan, label: "次回カリテ", testDay: "2026-11-15" };
     expect(nextReviewTarget(tests, replacement, at("2026-11-15")).activePlan).toBe(replacement);
+    expect(nextReviewTarget(tests, { ...replacement, label: "次回　カリテ" }, now).status).toBe("設定済み");
+    expect(nextReviewTarget(tests.map(t => ({ ...t, date: t.name === replacement.label ? "2026/11/16" : t.date })), replacement, now).status).toBe("日程不一致");
     expect(nextReviewTarget(tests, replacement, at("2026-11-16")).target?.label).toBe("次々回カリテ");
   });
   it("counts eligible questions before the five-question cap and distinguishes missing and early questions", () => {
@@ -157,7 +182,10 @@ describe("JST spaced review and evidence-based selection", () => {
       scopeCount: 7, eligibleCount: 6, remaining: 5,
     });
     expect(dailyReviewSelection([early], progress, plan, at("2026-11-09"))).toMatchObject({
-      scopeCount: 1, eligibleCount: 0, selected: [],
+      scopeCount: 1, eligibleCount: 0, notDueCount: 1, selected: [],
+    });
+    expect(dailyReviewSelection([{ ...early, version: "v2" }], progress, null, at("2026-11-08"))).toMatchObject({
+      answeredCount: 1, answeredInScope: 1, notDueCount: 0, eligibleCount: 0, remaining: 4,
     });
   });
 });

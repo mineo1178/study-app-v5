@@ -52,7 +52,6 @@ export function useReviewPlan(key: string, questions: Question[], dataLoading: b
       next = adaptStudyPlan(source, bindings, questions, at, previous?.mappingsImportedAt);
     } else {
       next = parseTargetPlan(raw);
-      if (next.items.some(i => !questions.some(q => q.id === i.questionId && q.version === i.questionVersion))) throw new Error("未知・変更済みの問題IDがあります。");
     }
     if (!mounted.current || generation.current !== version) return;
     // Reread immediately before the one synchronous write, including other tabs' high-water marks.
