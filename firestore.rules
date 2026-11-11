@@ -56,6 +56,52 @@ service cloud.firestore {
         allow update: if isFamilyMember(familyId) && request.resource.data == resource.data;
         allow delete: if false;
       }
+      // Optional schedule imports are private to the authenticated account.
+      match /learningSchedules/{uid} {
+        function ownSchedule() { return isFamilyMember(familyId) && request.auth.uid == uid; }
+        function pointerPath() { return /databases/$(database)/documents/families/$(familyId)/learningSchedules/$(uid); }
+        function validMeta(p) {
+          return p.keys().hasOnly(['schemaVersion','planId','revision','versionId','digest','generatedAt','importedAt'])
+            && p.schemaVersion == 1 && p.planId is string && p.planId.matches('^[A-Za-z0-9_-]{1,100}$')
+            && p.revision is int && p.revision > 0 && p.revision <= 1000000
+            && p.versionId == p.planId + '--r' + string(p.revision)
+            && p.digest is string && p.digest.matches('^[a-f0-9]{64}$')
+            && p.generatedAt is string && p.importedAt is int;
+        }
+        function pairedImport(p) {
+          let version = /databases/$(database)/documents/families/$(familyId)/learningSchedules/$(uid)/plans/$(p.versionId);
+          let ledger = /databases/$(database)/documents/families/$(familyId)/learningSchedules/$(uid)/ledgers/$(p.planId);
+          return !exists(version) && getAfter(version).data.digest == p.digest
+            && getAfter(version).data.plan.planId == p.planId && getAfter(version).data.plan.revision == p.revision
+            && getAfter(ledger).data.revision == p.revision && getAfter(ledger).data.digest == p.digest;
+        }
+        allow read: if ownSchedule();
+        allow create: if ownSchedule() && validMeta(request.resource.data) && pairedImport(request.resource.data);
+        allow update: if ownSchedule() && (request.resource.data == resource.data || (validMeta(request.resource.data) && pairedImport(request.resource.data)));
+        allow delete: if false;
+        match /plans/{versionId} {
+          allow read: if ownSchedule();
+          allow create: if ownSchedule() && request.resource.data.keys().hasOnly(['plan','digest','importedAt'])
+            && request.resource.data.plan is map && request.resource.data.plan.schemaVersion == 'learning-schedule/1'
+            && request.resource.data.importedAt is int && request.resource.data.digest is string
+            && getAfter(pointerPath()).data.versionId == versionId
+            && getAfter(pointerPath()).data.planId == request.resource.data.plan.planId
+            && getAfter(pointerPath()).data.revision == request.resource.data.plan.revision
+            && getAfter(pointerPath()).data.digest == request.resource.data.digest;
+          allow update, delete: if false;
+        }
+        match /ledgers/{planId} {
+          function pairedLedger(p) {
+            return p.keys().hasOnly(['revision','digest']) && p.revision is int && p.revision > 0
+              && getAfter(pointerPath()).data.planId == planId && getAfter(pointerPath()).data.revision == p.revision
+              && getAfter(pointerPath()).data.digest == p.digest;
+          }
+          allow read: if ownSchedule();
+          allow create: if ownSchedule() && pairedLedger(request.resource.data);
+          allow update: if ownSchedule() && pairedLedger(request.resource.data) && request.resource.data.revision > resource.data.revision;
+          allow delete: if false;
+        }
+      }
       match /studyPlanning/{uid} {
         allow read: if isFamilyMember(familyId) && request.auth.uid == uid;
         allow create, update: if isFamilyMember(familyId) && request.auth.uid == uid

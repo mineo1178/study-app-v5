@@ -179,7 +179,7 @@ if (hasFirebaseConfig) {
 // ==========================================
 
 const FAMILY_ID = "oomine-study-2026";
-const APP_VERSION = "v1.89.0";
+const APP_VERSION = "v1.89.1";
 
 // Firestore Path 固定（変更禁止）
 // 実DB構造:
@@ -232,6 +232,7 @@ interface SubjectConfig {
 }
 
 interface Task extends StudyObservation {
+  scheduleActuals?: Record<string, import("./planning/schedule").ScheduleActual>;
   planning?: TaskPlan;
   targetSeconds?: number;
   timerMode?: "first" | "redo";
@@ -3278,7 +3279,7 @@ function SessionApp({ session, logout, initialSample }: { session?: FamilySessio
   const [activeStudyTaskReadError, setActiveStudyTaskReadError] = useState(false);
   const [deviceRestoreState, setDeviceRestoreState] = useState("not checked");
 
-  const [showGantt, setShowGantt] = useState(false);
+  const [showGantt, setShowGantt] = useState(true);
   const [activeTab, setActiveTab] = useState("daily");
   const planningActive = useCallback(() => isSampleMode || !!session?.active(), [isSampleMode, session]);
   const [calculationRunning, setCalculationRunning] = useState(false);
@@ -4519,7 +4520,7 @@ function SessionApp({ session, logout, initialSample }: { session?: FamilySessio
       <main className="design20-main flex-1 overflow-y-auto overscroll-contain no-scrollbar flex flex-col pb-24 md:pb-32 lg:pb-40">
         <StudyReview records={pendingReviews} onConfirm={confirmStudyTime} />
         {activeTab === "daily" && <div className="flex gap-2 p-3"><button className="rounded-xl border p-3" onClick={() => setShowGantt(false)}>タスク一覧</button><button className="rounded-xl border p-3" onClick={() => setShowGantt(true)}>学習計画・ガント</button></div>}
-        {activeTab === "daily" && showGantt ? <StudyGantt key={`${user?.uid ?? "sample"}-${isSampleMode}`} tasks={tasks} db={session?.database ?? null} familyId={FAMILY_ID} uid={isSampleMode ? "sample" : user!.uid} sample={isSampleMode} calculationAttempts={sampleCalculationAttempts} active={planningActive} onLocal={(id, updates) => { const latest = tasksRef.current.find(t => t.id === id); if (latest && (latest.planning?.revision ?? 0) <= updates.planning.revision) updateLocalTask(id, updates); }} onOpen={setDetailTaskId} onCreated={task => setTasks(current => current.some(t => t.id === task.id) ? current : [...current, task])} /> : activeTab === "daily" ? (
+        {activeTab === "daily" && showGantt ? <StudyGantt key={`${user?.uid ?? "sample"}-${isSampleMode}`} tasks={tasks} db={session?.database ?? null} familyId={FAMILY_ID} uid={isSampleMode ? "sample" : user!.uid} sample={isSampleMode} calculationAttempts={sampleCalculationAttempts} active={planningActive} onLocal={(id, updates) => { const latest = tasksRef.current.find(t => t.id === id); if (latest && (latest.planning?.revision ?? 0) <= updates.planning.revision) updateLocalTask(id, updates); }} onActual={(id, rangeId, actual) => { const latest = tasksRef.current.find(t => t.id === id); if (latest) updateLocalTask(id, { scheduleActuals: { ...latest.scheduleActuals, [rangeId]: actual } }); }} onOpen={setDetailTaskId} onCreated={task => setTasks(current => current.some(t => t.id === task.id) ? current : [...current, task])} /> : activeTab === "daily" ? (
           <DailyView
             game={game}
             gachaState={gachaState}

@@ -1,3 +1,4 @@
+import type { ScheduleActual } from "./schedule";
 import { getJstDay } from "../review/model";
 
 export type PlanRange = { id: string; label: string; units: number; minutes: number; day: string; done: boolean; graded: boolean; corrected: boolean; actualDay: string | null; actualSeconds: number | null };
@@ -5,7 +6,7 @@ export type Evidence = { source: string; count: number; firstCount?: number; red
 export type Baseline = { id: string; createdDay: string; targetDay: string | null; daily: Record<string, number>; evidence: Evidence };
 export type RangeCorrection = { id: string; day: string; reason: string; baselineId: string | null; previousRanges: PlanRange[]; revisedRanges: PlanRange[] };
 export type TaskPlan = { rangeCorrections?: RangeCorrection[]; schemaVersion: 1; revision: number; order?: number; endDay: string; deadline: string; ranges: PlanRange[]; baseline: Baseline | null; baselineHistory: Baseline[]; material?: { materialId: string; title: string; requirement: "required" | "reinforcement" | "advanced"; selected: boolean; references: string[] } };
-export type PlanningTask = { id: string; unit: string; subject: string; category: string; materialName: string; title: string; status: "not_started" | "in_progress" | "completed"; isRunning: boolean; currentDuration?: number; planning?: TaskPlan; history: { duration: number; operationCheck?: boolean; reviewStatus?: string; score?: number; graded?: boolean; attemptType?: string; units?: number; endAt?: number; date?: string }[] };
+export type PlanningTask = { scheduleActuals?: Record<string,ScheduleActual>; id: string; unit: string; subject: string; category: string; materialName: string; title: string; status: "not_started" | "in_progress" | "completed"; isRunning: boolean; currentDuration?: number; planning?: TaskPlan; history: { duration: number; operationCheck?: boolean; reviewStatus?: string; score?: number; graded?: boolean; attemptType?: string; units?: number; endAt?: number; date?: string }[] };
 export const emptyPlan = (): TaskPlan => ({ schemaVersion: 1, revision: 0, order: 0, endDay: "", deadline: "", ranges: [], baseline: null, baselineHistory: [] });
 export const validDay = (day: string) => /^\d{4}-\d{2}-\d{2}$/.test(day) && Number.isFinite(Date.parse(day)) && new Date(day).toISOString().slice(0, 10) === day;
 export const addDays = (day: string, days: number) => new Date(Date.parse(day) + days * 86400000).toISOString().slice(0, 10);
