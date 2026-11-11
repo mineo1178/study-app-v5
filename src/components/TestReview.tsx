@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { Firestore } from "firebase/firestore";
 import type { FamilySession } from "../use-family-session";
 import { SUBJECTS, createReviewDraft, visibleQuestions, answerQuestion, getJstDay, nextProgress, progressLabel, restoreDraft, sampleQuestions, reviewDueAt, type Draft, type Question, type Weakness } from "../review/model";
-import { dailyReviewSelection, nextReviewTarget, targetCandidates, type RegisteredTest } from "../review/target-plan";
+import { dailyReviewSelection, nextReviewTarget, type RegisteredTest } from "../review/target-plan";
 import { useReviewPlan } from "../review/use-review-plan";
 import { ReviewTargetPlan } from "./ReviewTargetPlan";
 import { loadReview, saveReview, type ReviewData } from "../review/repository";
@@ -49,7 +49,9 @@ export function TestReview({ db, familyId, uid, sample, session, enabled, tests 
     const refresh = () => setNow(Date.now());
     const timer = setInterval(refresh, draft && draft.finishedAt === null ? 1000 : 60000);
     window.addEventListener("focus", refresh);
-    return () => { clearInterval(timer); window.removeEventListener("focus", refresh); };
+    window.addEventListener("pageshow", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => { clearInterval(timer); window.removeEventListener("focus", refresh); window.removeEventListener("pageshow", refresh); document.removeEventListener("visibilitychange", refresh); };
   }, [draft]);
   function persistDraft(next: Draft | null) {
     let warning = "";
@@ -62,11 +64,11 @@ export function TestReview({ db, familyId, uid, sample, session, enabled, tests 
     setData(next);
   }
   function begin(questions: Question[], mode: Draft["mode"]) {
-    if (!questions.length || pending.current || !active() || planState.error || planState.restoring) return;
+    if (!questions.length || pending.current || !active() || planState.error || planState.restoring || loading || error || busy || (draft && draft.finishedAt === null)) return;
     const started = createReviewDraft(uid, questions, mode);
-    const picked = mode === "daily" ? targetCandidates(questions, data.progress, nextReviewTarget(tests, plan, started.startedAt).activePlan, started.startedAt).map(c => c.question) : questions;
-    if (!picked.length) { setNow(started.startedAt); return; }
-    const next = { ...started, questions: picked }; setNow(next.startedAt); setSaved(false); setSelected(null); setDiscard(false); setError("");
+    // Refresh a stale day first so the user sees the new selection before starting.
+    if (mode === "daily" && getJstDay(started.startedAt) !== getJstDay(now)) { setNow(started.startedAt); return; }
+    const next = started; setNow(next.startedAt); setSaved(false); setSelected(null); setDiscard(false); setError("");
     persistDraft(next);
   }
   async function storeResult() {
@@ -124,7 +126,7 @@ export function TestReview({ db, familyId, uid, sample, session, enabled, tests 
     dailyReviewSelection(availableQuestions, data.progress, activePlan, now);
   const missing = activePlan ? activePlan.items.length - scopeCount : 0;
   function beginDaily(wrongOnly = false) {
-    begin(wrongOnly ? wrong : availableQuestions, "daily");
+    begin(candidates.filter(c => !wrongOnly || wrong.some(q => q.id === c.question.id)).map(c => c.question), "daily");
   }
   const time = (ms: number) => `${Math.floor(ms / 60000)}分${Math.floor(ms / 1000) % 60}秒`;
   if (!sample && !enabled) return <section className="p-5"><h2 className="text-xl font-black">対策・復習</h2><p className="mt-3">保存機能は公開準備中です。現在はサンプルモードで試せます。</p></section>;
@@ -136,6 +138,7 @@ export function TestReview({ db, familyId, uid, sample, session, enabled, tests 
     {error && <div role="alert" className="space-y-2 rounded-xl bg-red-50 p-3 text-sm text-red-700"><p>{error}</p>{!draft && <button className={secondary} onClick={() => { setLoading(true); setError(""); setReload(n => n + 1); }}>復習データを再読込</button>}</div>}
     {loading || planState.restoring ? <p role="status">復習データを読み込み中…</p> : draft ? <>
       {draft.finishedAt === null ? <div className="space-y-4 rounded-2xl border border-blue-100 bg-white p-4">
+        <p role="status" className="text-sm">開始日：{getJstDay(draft.startedAt)}（JST）。途中の問題を続けています。日付や計画が変わっても、この問題は入れ替えません。</p>
         <p className="text-sm font-bold">{draft.answers.length + 1} / {draft.questions.length} 問 · {time(Math.max(0, now - draft.startedAt))}</p>
         <p className="text-xs text-slate-500">目安は3分。時間を超えても大丈夫。焦らず考えよう。途中経過はこの端末に保存します。</p>
         <p className="text-sm">{SUBJECTS[draft.questions[draft.answers.length].subject]} ／ {draft.questions[draft.answers.length].unit}</p>
@@ -166,6 +169,12 @@ export function TestReview({ db, familyId, uid, sample, session, enabled, tests 
           <p>現在の対策：{target?.label ?? "次回カリテ未登録"} ／ 開催日：{target?.testDay ?? "未登録"}</p>
           <p>対策計画：{status} ／ 今日の候補：{eligibleCount}問</p>
           <p>公開済み：{availableQuestions.length}問 ／ {activePlan ? "計画に対応" : "一般復習の対象"}：{scopeCount}問 ／ 今日の出題：{candidates.length}問</p>
+          <details aria-label="出題診断"><summary>出題診断（この端末の読込時点）</summary>
+            <p>計画とID・版が一致：{plan ? availableQuestions.filter(q => plan.items.some(i => i.questionId === q.id && i.questionVersion === q.version)).length : 0}問</p>
+            <p>公開問題の未出題：{availableQuestions.filter(q => !data.progress.some(p => p.questionId === q.id && p.questionVersion === q.version)).length}問 ／ 出題済み：{availableQuestions.filter(q => data.progress.some(p => p.questionId === q.id && p.questionVersion === q.version)).length}問</p>
+            <p>当日回答済み：{answeredCount}問 ／ 対象内の期限到来：{eligibleCount - newCount}問 ／ 最終候補：{candidates.length}問</p>
+            <p>対策計画はこの端末に保存されます。別端末では状態が異なる場合があります。開始済みの問題は途中経過から復元します。</p>
+          </details>
           {activePlan && !hasRegisteredTarget &&
             <p>登録済みの次回カリテ日程がないため、この端末の計画の日付を使います。</p>}
           {!activePlan && <p className="text-amber-900">

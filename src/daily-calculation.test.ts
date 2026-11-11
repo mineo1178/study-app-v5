@@ -6,13 +6,13 @@ describe("daily calculation records", () => {
     expect(getCalculationElapsedSeconds(0, 1234, 1234 + milliseconds)).toBe(expected);
     expect(getCalculationElapsedSeconds(150, 1234, 1234 + milliseconds)).toBe(150 + expected);
   });
-  it("uses a monotonic anchor, keeps running beyond 15 minutes and never adds repeated ticks twice", () => {
+  it("uses a time anchor, keeps running beyond 15 minutes and never adds repeated ticks twice", () => {
     expect(getCalculationElapsedSeconds(0, 1000, 1000 + 16 * 60000)).toBe(960);
     expect(getCalculationElapsedSeconds(30, 1000, 16000)).toBe(45);
     expect(getCalculationElapsedSeconds(30, 1000, 16000)).toBe(45);
     expect(getCalculationElapsedSeconds(30, 1000, 500)).toBe(30);
   });
-  it("restores a saved baseline with a fresh monotonic anchor and caps unreasonable durations", () => {
+  it("restores a saved baseline with a fresh time anchor and caps unreasonable durations", () => {
     expect(getCalculationElapsedSeconds(48, 0, 2000)).toBe(50);
     expect(getCalculationElapsedSeconds(0, 0, 86400000)).toBe(MAX_CALCULATION_SECONDS);
   });

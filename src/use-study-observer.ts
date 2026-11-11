@@ -44,7 +44,7 @@ export const useStudyObserver = <T extends SessionTask>(
       tasksRef.current.filter((task) => task.isRunning).forEach((task) => {
         submit(task, { ...createStudySessionOperation(task, "observe", now), visibility: hidden ? "hidden" : "visible" });
       });
-      check();
+      if (!hidden) check();
     };
     const onVisibility = () => visibility(document.hidden);
     const onHide = () => visibility(true);

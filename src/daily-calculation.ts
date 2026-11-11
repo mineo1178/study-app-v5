@@ -1,8 +1,9 @@
 import { collection, doc, getDocFromServer, runTransaction, type Firestore } from "firebase/firestore";
 
 export const MAX_CALCULATION_SECONDS = 4 * 60 * 60;
-export const getCalculationElapsedSeconds = (baseSeconds: number, startedMonotonic: number, nowMonotonic: number) =>
-  Math.min(MAX_CALCULATION_SECONDS, baseSeconds + Math.max(0, Math.floor((nowMonotonic - startedMonotonic) / 1000)));
+// Wall time catches up after OS sleep; callbacks only refresh the display.
+export const getCalculationElapsedSeconds = (baseSeconds: number, startedAt: number, now: number) =>
+  Math.min(MAX_CALCULATION_SECONDS, baseSeconds + Math.max(0, Math.floor((now - startedAt) / 1000)));
 export type CalculationDraft = { id: string; dateKey: string; score: number; elapsedSeconds: number; startedAt: number; finishedAt: number; taskId?: string; taskLabel?: string };
 export type CalculationAttempt = CalculationDraft & { attemptNo: number; maxScore: 7; attemptType: "first" | "redo"; createdAt: number };
 export type CalculationDay = { dateKey: string; attemptCount: number; firstScore: number; firstElapsedSeconds: number; latestScore: number; latestElapsedSeconds: number; bestScore: number; latestAttemptId: string };

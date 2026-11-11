@@ -53,7 +53,8 @@ const CalculationStopwatch = ({ familyId, uid, sample, onSave, diagnostic, start
     const tick = () => {
       const value = current.current;
       if (value?.phase !== "running") return;
-      const seconds = getCalculationElapsedSeconds(anchor.current.elapsed, anchor.current.at, performance.now());
+      const seconds = Math.max(value.elapsedSeconds, getCalculationElapsedSeconds(anchor.current.elapsed, anchor.current.at, Date.now()));
+      current.current = { ...value, elapsedSeconds: seconds };
       setElapsed(seconds);
       if (!sample) {
         try { localStorage.setItem(`${calculationStorageKey(familyId, uid, value.dateKey)}-${taskId}`, JSON.stringify({ ...value, elapsedSeconds: seconds })); } catch { /* Save remains available. */ }
@@ -61,21 +62,23 @@ const CalculationStopwatch = ({ familyId, uid, sample, onSave, diagnostic, start
     };
     const timer = window.setInterval(tick, 250);
     window.addEventListener("pagehide", tick);
+    window.addEventListener("pageshow", tick);
+    window.addEventListener("focus", tick);
     document.addEventListener("visibilitychange", tick);
-    return () => { tick(); mounted.current = false; onRunningChange(false); window.clearInterval(timer); window.removeEventListener("pagehide", tick); document.removeEventListener("visibilitychange", tick); };
+    return () => { tick(); mounted.current = false; onRunningChange(false); window.clearInterval(timer); window.removeEventListener("pagehide", tick); window.removeEventListener("pageshow", tick); window.removeEventListener("focus", tick); document.removeEventListener("visibilitychange", tick); };
   }, [familyId, uid, sample, taskId, onRunningChange]);
   const start = () => {
     if (blocked || busy.current || (current.current && current.current.phase !== "paused")) { recordDiagnostic({ type: "GUARD", source, button: "START", code: blocked ? blockedReason : busy.current ? "BUSY" : "WRONG_PHASE" }); return; }
     recordDiagnostic({ type: "HANDLER", source, button: active?.phase === "paused" ? "RESUME" : "START" });
     const now = Date.now();
     const value: ActiveCalculation = active?.phase === "paused" ? { ...active, phase: "running" } : { id: crypto.randomUUID(), dateKey: getJstDateKey(now), startedAt: now, elapsedSeconds: 0, score: 0, phase: "running" };
-    anchor.current = { elapsed: value.elapsedSeconds, at: performance.now() };
+    anchor.current = { elapsed: value.elapsedSeconds, at: now };
     setElapsed(value.elapsedSeconds); change(value); setError(""); setSaved(false);
   };
   const finish = () => {
     if (!active || current.current?.phase !== "running") { recordDiagnostic({ type: "GUARD", source, button: "STOP", code: "WRONG_PHASE" }); return; }
     recordDiagnostic({ type: "HANDLER", source, button: "STOP" }); transition("stopping");
-    const seconds = getCalculationElapsedSeconds(anchor.current.elapsed, anchor.current.at, performance.now());
+    const seconds = Math.max(current.current.elapsedSeconds, getCalculationElapsedSeconds(anchor.current.elapsed, anchor.current.at, Date.now()));
     setElapsed(seconds);
     change({ ...active, elapsedSeconds: seconds, finishedAt: Math.max(active.startedAt, Date.now()), phase: "scoring" });
   };
@@ -90,7 +93,7 @@ const CalculationStopwatch = ({ familyId, uid, sample, onSave, diagnostic, start
     finally { busy.current = false; setSaving(false); }
   };
   return <section className="rounded-3xl bg-white p-5 shadow-sm">
-    <h2 className="text-xl font-black">計算の結果を記録</h2><p className="mt-2 text-sm">計算時間は学習時間・活動Pには重ねて加えないよ。画面を閉じると計測はお休みするよ。</p>{blocked && <p role="status" className="mt-2">先に学習タイマーを終了して、途中の学習記録を保存してね。</p>}
+    <h2 className="text-xl font-black">計算の結果を記録</h2><p className="mt-2 text-sm">計算時間は学習時間・活動Pには重ねて加えないよ。スリープから戻ると経過時間を確認するよ。画面を開き直したときは、端末に残った時間から再開してね。</p>{blocked && <p role="status" className="mt-2">先に学習タイマーを終了して、途中の学習記録を保存してね。</p>}
     <p role="status" className="mt-3 text-center font-bold">{saving ? "結果を保存中…" : error ? "記録を確認して、もう一度ためしてね。" : saved ? "結果を保存したよ！" : active?.phase === "running" ? "計測中" : active?.phase === "scoring" ? "計測終了。得点を選んで結果を確認してね。" : active?.phase === "paused" ? "計測をお休み中" : "準備ができたら計算をはじめよう"}</p>
     <p className="my-4 text-center font-mono text-4xl font-black" aria-live="off">{formatCalculationTime(elapsed)}</p>
     {!active && <DiagnosticButton source={source} action="START" reason={blocked ? blockedReason : "NONE"} className="w-full rounded-2xl bg-blue-600 p-5 text-xl font-black text-white" disabled={blocked} onClick={start}>{startLabel}</DiagnosticButton>}
