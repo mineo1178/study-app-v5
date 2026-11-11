@@ -1,4 +1,4 @@
-import { getJstDay, jstDayNumber, reviewDueAt, validId, type Progress, type Question } from "./model";
+import { getJstDay, jstDayNumber, reviewDueAt, validId, type Answer, type Progress, type Question } from "./model";
 import type { Integration } from "./exchange-plan";
 
 // Personal observations are imported on the device; never bundled with the app or sent to Firestore.
@@ -107,4 +107,27 @@ export function dailyReviewSelection(questions: Question[], progress: Progress[]
 
 export function targetCandidates(questions: Question[], progress: Progress[], plan: TargetPlan | null, now: number) {
   return dailyReviewSelection(questions, progress, plan, now).selected;
+}
+
+// Today's answers never affect ranking. The caller also snapshots IDs for the day.
+export function practiceSelection(questions: Question[], history: Answer[], plan: TargetPlan | null, now: number) {
+  const prior = history.filter(a => getJstDay(a.answeredAt) < getJstDay(now));
+  const active = activeTargetPlan(plan, now);
+  const rank = (q: Question) => {
+    const item = active?.items.find(i => i.questionId === q.id && i.questionVersion === q.version);
+    const answers = prior.filter(a => a.questionId === q.id && a.questionVersion === q.version);
+    return [item ? 0 : 1, answers.length ? 1 : 0, answers.some(a => !a.correct) ? 0 : 1, answers.length];
+  };
+  const sorted = [...questions].sort((a, b) => {
+    const ar = rank(a), br = rank(b);
+    return ar.reduce((diff, value, i) => diff || value - br[i], 0) || a.id.localeCompare(b.id);
+  });
+  for (let start = 0; start < sorted.length;) {
+    let end = start + 1;
+    while (end < sorted.length && rank(sorted[start]).join() === rank(sorted[end]).join()) end++;
+    const group = sorted.slice(start, end), offset = jstDayNumber(now) % group.length;
+    sorted.splice(start, group.length, ...group.slice(offset), ...group.slice(0, offset));
+    start = end;
+  }
+  return sorted.slice(0, 5);
 }

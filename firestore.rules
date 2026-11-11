@@ -22,6 +22,32 @@ service cloud.firestore {
       match /tasks/{taskId} {
         allow read, create, update, delete: if isFamilyMember(familyId);
       }
+      match /studyMaterialFiles/{sha256} {
+        allow read: if isFamilyMember(familyId);
+        allow create: if isFamilyMember(familyId) && sha256.matches('^[a-f0-9]{64}$')
+          && request.resource.data.keys().hasOnly(['materialId'])
+          && request.resource.data.materialId is string
+          && existsAfter(/databases/$(database)/documents/families/$(familyId)/studyMaterials/$(request.resource.data.materialId));
+        allow update: if isFamilyMember(familyId) && request.resource.data == resource.data;
+        allow delete: if false;
+      }
+      match /studyMaterials/{materialId} {
+        allow read: if isFamilyMember(familyId);
+        allow create: if isFamilyMember(familyId) && materialId.matches('^material-[a-f0-9]{64}$')
+          && request.resource.data.keys().hasOnly(['taskId', 'materialId'])
+          && request.resource.data.materialId == materialId && request.resource.data.taskId is string
+          && getAfter(/databases/$(database)/documents/families/$(familyId)/tasks/$(request.resource.data.taskId)).data.planning.material.materialId == materialId;
+        allow update: if isFamilyMember(familyId) && request.resource.data == resource.data;
+        allow delete: if false;
+      }
+      match /studyPlanning/{uid} {
+        allow read: if isFamilyMember(familyId) && request.auth.uid == uid;
+        allow create, update: if isFamilyMember(familyId) && request.auth.uid == uid
+          && request.resource.data.keys().hasOnly(['schemaVersion', 'capacities'])
+          && request.resource.data.schemaVersion == 1
+          && request.resource.data.capacities is map && request.resource.data.capacities.size() <= 366;
+        allow delete: if false;
+      }
       match /tests/{testId} {
         allow read, create, update, delete: if isFamilyMember(familyId);
       }
@@ -51,7 +77,7 @@ service cloud.firestore {
               && a.selectedIndex is int && a.selectedIndex >= 0 && a.selectedIndex <= 3
               && a.correct == (a.selectedIndex == q.correctIndex) && a.prompt == q.prompt
               && a.selected == q.choices[a.selectedIndex] && a.expected == q.choices[q.correctIndex] && a.explanation == q.explanation
-              && a.mode in ['daily', 'retry'] && a.answeredAt is int && a.answeredAt >= 0 && a.answeredAt <= request.time.toMillis()
+              && a.mode in ['daily', 'retry', 'practice'] && a.answeredAt is int && a.answeredAt >= 0 && a.answeredAt <= request.time.toMillis()
               && a.elapsedMs is int && a.elapsedMs >= 0 && a.elapsedMs <= a.answeredAt;
           }
           function paired(a) {
@@ -60,7 +86,7 @@ service cloud.firestore {
               && getAfter(p).data.count == (exists(p) ? get(p).data.count + 1 : 1);
           }
           allow read: if ownReview();
-          allow create: if ownReview() && answerShape(request.resource.data) && paired(request.resource.data);
+          allow create: if ownReview() && answerShape(request.resource.data) && (request.resource.data.mode == 'practice' || paired(request.resource.data));
           allow update, delete: if false;
         }
         match /progress/{questionId} {
@@ -101,7 +127,7 @@ service cloud.firestore {
                 'recordedAttemptId': a.id,
                 'latestMode': newer ? a.mode : old.latestMode
               };
-            return !exists(attemptPath(p.recordedAttemptId)) && a.questionId == questionId && (
+            return a.mode != 'practice' && !exists(attemptPath(p.recordedAttemptId)) && a.questionId == questionId && (
               (p == legacy && (old == null || !('reviewStage' in old))) ||
               (p.diff(legacy).affectedKeys().hasOnly(['nextAt', 'reviewStage', 'reviewDay']) &&
                 p.reviewStage == spaced.reviewStage && p.reviewDay == spaced.reviewDay && p.nextAt == spaced.nextAt)
@@ -146,11 +172,13 @@ service cloud.firestore {
         allow delete: if false;
         match /attempts/{attemptId} {
           function validAttempt(data) {
-            return data.keys().hasOnly(['id', 'dateKey', 'score', 'elapsedSeconds', 'startedAt', 'finishedAt', 'attemptNo', 'maxScore', 'attemptType', 'createdAt', 'taskId', 'taskLabel'])
+            return data.keys().hasOnly(['id', 'dateKey', 'score', 'elapsedSeconds', 'startedAt', 'finishedAt', 'attemptNo', 'maxScore', 'attemptType', 'createdAt', 'taskId', 'taskLabel', 'targetSeconds', 'operationCheck'])
               && (!('taskId' in data) || (data.taskId is string && data.taskId.size() > 0 && data.taskId.size() <= 200
                 && get(/databases/$(database)/documents/families/$(familyId)/tasks/$(data.taskId)).data.subject == 'math'
                 && get(/databases/$(database)/documents/families/$(familyId)/tasks/$(data.taskId)).data.category == '計算'))
               && (!('taskLabel' in data) || ('taskId' in data && data.taskLabel is string && data.taskLabel.size() > 0 && data.taskLabel.size() <= 300))
+              && (!('operationCheck' in data) || data.operationCheck is bool)
+              && (!('targetSeconds' in data) || (data.targetSeconds is int && data.targetSeconds > 0 && data.targetSeconds <= 14400))
               && data.id == attemptId && data.dateKey == dateKey && data.dateKey is string
               && score(data.score) && seconds(data.elapsedSeconds) && data.maxScore == 7
               && data.attemptNo is int && data.attemptNo > 0

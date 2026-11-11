@@ -3,9 +3,9 @@ export const TEST_KINDS = ["未指定", "判定", "組分け", "カリテ", "そ
 export type Subject = keyof typeof SUBJECTS;
 export type Question = { published?: boolean; id: string; version: string; subject: Subject; unit: string; prompt: string; choices: string[]; correctIndex: number; explanation: string; testKind: string; source: string };
 export type Weakness = { id: string; subject: Subject; unit: string; mistake: string; point: string; testKind: string; questionIds: string[] };
-export type Answer = { id: string; uid: string; sessionId: string; questionId: string; questionVersion: string; selectedIndex: number; correct: boolean; answeredAt: number; elapsedMs: number; mode: "daily" | "retry"; prompt: string; selected: string; expected: string; explanation: string };
+export type Answer = { id: string; uid: string; sessionId: string; questionId: string; questionVersion: string; selectedIndex: number; correct: boolean; answeredAt: number; elapsedMs: number; mode: "daily" | "retry" | "practice"; prompt: string; selected: string; expected: string; explanation: string };
 export type Progress = { questionId: string; questionVersion: string; count: number; firstCorrect: boolean; latestCorrect: boolean; previousCorrect: boolean; latestAt: number; nextAt: number; latestAttemptId: string; recordedAttemptId: string; latestMode: "daily" | "retry"; reviewStage?: number; reviewDay?: number };
-export type Draft = { id: string; uid: string; mode: "daily" | "retry"; startedAt: number; questionStartedAt: number; questions: Question[]; answers: Answer[]; finishedAt: number | null };
+export type Draft = { id: string; uid: string; mode: "daily" | "retry" | "practice"; startedAt: number; questionStartedAt: number; questions: Question[]; answers: Answer[]; finishedAt: number | null };
 const record = (value: unknown): value is Record<string, unknown> => !!value && typeof value === "object" && !Array.isArray(value);
 const text = (value: unknown, max: number) => typeof value === "string" && value.trim().length > 0 && value.length <= max;
 export const validId = (value: unknown): value is string => typeof value === "string" && /^[A-Za-z0-9_-]{1,100}$/.test(value);
@@ -66,6 +66,7 @@ export function answerQuestion(draft: Draft, selectedIndex: number, now: number)
   return { ...draft, answers: [...draft.answers, answer], questionStartedAt: at, finishedAt: index + 1 === draft.questions.length ? at : null };
 }
 export function nextProgress(previous: Progress | undefined, answer: Answer): Progress {
+  if (answer.mode === "practice") throw new Error("追加練習は復習進捗を更新しません。");
   if (previous && previous.latestAt > answer.answeredAt) return { ...previous, count: previous.count + 1, recordedAttemptId: answer.id };
   const current = previous?.questionVersion === answer.questionVersion ? previous : undefined;
   const day = jstDayNumber(answer.answeredAt);
@@ -83,7 +84,7 @@ export function restoreDraft(raw: string | null, uid: string): Draft | null {
   if (!raw || raw.length > 100000) return null;
   try {
     const d: unknown = JSON.parse(raw);
-    if (!record(d) || !validId(d.id) || d.uid !== uid || !["daily", "retry"].includes(String(d.mode)) || !Array.isArray(d.questions) || !Array.isArray(d.answers) || d.questions.length < 1 || d.questions.length > 5 || d.answers.length > d.questions.length ||
+    if (!record(d) || !validId(d.id) || d.uid !== uid || !["daily", "retry", "practice"].includes(String(d.mode)) || !Array.isArray(d.questions) || !Array.isArray(d.answers) || d.questions.length < 1 || d.questions.length > 5 || d.answers.length > d.questions.length ||
       !Number.isSafeInteger(d.startedAt) || Number(d.startedAt) < 0 || !Number.isSafeInteger(d.questionStartedAt) || Number(d.questionStartedAt) < Number(d.startedAt)) return null;
     d.questions.forEach(validateQuestion);
     if (new Set(d.questions.map(q => q.id)).size !== d.questions.length) return null;

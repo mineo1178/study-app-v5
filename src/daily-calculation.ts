@@ -4,7 +4,7 @@ export const MAX_CALCULATION_SECONDS = 4 * 60 * 60;
 // Wall time catches up after OS sleep; callbacks only refresh the display.
 export const getCalculationElapsedSeconds = (baseSeconds: number, startedAt: number, now: number) =>
   Math.min(MAX_CALCULATION_SECONDS, baseSeconds + Math.max(0, Math.floor((now - startedAt) / 1000)));
-export type CalculationDraft = { id: string; dateKey: string; score: number; elapsedSeconds: number; startedAt: number; finishedAt: number; taskId?: string; taskLabel?: string };
+export type CalculationDraft = { targetSeconds?: number; operationCheck?: boolean; id: string; dateKey: string; score: number; elapsedSeconds: number; startedAt: number; finishedAt: number; taskId?: string; taskLabel?: string };
 export type CalculationAttempt = CalculationDraft & { attemptNo: number; maxScore: 7; attemptType: "first" | "redo"; createdAt: number };
 export type CalculationDay = { dateKey: string; attemptCount: number; firstScore: number; firstElapsedSeconds: number; latestScore: number; latestElapsedSeconds: number; bestScore: number; latestAttemptId: string };
 export const getJstDateKey = (at = Date.now()) => new Date(at + 9 * 60 * 60 * 1000).toISOString().slice(0, 10);
@@ -14,6 +14,8 @@ export const getCalculationAttempts = (db: Firestore, familyId: string, uid: str
 export const validateCalculationDraft = (draft: CalculationDraft) => {
   if (!draft.id || draft.id.includes("/") || !Number.isInteger(draft.score) || draft.score < 0 || draft.score > 7 ||
     !Number.isInteger(draft.elapsedSeconds) || draft.elapsedSeconds < 0 || draft.elapsedSeconds > MAX_CALCULATION_SECONDS ||
+    (draft.operationCheck !== undefined && typeof draft.operationCheck !== "boolean") ||
+    (draft.targetSeconds !== undefined && (!Number.isInteger(draft.targetSeconds) || draft.targetSeconds < 1 || draft.targetSeconds > MAX_CALCULATION_SECONDS)) ||
     !Number.isFinite(draft.startedAt) || !Number.isFinite(draft.finishedAt) || draft.startedAt < 0 || draft.finishedAt < draft.startedAt ||
     draft.dateKey !== getJstDateKey(draft.startedAt) ||
     (draft.taskId !== undefined && (typeof draft.taskId !== "string" || !draft.taskId || draft.taskId.includes("/") || draft.taskId.length > 200)) ||

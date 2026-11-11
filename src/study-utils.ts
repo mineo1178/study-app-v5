@@ -11,6 +11,11 @@ export const LONG_SESSION_SECONDS = 120 * 60;
 export const LONG_BACKGROUND_SECONDS = 30 * 60;
 
 export type StudyHistoryEntry = {
+  targetSeconds?: number;
+  graded?: boolean;
+  attemptType?: "first" | "redo";
+  units?: number;
+  operationCheck?: boolean;
   reviewStatus?: "not_required" | "pending" | "confirmed";
   reviewReasons?: ("idle" | "background")[];
   recordedDuration?: number;

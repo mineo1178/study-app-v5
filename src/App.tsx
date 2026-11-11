@@ -1,3 +1,7 @@
+import { studyTargetAverage } from "./planning/target-time";
+import { TargetTime } from "./components/TargetTime";
+import { StudyGantt } from "./components/StudyGantt";
+import type { TaskPlan } from "./planning/model";
 import { commitTokyoDomePerformance, prepareTokyoDomePerformance, type TokyoDomeResult } from "./game/tokyo-dome";
 import { getStudyRewardPreview } from "./game/study-reward-preview";
 import { DailyCalculation, CalculationInput } from "./components/DailyCalculation";
@@ -175,7 +179,7 @@ if (hasFirebaseConfig) {
 // ==========================================
 
 const FAMILY_ID = "oomine-study-2026";
-const APP_VERSION = "v1.88.11";
+const APP_VERSION = "v1.89.0";
 
 // Firestore Path 固定（変更禁止）
 // 実DB構造:
@@ -228,6 +232,12 @@ interface SubjectConfig {
 }
 
 interface Task extends StudyObservation {
+  planning?: TaskPlan;
+  targetSeconds?: number;
+  timerMode?: "first" | "redo";
+  timerUnits?: number;
+  timerGraded?: boolean;
+  timerOperationCheck?: boolean;
   id: string;
   unit: string;
   subject: Subject;
@@ -562,6 +572,7 @@ const StrictTimer = React.memo(
     onSaveRecord,
     pauseAllOtherTasks,
     calculationRunning = false,
+    relatedHistory = [],
   }: {
     task: Task;
     updateLocalTask: (id: string, updates: Partial<Task>) => void;
@@ -569,6 +580,7 @@ const StrictTimer = React.memo(
     onSaveRecord: (task: Task) => Promise<void>;
     pauseAllOtherTasks: (id: string) => Promise<void>;
     calculationRunning?: boolean;
+    relatedHistory?: Task["history"];
   }) => {
     const [localSeconds, setLocalSeconds] = useState(task.currentDuration);
     const [isSaving, setIsSaving] = useState(false);
@@ -582,6 +594,8 @@ const StrictTimer = React.memo(
     const savedAfterRetry = !!saveError && !task.pendingSync && task.currentDuration === 0 && task.history.some((entry) => entry.id === getStudySessionId(task));
     const savePending = React.useContext(SessionOperationsContext)().some((operation) => operation.kind === "save" && operation.taskId === task.id && operation.sessionId === getStudySessionId(task));
     const transition = useTimerDiagnostics("study", isSaving ? "saving" : savedAfterRetry ? "saved" : saveError ? "retryable" : isRunning ? "running" : task.currentDuration > 0 ? "paused" : task.history.some(entry => entry.reviewStatus === "pending") ? "review_pending" : "idle");
+    const targetAverage = studyTargetAverage(task.history, task.timerMode ?? "first", task.timerUnits ?? 0, relatedHistory);
+    const saveTimerOptions = (updates: Partial<Task>) => { updateLocalTask(task.id, updates); syncTaskToCloud(task.id, updates); };
     const startReason = calculationRunning ? "OTHER_TIMER" : isSaving ? "SAVING" : savePending ? "SAVE_PENDING" : "NONE";
     const stopReason = calculationRunning ? "OTHER_TIMER" : isSaving ? "SAVING" : localSeconds === 0 ? "ZERO_TIME" : "NONE";
 
@@ -613,6 +627,7 @@ const StrictTimer = React.memo(
 
     const handlePlay = async (e?: React.MouseEvent) => {
       e?.stopPropagation();
+      if (task.targetSeconds === 0) { setSaveError("目標時間は1秒以上にしてください。"); return; }
       if (task.isRunning || startInFlightRef.current || isSaving || savePending) { recordDiagnostic({ type: "GUARD", source: "study", button: "START", code: startInFlightRef.current ? "BUSY" : task.isRunning ? "WRONG_PHASE" : isSaving ? "SAVING" : "SAVE_PENDING" }); return; }
       recordDiagnostic({ type: "HANDLER", source: "study", button: "START" });
       setSaveError("");
@@ -622,7 +637,7 @@ const StrictTimer = React.memo(
         await pauseAllOtherTasks(task.id);
 
         const startTime = Date.now();
-        const operation = createStudySessionOperation(task, "start", startTime);
+        const operation = createStudySessionOperation({ ...task, targetSeconds: task.targetSeconds ?? targetAverage.seconds }, "start", startTime);
         reviewFlagsRef.current = task.currentDuration > 0 ? task.sessionReviewFlags ?? [] : [];
         hiddenAtRef.current = null;
 
@@ -700,6 +715,10 @@ const StrictTimer = React.memo(
 
     return (
       <div className="design20-timer flex flex-col gap-3 md:gap-4 w-full relative">
+        <fieldset disabled={isRunning || isSaving || savePending || task.currentDuration > 0} className="flex flex-wrap gap-2 text-sm"><legend>今回の学習条件（平均時間の照合用）</legend><label>実施モード<select value={task.timerMode ?? "first"} onChange={e => saveTimerOptions({ timerMode: e.target.value as "first" | "redo", targetSeconds: studyTargetAverage(task.history, e.target.value as "first" | "redo", task.timerUnits ?? 0, relatedHistory).seconds })}><option value="first">初回</option><option value="redo">解き直し</option></select></label><label>問題・ページの作業量<input type="number" min={0} className="w-20 border p-2" value={task.timerUnits ?? 0} onChange={e => saveTimerOptions({ timerUnits: Math.max(0, Number(e.target.value)), targetSeconds: studyTargetAverage(task.history, task.timerMode ?? "first", Math.max(0, Number(e.target.value)), relatedHistory).seconds })} /></label><label><input type="checkbox" checked={task.timerOperationCheck ?? false} onChange={e => saveTimerOptions({ timerOperationCheck: e.target.checked })} />操作確認（平均の対象外）</label></fieldset>
+        <label className="text-sm"><input type="checkbox" disabled={isSaving || savePending} checked={task.timerGraded ?? false} onChange={e => saveTimerOptions({ timerGraded: e.target.checked })} />この記録は採点まで完了（0点も有効）</label>
+        <p className="text-xs">平均は同一タスクを優先し、履歴がないときは同教科・同教材名・同カテゴリを参照。同じ作業量・初回／直し・採点済みの条件で照合し、操作確認と確認待ちは除きます。</p>
+        <TargetTime seconds={task.targetSeconds ?? targetAverage.seconds} elapsed={localSeconds} sessionId={getStudySessionId(task)} running={isRunning} locked={isSaving || savePending} settingsLocked={task.currentDuration > 0} count={targetAverage.count} provisional={targetAverage.provisional} manual={task.targetSeconds !== undefined && task.targetSeconds !== targetAverage.seconds} averageSeconds={targetAverage.seconds} onChange={seconds => { updateLocalTask(task.id, { targetSeconds: seconds }); syncTaskToCloud(task.id, { targetSeconds: seconds }); }} onLater={handlePauseClick} onEnd={() => void handleStopAndSave()} />
         <div className="flex items-center justify-between bg-slate-50 rounded-2xl md:rounded-3xl p-3 md:p-5 lg:p-6 border border-slate-200 shadow-inner w-full">
           <div className="flex-1 text-center">
             <span
@@ -1209,6 +1228,7 @@ const TaskDetailModal = ({
   onSaveRecord,
   onDelete,
   pauseAllOtherTasks,
+  allTasks = [],
   calculationInput,
   calculationRunning,
 }: any) => {
@@ -1310,6 +1330,7 @@ const TaskDetailModal = ({
             </label>
             <StrictTimer
               task={task}
+              relatedHistory={(allTasks as Task[]).filter(t => t.id !== task.id && t.subject === task.subject && t.category === task.category && t.materialName === task.materialName).flatMap(t => t.history)}
               calculationRunning={calculationRunning}
               updateLocalTask={updateLocalTask}
               syncTaskToCloud={syncTaskToCloud}
@@ -3257,7 +3278,9 @@ function SessionApp({ session, logout, initialSample }: { session?: FamilySessio
   const [activeStudyTaskReadError, setActiveStudyTaskReadError] = useState(false);
   const [deviceRestoreState, setDeviceRestoreState] = useState("not checked");
 
+  const [showGantt, setShowGantt] = useState(false);
   const [activeTab, setActiveTab] = useState("daily");
+  const planningActive = useCallback(() => isSampleMode || !!session?.active(), [isSampleMode, session]);
   const [calculationRunning, setCalculationRunning] = useState(false);
   const [encoreStudySource, setEncoreStudySource] = useState<{ status: EncoreReadStatus; tasks: EncoreTask[] } | null>(null);
   const encoreGameSource = useEncoreGame(session, FAMILY_ID);
@@ -4495,7 +4518,8 @@ function SessionApp({ session, logout, initialSample }: { session?: FamilySessio
 
       <main className="design20-main flex-1 overflow-y-auto overscroll-contain no-scrollbar flex flex-col pb-24 md:pb-32 lg:pb-40">
         <StudyReview records={pendingReviews} onConfirm={confirmStudyTime} />
-        {activeTab === "daily" ? (
+        {activeTab === "daily" && <div className="flex gap-2 p-3"><button className="rounded-xl border p-3" onClick={() => setShowGantt(false)}>タスク一覧</button><button className="rounded-xl border p-3" onClick={() => setShowGantt(true)}>学習計画・ガント</button></div>}
+        {activeTab === "daily" && showGantt ? <StudyGantt key={`${user?.uid ?? "sample"}-${isSampleMode}`} tasks={tasks} db={session?.database ?? null} familyId={FAMILY_ID} uid={isSampleMode ? "sample" : user!.uid} sample={isSampleMode} calculationAttempts={sampleCalculationAttempts} active={planningActive} onLocal={(id, updates) => { const latest = tasksRef.current.find(t => t.id === id); if (latest && (latest.planning?.revision ?? 0) <= updates.planning.revision) updateLocalTask(id, updates); }} onOpen={setDetailTaskId} onCreated={task => setTasks(current => current.some(t => t.id === task.id) ? current : [...current, task])} /> : activeTab === "daily" ? (
           <DailyView
             game={game}
             gachaState={gachaState}
@@ -4659,6 +4683,7 @@ function SessionApp({ session, logout, initialSample }: { session?: FamilySessio
 
       {detailTaskId && (
         <TaskDetailModal
+          allTasks={tasks}
           task={tasks.find((t: Task) => t.id === detailTaskId)!}
           onClose={() => setDetailTaskId(null)}
           updateLocalTask={updateLocalTask}

@@ -4,6 +4,11 @@ import { BACKGROUND_REVIEW_MS, getStudyStopReview, type ReviewReason, type Study
 
 export type SessionTask = Omit<StudyTaskLike, "history"> & StudyObservation & {
   sessionId?: string;
+  targetSeconds?: number;
+  timerMode?: "first" | "redo";
+  timerUnits?: number;
+  timerGraded?: boolean;
+  timerOperationCheck?: boolean;
   pendingSync?: boolean;
   lastActivityAt?: number;
   lastUpdatedAt?: number;
@@ -18,6 +23,11 @@ export type StudySessionOperation = {
   kind: "start" | "pause" | "save" | "observe" | "confirm";
   sessionId: string;
   at: number;
+  targetSeconds?: number;
+  graded?: boolean;
+  attemptType?: "first" | "redo";
+  units?: number;
+  operationCheck?: boolean;
   memo?: string;
   reviewFlags?: SessionReviewFlag[];
   lastUserActivityAt?: number;
@@ -30,7 +40,7 @@ export const getStudySessionId = (task: SessionTask) => task.sessionId ||
 
 export const createStudySessionOperation = (task: SessionTask, kind: StudySessionOperation["kind"], at = Date.now()): StudySessionOperation => ({
   operationId: crypto.randomUUID(), taskId: task.id, kind, sessionId: getStudySessionId(task), at,
-  memo: task.currentMemo ?? "", reviewFlags: task.sessionReviewFlags ?? [],
+  targetSeconds: task.targetSeconds ?? 300, graded: task.timerGraded ?? false, attemptType: task.timerMode ?? "first", units: task.timerUnits ?? 0, operationCheck: task.timerOperationCheck ?? false, memo: task.currentMemo ?? "", reviewFlags: task.sessionReviewFlags ?? [],
 });
 
 const getObservedReviewFlags = (task: SessionTask, at: number, extra: SessionReviewFlag[] = []) =>
@@ -90,7 +100,7 @@ export const prepareStudySessionOperation = (tasks: SessionTask[], operation: St
         sessionReviewReasons: Array.from(new Set([...(task.sessionReviewReasons ?? []), ...stop.reasons])),
         backgroundReviewRequired: stop.reasons.includes("background") });
     });
-    updates.set(current.id, { isRunning: true, sessionStartTime: operation.at, sessionId: operation.operationId,
+    updates.set(current.id, { targetSeconds: operation.targetSeconds ?? current.targetSeconds ?? 300, isRunning: true, sessionStartTime: operation.at, sessionId: operation.operationId,
       lastActivityAt: operation.at, lastUpdatedAt: operation.at, lastUserActivityAt: operation.at, hiddenSince: null,
       backgroundReviewRequired: current.currentDuration > 0 && !!current.backgroundReviewRequired,
       sessionReviewFlags: current.currentDuration > 0 ? current.sessionReviewFlags ?? [] : [],
@@ -111,10 +121,10 @@ export const prepareStudySessionOperation = (tasks: SessionTask[], operation: St
     const reviewFlags = getObservedReviewFlags(current, operation.at, operation.reviewFlags);
     const reasons = Array.from(new Set([...stop.reasons, ...(current.sessionReviewReasons ?? []), ...(operation.reviewReasons ?? [])]));
     const entry = { id: operation.sessionId, date: new Date(stop.endAt).toLocaleDateString("ja-JP", { timeZone: "Asia/Tokyo", month: "numeric", day: "numeric" }),
-      duration, memo: operation.memo ?? "", startAt: stop.endAt - duration * 1000, endAt: stop.endAt,
+      duration, ...(operation.graded !== undefined ? { graded: operation.graded, attemptType: operation.attemptType ?? "first", units: operation.units ?? 0, operationCheck: operation.operationCheck ?? false } : {}), ...(operation.targetSeconds !== undefined ? { targetSeconds: operation.targetSeconds } : {}), memo: operation.memo ?? "", startAt: stop.endAt - duration * 1000, endAt: stop.endAt,
       reviewStatus: reasons.length ? "pending" as const : "not_required" as const, reviewReasons: reasons,
       creditedDuration: reasons.length ? 0 : getCreditedStudyMinutes(duration, reviewFlags) * 60, reviewFlags };
-    updates.set(current.id, { history: [...current.history, entry], currentDuration: 0, currentMemo: "", isRunning: false,
+    updates.set(current.id, { history: [...current.history, entry], currentDuration: 0, currentMemo: "", timerGraded: false, isRunning: false,
       sessionStartTime: null, sessionId: operation.sessionId, sessionReviewFlags: [], sessionReviewReasons: [], hiddenSince: null, backgroundReviewRequired: false, lastActivityAt: operation.at, lastUpdatedAt: operation.at,
       status: current.status === "not_started" ? "in_progress" : current.status });
   }

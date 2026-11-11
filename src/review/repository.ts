@@ -29,7 +29,7 @@ export async function saveReview(db: Firestore, family: string, uid: string, dra
       const existing = await transaction.get(attemptRef);
       if (existing.exists()) {
         const saved = existing.data() as Answer;
-        if (["uid", "questionId", "questionVersion", "selectedIndex", "answeredAt"].some(key => saved[key as keyof Answer] !== answer[key as keyof Answer])) throw new Error("保存済みの回答と一致しません。");
+        if (["uid", "questionId", "questionVersion", "selectedIndex", "answeredAt", "mode"].some(key => saved[key as keyof Answer] !== answer[key as keyof Answer])) throw new Error("保存済みの回答と一致しません。");
         return;
       }
       const [progress, question] = await Promise.all([transaction.get(progressRef), transaction.get(questionRef)]);
@@ -37,7 +37,7 @@ export async function saveReview(db: Firestore, family: string, uid: string, dra
       if (!active()) throw new Error("利用者が切り替わりました。");
       if (!question.exists() || question.data().version !== answer.questionVersion) throw new Error("問題が編集されています。保存できた回答は保持されています。ホームに戻り、新しい問題で始めてください。");
       transaction.set(attemptRef, answer);
-      transaction.set(progressRef, nextProgress(progress.exists() ? progress.data() as Progress : undefined, answer));
+      if (answer.mode !== "practice") transaction.set(progressRef, nextProgress(progress.exists() ? progress.data() as Progress : undefined, answer));
     });
     // As in calculation saves, Rules may reject a stale pair before the SDK
     // reports a transaction conflict. Retry only on proven concurrent progress.

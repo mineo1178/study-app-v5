@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { usePracticeSelection } from "../review/use-practice-selection";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Firestore } from "firebase/firestore";
 import type { FamilySession } from "../use-family-session";
 import { SUBJECTS, createReviewDraft, visibleQuestions, answerQuestion, getJstDay, nextProgress, progressLabel, restoreDraft, sampleQuestions, reviewDueAt, type Draft, type Question, type Weakness } from "../review/model";
@@ -67,7 +68,7 @@ export function TestReview({ db, familyId, uid, sample, session, enabled, tests 
     if (!questions.length || pending.current || !active() || planState.error || planState.restoring || loading || error || busy || (draft && draft.finishedAt === null)) return;
     const started = createReviewDraft(uid, questions, mode);
     // Refresh a stale day first so the user sees the new selection before starting.
-    if (mode === "daily" && getJstDay(started.startedAt) !== getJstDay(now)) { setNow(started.startedAt); return; }
+    if ((mode === "daily" || mode === "practice") && getJstDay(started.startedAt) !== getJstDay(now)) { setNow(started.startedAt); return; }
     const next = started; setNow(next.startedAt); setSaved(false); setSelected(null); setDiscard(false); setError("");
     persistDraft(next);
   }
@@ -79,7 +80,7 @@ export function TestReview({ db, familyId, uid, sample, session, enabled, tests 
         const fresh = draft.answers.filter(a => !data.history.some(h => h.id === a.id));
         // Keep progress for every question, including ones outside this session.
         const all = new Map(data.progress.map(p => [p.questionId, p]));
-        for (const a of fresh) all.set(a.questionId, nextProgress(all.get(a.questionId), a));
+        for (const a of fresh.filter(a => a.mode !== "practice")) all.set(a.questionId, nextProgress(all.get(a.questionId), a));
         updateSample({ ...data, progress: [...all.values()], history: [...fresh, ...data.history].sort((a, b) => b.answeredAt - a.answeredAt).slice(0, 50) });
       } else {
         if (!db) throw new Error("保存先を確認できません。");
@@ -118,12 +119,14 @@ export function TestReview({ db, familyId, uid, sample, session, enabled, tests 
       else throw new Error("苦手情報の管理はPCの管理者用ツールを使用してください。");
     });
   }
-  const todayCount = data.history.filter(a => getJstDay(a.answeredAt) === getJstDay(now)).length;
-  const availableQuestions = visibleQuestions(data.questions, sample);
+  const todayCount = data.history.filter(a => a.mode !== "practice" && getJstDay(a.answeredAt) === getJstDay(now)).length;
+  const availableQuestions = useMemo(() => visibleQuestions(data.questions, sample), [data.questions, sample]);
   const wrong = availableQuestions.filter(q => data.progress.some(p => p.questionId === q.id && p.questionVersion === q.version && !p.latestCorrect));
   const { target, activePlan, status, hasRegisteredTarget } = nextReviewTarget(tests, plan, now);
   const { selected: candidates, eligibleCount, scopeCount, remaining, notDueCount, answeredInScope, answeredCount, newCount, topicLimited } =
     dailyReviewSelection(availableQuestions, data.progress, activePlan, now);
+  const practiceState = usePracticeSelection(`study-review-v1:${scope}:practice-selection`, availableQuestions, data.history, activePlan, now, !loading && !planState.restoring);
+  const practice = practiceState.questions;
   const missing = activePlan ? activePlan.items.length - scopeCount : 0;
   function beginDaily(wrongOnly = false) {
     begin(candidates.filter(c => !wrongOnly || wrong.some(q => q.id === c.question.id)).map(c => c.question), "daily");
@@ -149,6 +152,7 @@ export function TestReview({ db, familyId, uid, sample, session, enabled, tests 
       </div> : <div className="space-y-4 rounded-2xl border border-emerald-100 bg-white p-4">
         <h3 className="text-xl font-black text-emerald-700">{draft.answers.filter(a => a.correct).length} / {draft.questions.length} 問 正解</h3>
         <p>{time(draft.finishedAt - draft.startedAt)}取り組めたね！ 確認したことを、また思い出してみよう。</p>
+        {draft.mode === "practice" && <p className="font-bold">追加練習です。復習段階・次回復習日は変更しません。</p>}
         {draft.mode === "retry" && <p className="text-sm text-slate-600">解説を見たあとの再挑戦です。日を空けて解けるかも確認しよう。</p>}
         {draft.answers.map(a => { const previous = data.history.find(h => h.questionId === a.questionId && h.id !== a.id && h.answeredAt < a.answeredAt); return <article key={a.id} className="space-y-1 rounded-xl bg-slate-50 p-3 text-sm">
           <p className="font-bold">{a.correct ? "○ 正解" : "もう一度確認"}：{a.prompt}</p><p>あなたの回答：{a.selected}</p><p>正解：{a.expected}</p><p className="whitespace-pre-wrap">{a.explanation}</p>{saved && (() => { const p = data.progress.find(p => p.questionId === a.questionId && p.questionVersion === a.questionVersion); return p ? <p className="font-bold">次の復習：{getJstDay(reviewDueAt(p))}（JST）</p> : null; })()}
@@ -156,15 +160,15 @@ export function TestReview({ db, familyId, uid, sample, session, enabled, tests 
         </article>; })}
         {!saved ? <button className={primary} disabled={busy} onClick={() => { void storeResult(); }}>{busy ? "保存中…" : "結果を保存する（失敗時は再試行）"}</button> : <>
           <p role="status" className="font-bold text-emerald-700">保存しました</p>
-          {draft.answers.some(a => !a.correct) && <button className={primary} onClick={() => begin(draft.questions.filter((_, i) => !draft.answers[i].correct), "retry")}>間違えた問題をもう一度</button>}
+          {draft.answers.some(a => !a.correct) && <button className={primary} onClick={() => begin(draft.questions.filter((_, i) => !draft.answers[i].correct), draft.mode === "practice" ? "practice" : "retry")}>間違えた問題をもう一度</button>}
           <button className={`${secondary} ml-2 mt-2`} onClick={() => { persistDraft(null); setSaved(false); setDiscard(false); }}>復習ホームへ</button>
         </>}
       </div>}
       {!saved && <div className="space-y-2 text-sm"><button disabled={busy} className={secondary} onClick={() => setDiscard(!discard)}>今回はここで終わる</button>{discard && <div className="space-y-2"><p>端末の途中経過を削除します。保存済みの回答は残ります。</p><button disabled={busy} className={secondary} onClick={() => { persistDraft(null); setDiscard(false); setError(""); }}>未保存の回答を破棄してホームへ</button></div>}</div>}
     </> : <>
       <div className="space-y-3 rounded-2xl border border-blue-100 bg-white p-4">
-        <h3 className="text-lg font-black">今日の5問</h3><p className="text-sm text-slate-600">最大5問。復習期限が来た問題を先に、次にテストとの関連と確認の優先度で選ぶよ。期限前の問題で数を埋めません。</p>
-        <div className="space-y-1 rounded-xl bg-slate-50 p-3 text-sm">
+        <h3 className="text-lg font-black">今日の復習：{candidates.length}問</h3><p className="text-sm text-slate-600">最大5問。復習期限が来た問題を先に、次にテストとの関連と確認の優先度で選ぶよ。期限前の問題で数を埋めません。</p>
+        <details className="space-y-1 rounded-xl bg-slate-50 p-3 text-sm"><summary className="cursor-pointer font-bold">計画・出題診断</summary>
           <p className="font-bold">{activePlan ? "テスト対策" : "一般復習"}</p>
           <p>現在の対策：{target?.label ?? "次回カリテ未登録"} ／ 開催日：{target?.testDay ?? "未登録"}</p>
           <p>対策計画：{status} ／ 今日の候補：{eligibleCount}問</p>
@@ -196,20 +200,27 @@ export function TestReview({ db, familyId, uid, sample, session, enabled, tests 
             期限到来：{eligibleCount - newCount}問 ／ 未出題：{newCount}問。
             {eligibleCount <= remaining ? "候補が残り枠以内の日は、同じ問題が並ぶことがあります。" : "期限到来・誤答履歴を優先するため、同じ問題が続くことがあります。同順位の候補はJSTの日付で順番が変わります。"}
           </p>}
-        </div>
+        </details>
         <ReviewTargetPlan plan={plan} expired={status === "期限切れ"} onImport={async (raw, kind) => { if (!active() || pending.current) return; pending.current = true; setBusy(true); try { await planState.importFile(raw, kind, Date.now()); if (active()) setError(""); } finally { pending.current = false; if (active()) setBusy(false); } }} onClear={() => { if (active()) { planState.clear(); setError(""); } }} onError={setError} disabled={busy || loading || planState.restoring} />
         {candidates.map(c => <p key={c.question.id} className="rounded-xl bg-blue-50 p-2 text-sm">{SUBJECTS[c.question.subject]}／{c.question.unit}：{c.reason}（{c.dueAt === null ? "初めての確認" : getJstDay(c.dueAt) + "が復習期限"}{c.wrong && "・誤答履歴あり"}）</p>)}
-        {!candidates.length && <p className="text-sm">{activePlan ? "今日は期限と対策範囲に合う問題がありません。" : "今日は復習対象の問題がありません。"}無理に追加しなくて大丈夫。</p>}
-        <button className={primary} disabled={!candidates.length || !!error || !!planState.error || planState.restoring || busy} onClick={() => beginDaily()}>今日の{candidates.length}問を始める</button>
+        {!candidates.length && <p className="text-sm">今日は復習期限の問題がありません。無理に追加しなくて大丈夫。</p>}
+        <button className={primary} disabled={!candidates.length || !!error || !!planState.error || planState.restoring || busy} onClick={() => beginDaily()}>今日の復習{candidates.length}問を始める</button>
         <p className="text-xs text-slate-600">間違えたら翌日。同じ日の再挑戦では段階を進めず、別の日に期限を迎えて正解したら3日・7日・14日へ。14日後も確認を続けます。元のテストの苦手を解消した判定ではありません。</p>
         <p className="text-sm" aria-label="今日の復習状況">今日の復習：{todayCount}回答（最近50回答の範囲・JST）／もう一度確認：{wrong.length}問</p>
         {!availableQuestions.length && <p className="text-sm">問題は準備中です。保護者に確認してください。</p>}
         {!sample && <button className={secondary} disabled={busy} onClick={() => { setLoading(true); setReload(n => n + 1); }}>復習データを再読込</button>}
       </div>
+      <div className="space-y-3 rounded-2xl border border-violet-100 bg-white p-4">
+        <h3 className="text-lg font-black">追加練習：{practice.length}問</h3>{practiceState.warning && <p role="alert">{practiceState.warning}</p>}
+        <p className="text-sm">{activePlan ? "次回カリテの範囲を優先" : "一般練習"}。最大5問。期限前でも練習でき、復習段階・次回復習日は変わりません。</p>
+        <p className="text-xs">前日までの最近50回答の出題回数・苦手を参考に選びます。</p>
+        {!practice.length && <p>公開済みの登録問題がないため、追加練習できません。保護者に確認してください。</p>}
+        <button className={primary} disabled={!practice.length || !!error || !!planState.error || busy} onClick={() => begin(practice, "practice")}>追加練習{practice.length}問を始める</button>
+      </div>
       <div className="rounded-2xl bg-white p-4"><h3 className="mb-2 font-bold">苦手分野</h3><p className="mb-2 text-xs text-slate-500">保護者の入力です。教科の点数から単元の苦手を推測しません。小問の正解だけで元の弱点を解消済みにはしません。</p>{!data.weaknesses.length && <p className="text-sm">まだ登録されていません。</p>}{data.weaknesses.map(w => <article key={w.id} className="my-2 space-y-1 rounded-xl bg-slate-50 p-3 text-sm"><p className="font-bold">{SUBJECTS[w.subject]} ／ {w.unit}（{w.testKind}）</p><p>間違えた内容：{w.mistake}</p><p>復習ポイント：{w.point}</p>{w.questionIds.map(id => <p key={id}>対応問題：{data.questions.find(q => q.id === id)?.prompt ?? "未登録・確認待ち"}</p>)}</article>)}</div>
       <div className="space-y-2 rounded-2xl bg-white p-4"><h3 className="font-bold">間違い直し</h3><p className="text-sm">{wrong.length ? `${wrong.length}問を確認中。期限と対策範囲に合う日に取り組もう。` : "今は間違い直しの候補はありません。"}</p>{wrong.map(q => <p key={q.id} className="text-sm">{q.unit}：{q.prompt}</p>)}{wrong.length > 0 && <button disabled={!!error || busy || !candidates.some(c => wrong.some(q => q.id === c.question.id))} className={secondary} onClick={() => beginDaily(true)}>間違い直しを始める</button>}</div>
       <details className="rounded-2xl bg-white p-4"><summary className="cursor-pointer font-bold">復習問題一覧（{data.questions.length}問）</summary>{data.questions.map(q => <article key={q.id} className="my-3 space-y-1 border-b border-slate-100 pb-2 text-sm"><p className="font-bold">{SUBJECTS[q.subject]}／{q.unit}：{q.prompt}</p><p>{progressLabel(data.progress.find(p => p.questionId === q.id && p.questionVersion === q.version))}{(() => { const p = data.progress.find(p => p.questionId === q.id && p.questionVersion === q.version); return p ? " ／ 次の確認 " + getJstDay(reviewDueAt(p)) + "（JST）" : ""; })()}</p></article>)}</details>
-      <details className="rounded-2xl bg-white p-4"><summary className="cursor-pointer font-bold">回答履歴・改善記録（最近50回答）</summary>{data.history.map(a => <p key={a.id} className="my-2 text-sm">{new Date(a.answeredAt).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" })} · {a.prompt}：{a.correct ? "正解" : "誤答"} ／ {time(a.elapsedMs)} ／ {a.mode === "retry" ? "直後の再挑戦" : "再確認"}</p>)}</details>
+      <details className="rounded-2xl bg-white p-4"><summary className="cursor-pointer font-bold">回答履歴・改善記録（最近50回答）</summary>{data.history.map(a => <p key={a.id} className="my-2 text-sm">{new Date(a.answeredAt).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" })} · {a.prompt}：{a.correct ? "正解" : "誤答"} ／ {time(a.elapsedMs)} ／ {a.mode === "practice" ? "追加練習" : a.mode === "retry" ? "直後の再挑戦" : "再確認"}</p>)}</details>
       {sample && !error && <ReviewManager questions={data.questions} weaknesses={data.weaknesses} onQuestions={registerQuestions} onWeakness={registerWeakness} busy={busy} />}
     </>}
   </section>;
