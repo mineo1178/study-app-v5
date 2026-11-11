@@ -20,13 +20,27 @@ service cloud.firestore {
       allow create, delete: if false;
 
       match /tasks/{taskId} {
-        allow read, create, update, delete: if isFamilyMember(familyId);
+        function material(data) { let p = data.get('planning', null); return p is map ? p.get('material', null) : null; }
+        function materialLink(data) {
+          let m = material(data);
+          return m == null || (m is map && m.materialId is string
+            && getAfter(/databases/$(database)/documents/families/$(familyId)/studyMaterials/$(m.materialId)).data.taskId == taskId
+            && getAfter(/databases/$(database)/documents/families/$(familyId)/studyMaterials/$(m.materialId)).data.get('unit', data.unit) == data.unit
+            && getAfter(/databases/$(database)/documents/families/$(familyId)/studyMaterials/$(m.materialId)).data.get('subject', data.subject) == data.subject);
+        }
+        allow read, delete: if isFamilyMember(familyId);
+        allow create: if isFamilyMember(familyId) && materialLink(request.resource.data);
+        allow update: if isFamilyMember(familyId) && (
+          (material(request.resource.data) == material(resource.data)
+            && request.resource.data.get('unit', null) == resource.data.get('unit', null)
+            && request.resource.data.get('subject', null) == resource.data.get('subject', null))
+          || materialLink(request.resource.data));
       }
       match /studyMaterialFiles/{sha256} {
         allow read: if isFamilyMember(familyId);
         allow create: if isFamilyMember(familyId) && sha256.matches('^[a-f0-9]{64}$')
           && request.resource.data.keys().hasOnly(['materialId'])
-          && request.resource.data.materialId is string
+          && request.resource.data.materialId is string && request.resource.data.materialId.matches('^material-[a-f0-9]{64}$')
           && existsAfter(/databases/$(database)/documents/families/$(familyId)/studyMaterials/$(request.resource.data.materialId));
         allow update: if isFamilyMember(familyId) && request.resource.data == resource.data;
         allow delete: if false;
@@ -34,9 +48,11 @@ service cloud.firestore {
       match /studyMaterials/{materialId} {
         allow read: if isFamilyMember(familyId);
         allow create: if isFamilyMember(familyId) && materialId.matches('^material-[a-f0-9]{64}$')
-          && request.resource.data.keys().hasOnly(['taskId', 'materialId'])
+          && request.resource.data.keys().hasOnly(['taskId', 'materialId', 'unit', 'subject'])
           && request.resource.data.materialId == materialId && request.resource.data.taskId is string
-          && getAfter(/databases/$(database)/documents/families/$(familyId)/tasks/$(request.resource.data.taskId)).data.planning.material.materialId == materialId;
+          && getAfter(/databases/$(database)/documents/families/$(familyId)/tasks/$(request.resource.data.taskId)).data.planning.material.materialId == materialId
+          && getAfter(/databases/$(database)/documents/families/$(familyId)/tasks/$(request.resource.data.taskId)).data.unit == request.resource.data.unit
+          && getAfter(/databases/$(database)/documents/families/$(familyId)/tasks/$(request.resource.data.taskId)).data.subject == request.resource.data.subject;
         allow update: if isFamilyMember(familyId) && request.resource.data == resource.data;
         allow delete: if false;
       }

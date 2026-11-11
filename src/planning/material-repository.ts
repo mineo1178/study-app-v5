@@ -18,7 +18,7 @@ export async function registerMaterial(db: Firestore, family: string, material: 
       if(old.material && old.material.materialId!==material.materialId) throw new Error('別教材が紐付いています。上書きできません。');
       tx.update(ref,{planning:{...old,revision:old.revision+1,material:materialInfo(material)}});
     } else tx.set(ref,newMaterialTask(material));
-    tx.set(binding,{taskId:id,materialId:material.materialId});
+    tx.set(binding,linked.exists()?linked.data():{taskId:id,materialId:material.materialId,unit:material.unit,subject:material.subject});
     fileRefs.forEach(r=>tx.set(r,{materialId:material.materialId}));
     return id;
   });

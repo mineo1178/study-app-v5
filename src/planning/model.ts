@@ -3,7 +3,8 @@ import { getJstDay } from "../review/model";
 export type PlanRange = { id: string; label: string; units: number; minutes: number; day: string; done: boolean; graded: boolean; corrected: boolean; actualDay: string | null; actualSeconds: number | null };
 export type Evidence = { source: string; count: number; firstCount?: number; redoCount?: number; estimatedMinutes?: number | null; redoDaysKnown?: boolean; firstSeconds: number | null; redoSeconds: number | null; redoDays: number; conditions: string; manualMinutes: number | null; provisional: boolean };
 export type Baseline = { id: string; createdDay: string; targetDay: string | null; daily: Record<string, number>; evidence: Evidence };
-export type TaskPlan = { schemaVersion: 1; revision: number; order?: number; endDay: string; deadline: string; ranges: PlanRange[]; baseline: Baseline | null; baselineHistory: Baseline[]; material?: { materialId: string; title: string; requirement: "required" | "reinforcement" | "advanced"; selected: boolean; references: string[] } };
+export type RangeCorrection = { id: string; day: string; reason: string; baselineId: string | null; previousRanges: PlanRange[]; revisedRanges: PlanRange[] };
+export type TaskPlan = { rangeCorrections?: RangeCorrection[]; schemaVersion: 1; revision: number; order?: number; endDay: string; deadline: string; ranges: PlanRange[]; baseline: Baseline | null; baselineHistory: Baseline[]; material?: { materialId: string; title: string; requirement: "required" | "reinforcement" | "advanced"; selected: boolean; references: string[] } };
 export type PlanningTask = { id: string; unit: string; subject: string; category: string; materialName: string; title: string; status: "not_started" | "in_progress" | "completed"; isRunning: boolean; currentDuration?: number; planning?: TaskPlan; history: { duration: number; operationCheck?: boolean; reviewStatus?: string; score?: number; graded?: boolean; attemptType?: string; units?: number; endAt?: number; date?: string }[] };
 export const emptyPlan = (): TaskPlan => ({ schemaVersion: 1, revision: 0, order: 0, endDay: "", deadline: "", ranges: [], baseline: null, baselineHistory: [] });
 export const validDay = (day: string) => /^\d{4}-\d{2}-\d{2}$/.test(day) && Number.isFinite(Date.parse(day)) && new Date(day).toISOString().slice(0, 10) === day;
@@ -76,10 +77,40 @@ export function validatePlan(plan: TaskPlan) {
   if (plan.schemaVersion !== 1 || !Number.isSafeInteger(plan.revision) || plan.revision < 0 || plan.ranges.length > 100 || new Set(plan.ranges.map(r => r.id)).size !== plan.ranges.length || (plan.endDay && !validDay(plan.endDay)) || (plan.deadline && !validDay(plan.deadline))) throw new Error("計画の形式を確認してください。");
   if (plan.ranges.some(r => !r.id || !r.label.trim() || r.label.length > 150 || !(r.units > 0 && r.units <= 10000) || !(r.minutes > 0 && r.minutes <= 1440) || (r.day && !validDay(r.day)) || (r.actualDay !== null && !validDay(r.actualDay)) || (r.actualSeconds !== null && (!Number.isFinite(r.actualSeconds) || r.actualSeconds < 0)))) throw new Error("分割範囲・作業量・予定時間を確認してください。");
   if (plan.order !== undefined && (!Number.isInteger(plan.order) || plan.order < 0 || plan.order > 10000)) throw new Error("順番は0〜10000にしてください。");
+  if ((plan.rangeCorrections?.length ?? 0) > 50) throw new Error("範囲の訂正履歴は50件までです。");
   if (plan.baselineHistory.length > 50) throw new Error("目標基準の履歴は50件までです。");
 }
 
 export function normalizeCapacities(value: unknown): Record<string, number> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
   return Object.fromEntries(Object.entries(value).filter(([day, minutes]) => validDay(day) && Number.isInteger(minutes) && minutes >= 0 && minutes <= 1440).slice(0, 366));
+}
+
+// Compare map contents rather than Firestore's property iteration order.
+const canonical = (value: unknown): string => JSON.stringify(value, (_key, item) => item && typeof item === 'object' && !Array.isArray(item) ? Object.fromEntries(Object.entries(item).sort(([a],[b])=>a.localeCompare(b))) : item);
+export function correctRangeInputs(old: TaskPlan, revised: PlanRange[], reason: string, id: string, day: string): TaskPlan {
+  if (!reason.trim() || reason.length > 200 || !id || !validDay(day)) throw new Error("訂正理由を200文字以内で入力してください。");
+  if (revised.length !== old.ranges.length || revised.some((r,i)=>r.id!==old.ranges[i].id)) throw new Error("入力訂正では範囲IDと範囲の数を維持してください。");
+  const ranges = old.ranges.map((r,i)=>({...r,label:revised[i].label,units:revised[i].units,minutes:revised[i].minutes}));
+  if (canonical(ranges) === canonical(old.ranges)) throw new Error("訂正する範囲・作業量・予定時間を変更してください。");
+  const result: TaskPlan = { ...old, ranges, baseline: null, baselineHistory: [...old.baselineHistory,...(old.baseline ? [old.baseline] : [])], rangeCorrections: [...old.rangeCorrections ?? [],{id,day,reason:reason.trim(),baselineId:old.baseline?.id ?? null,previousRanges:structuredClone(old.ranges),revisedRanges:structuredClone(ranges)}] };
+  validatePlan(result);
+  return result;
+}
+export function validatePlanTransition(old: TaskPlan, next: TaskPlan) {
+  const previousCorrections = old.rangeCorrections ?? [], corrections = next.rangeCorrections ?? [];
+  if (canonical(previousCorrections) !== canonical(corrections)) {
+    const c = corrections.at(-1);
+    if (corrections.length !== previousCorrections.length + 1 || !c || canonical(corrections.slice(0,-1)) !== canonical(previousCorrections) || canonical(c.previousRanges) !== canonical(old.ranges) || canonical(c.revisedRanges) !== canonical(next.ranges)) throw new Error("訂正前の範囲と履歴を維持してください。");
+    const expected = correctRangeInputs(old, next.ranges, c.reason, c.id, c.day);
+    if (canonical(expected) !== canonical(next)) throw new Error("入力訂正では旧目標と実績を維持してください。");
+    return;
+  }
+  const history = [...old.baselineHistory, ...(old.baseline && old.baseline.id !== next.baseline?.id ? [old.baseline] : [])];
+  if (canonical(history) !== canonical(next.baselineHistory)) throw new Error("固定目標と改訂履歴を維持してください。");
+  if (old.baseline) {
+    const weights = (p: TaskPlan) => p.ranges.map(r=>[r.id,r.label,r.units,r.minutes]);
+    if (canonical(weights(old)) !== canonical(weights(next))) throw new Error("固定目標作成後は明示的な入力訂正を使用してください。");
+    if (!next.baseline || (old.baseline.id === next.baseline.id && canonical(old.baseline) !== canonical(next.baseline))) throw new Error("固定目標と改訂履歴を維持してください。");
+  }
 }
