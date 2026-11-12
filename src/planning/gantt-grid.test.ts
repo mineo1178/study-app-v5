@@ -1,0 +1,12 @@
+import {describe,it,expect} from 'vitest';
+import {ganttRows,contiguousRuns,gridDay,gridSummary} from './gantt-grid';
+import {scheduleTask,scheduleFixture} from '../../tests/schedule-fixture';
+import {emptyPlan} from './model';
+describe('expanded factual Gantt grid',()=>{
+ it('shows every hierarchy and task initially; collapse is explicit and reversible',()=>{const tasks=[scheduleTask,{...scheduleTask,id:'next',unit:'第12回',subject:'japanese'}],all=ganttRows(tasks,null);expect(all.filter(r=>r.kind==='task').map(r=>r.task?.id)).toEqual(['normal','next']);expect(all.filter(r=>r.kind!=='task')).toHaveLength(6);const folded=ganttRows(tasks,null,new Set(all.filter(r=>r.kind==='unit').map(r=>r.key)));expect(folded).toHaveLength(2);expect(ganttRows(tasks,null)).toHaveLength(all.length);});
+ it('keeps empty registered rounds visible without inventing tasks',()=>{const p=scheduleFixture();p.scope.push({unit:'第12回',subjects:['math'],deadline:null});const rows=ganttRows([scheduleTask],p);expect(rows.find(r=>r.label==='第12回')?.tasks).toEqual([]);expect(rows.filter(r=>r.kind==='task')).toHaveLength(1);});
+ it('joins only adjacent registered dates and never fills a missing date',()=>{expect(contiguousRuns([true,true,false,true,false])).toEqual([{start:0,end:1},{start:3,end:3}]);expect(contiguousRuns([false,false])).toEqual([]);});
+ it('does not generate bars or percentages for absent planning',()=>{expect(gridDay([scheduleTask],null,'2026-11-12')).toMatchObject({planned:false,actual:false});expect(gridSummary([scheduleTask],null,'2026-11-12')).toMatchObject({progress:null,end:null,target:null});});
+ it('uses factual plan dates and independent history dates',()=>{const p=scheduleFixture(),task={...scheduleTask,history:[{duration:120,endAt:Date.parse('2026-11-13T03:00:00Z')}]};expect(gridDay([task],p,'2026-11-12')).toMatchObject({planned:true,actual:false,knownMinutes:15});expect(gridDay([task],p,'2026-11-13')).toMatchObject({planned:false,actual:true,seconds:120});expect(gridDay([task],p,'2026-11-14')).toMatchObject({planned:false,actual:false});});
+ it('keeps completed100%, and does not invent group dates from partial settings',()=>{expect(gridSummary([{...scheduleTask,status:'completed'}],null,'2026-11-12').progress).toBe(100);const t={...scheduleTask,planning:{...emptyPlan(),endDay:'2026-11-15'}};expect(gridSummary([t,{...scheduleTask,id:'unknown'}],null,'2026-11-12').end).toBeNull();});
+});

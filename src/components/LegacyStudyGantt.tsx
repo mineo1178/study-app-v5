@@ -11,14 +11,14 @@ import { saveTaskPlan } from "../planning/repository";
 import "./StudyGantt.css";
 const percent = (value: number | null) => value === null ? "進捗未測定" : Math.round(value) + "%";
 const diffText = (value: ReturnType<typeof difference>) => value ? (value.points >= 0 ? "+" : "") + value.points.toFixed(1) + "ポイント" : "未測定または基準未設定のため除外";
-type Props = { tasks: PlanningTask[]; db: Firestore | null; familyId: string; uid: string; sample: boolean; active: () => boolean; onLocal: (id: string, updates: { planning: TaskPlan; status?: "completed" }) => void; onOpen: (id: string) => void; onCreated: (task: ReturnType<typeof newMaterialTask>) => void; calculationAttempts?: CalculationAttempt[] };
-export function LegacyStudyGantt({ tasks, db, familyId, uid, sample, active, onLocal, onOpen, onCreated, calculationAttempts = [] }: Props) {
+type Props = { editorOnly?: boolean; initialTaskId?: string; tasks: PlanningTask[]; db: Firestore | null; familyId: string; uid: string; sample: boolean; active: () => boolean; onLocal: (id: string, updates: { planning: TaskPlan; status?: "completed" }) => void; onOpen: (id: string) => void; onCreated: (task: ReturnType<typeof newMaterialTask>) => void; calculationAttempts?: CalculationAttempt[] };
+export function LegacyStudyGantt({ tasks, db, familyId, uid, sample, active, onLocal, onOpen, onCreated, calculationAttempts = [], editorOnly=false, initialTaskId }: Props) {
   const [today, setToday] = useState(() => getJstDay(Date.now()));
   const [start, setStart] = useState(() => monday(getJstDay(Date.now())));
   const [span, setSpan] = useState(7);
-  const [selectedId, setSelectedId] = useState("");
+  const [selectedId, setSelectedId] = useState(initialTaskId??"");
   const [selectedRange, setSelectedRange] = useState("");
-  const [draft, setDraft] = useState<TaskPlan>(emptyPlan);
+  const [draft, setDraft] = useState<TaskPlan>(()=>{const task=tasks.find(t=>t.id===initialTaskId);return task?structuredClone(planOf(task)):emptyPlan();});
   const [correction, setCorrection] = useState<{original: TaskPlan; ranges: PlanRange[]; reason: string} | null>(null);
   const [busy, setBusy] = useState(false), [error, setError] = useState(""), [notice, setNotice] = useState("");
   const settingsKey = `study-planning-sample:${familyId}:${uid}`;
@@ -96,7 +96,8 @@ export function LegacyStudyGantt({ tasks, db, familyId, uid, sample, active, onL
   const unplaced = tasks.filter(t => t.status !== "completed" && (!planOf(t).ranges.length || planOf(t).ranges.some(r => !r.day)));
   const orderedTasks = [...tasks].sort((a,b) => (planOf(a).order ?? 0) - (planOf(b).order ?? 0));
   const groups = [...new Set(tasks.map(t => t.unit))].sort((a, b) => a.localeCompare(b, "ja", { numeric: true }));
-  return <section className="study-gantt" aria-label="学習ガントチャート">
+  return <section className="study-gantt" aria-label={editorOnly?"旧計画の編集":"学習ガントチャート"}>
+    {!editorOnly&&<>
     <header><h2>学習ガントチャート</h2><p>宿題の完了を確認しよう。日を空けた定着確認は「対策・復習」で別に管理するよ。</p></header>
     <div className="gantt-toolbar"><button onClick={() => setStart(addDays(start, -7))}>前週</button><button onClick={() => setStart(monday(today))}>今日へ戻る</button><button onClick={() => setStart(addDays(start, 7))}>翌週</button><label>表示<select aria-label="表示" value={span} onChange={e => setSpan(Number(e.target.value))}><option value={7}>1週間</option><option value={14}>2週間</option></select></label></div>
     <p>{start} 〜 {days.at(-1)}（JST）</p>
@@ -128,6 +129,8 @@ export function LegacyStudyGantt({ tasks, db, familyId, uid, sample, active, onL
         })}</details>)}</details> : null;
       })}</details>)}
     </div>
+    </>}
+    {editorOnly&&<>{error&&<p role="alert" className="gantt-error">{error}</p>}{notice&&<p role="status">{notice}</p>}</>}
     {selected && <section className="gantt-editor" aria-label="選んだ課題の計画"><h3>{selected.unit} / {SUBJECTS[selected.subject as Subject]} / {selected.materialName || selected.category} / {selected.title}</h3><button disabled={busy} onClick={() => onOpen(selected.id)}>タスク・学習タイマーを開く</button><button disabled={busy} onClick={() => choose(selected)}>最新の保存済み計画を開き直す</button>
       <p>現在：{percent(p)} ／ 今日までの手動予定：{manualDiff ? percent(manualDiff.expected) : "未設定"} ／ 差：{diffText(manualDiff)}</p><p>今日までの目標：{goalDiff ? percent(goalDiff.expected) : "未設定"} ／ 差：{diffText(goalDiff)}</p>
       {selected.status === "completed" && !draft.ranges.every(rangeComplete) && <p>既存タスクの全体完了を優先して100%と表示しています。分割範囲の記録だけで過去の完了を取り消しません。</p>}
