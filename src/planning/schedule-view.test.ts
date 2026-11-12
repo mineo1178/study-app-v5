@@ -1,0 +1,10 @@
+import {it,expect} from 'vitest';
+import {ganttEnd,referenceChanges,planIdentity} from './schedule-view';
+import {emptyPlan,type PlanningTask} from './model';
+import {officialFixture} from '../../tests/official-fixture';
+import {referencePlan} from './schedule-reference';
+const task={id:'one',unit:'第11回',subject:'math',category:'教材',materialName:'実教材',title:'課題',status:'in_progress',isRunning:false,history:[],planning:emptyPlan()} as PlanningTask;
+const source=()=>{const s=officialFixture();s.planningPolicy.taskSchedules=[{taskId:task.id,unit:task.unit,subject:task.subject,category:task.category,materialName:task.materialName,materialId:'legacy-one',recommendedEndDate:'2026-11-15',phases:[{phase:'first_and_marking',day:'2026-11-13',minutes:25,conditional:false}]}];return s;};
+it('uses adopted/manual end before a reference and never uses a fixed target as end',()=>{const p=referencePlan(source(),[task],null,'');expect(ganttEnd(task,p)).toEqual({day:'2026-11-15',label:'提案'});expect(ganttEnd({...task,planning:{...emptyPlan(),endDay:'2026-11-18'}},p)).toEqual({day:'2026-11-18',label:'予定'});expect(ganttEnd(task,null)).toEqual({day:null,label:''});});
+it('distinguishes source revision from app revision and calculates same-plan row changes',()=>{const s=source(),p=referencePlan(s,[task],null,''),s2=source();s2.revision=2;(s2.planningPolicy.taskSchedules as {recommendedEndDate:string}[])[0].recommendedEndDate='2026-11-16';const n=referencePlan(s2,[task],p,'');expect(planIdentity(n)).toEqual({planId:s.planId,revision:2,appRevision:2});expect(referenceChanges(p,n)).toMatchObject({sameId:true,changed:1,added:0,removed:0});expect(referenceChanges(n,n)).toMatchObject({unchanged:1,changed:0});});
+it('treats another planId as a different plan rather than comparing revision numbers',()=>{const a=referencePlan({...source(),revision:3},[task],null,''),b=referencePlan({...source(),planId:'another',revision:1},[task],a,'');expect(referenceChanges(a,b)).toMatchObject({sameId:false,added:1,changed:0,removed:0});});
