@@ -7,7 +7,7 @@ export function useLearningSchedule(db:Firestore|null,family:string,uid:string,s
  const [plan,setPlan]=useState<LearningSchedule|null>(()=>{try{const raw=localStorage.getItem(key);return raw?parseSchedule(raw):null;}catch{return null;}}),[loading,setLoading]=useState(!sample),[error,setError]=useState('');
  useEffect(()=>{
   if(sample||!db)return;let generation=0,live=true;
-  const stop=onSnapshot(scheduleRoot(db,family,uid),snapshot=>{
+  const stop=onSnapshot(scheduleRoot(db,family,uid),{includeMetadataChanges:true},snapshot=>{
    const request=++generation;
    if(!snapshot.exists()){if(snapshot.metadata.fromCache)return;if(live&&active()){setPlan(null);setLoading(false);setError('');try{localStorage.removeItem(key);}catch{/* Cloud remains authoritative. */}}return;}
    const p=snapshot.data();void getDocFromServer(doc(scheduleRoot(db,family,uid),'plans',p.versionId)).then(async saved=>{
