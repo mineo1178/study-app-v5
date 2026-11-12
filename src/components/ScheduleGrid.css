@@ -5,3 +5,7 @@
 .sheet-gantt .sheet-name button{min-height:32px;padding:0;border:0;border-radius:0;background:transparent}.sheet-gantt .sheet-group-name small{font-size:10px}.sheet-gantt .sheet-axis small{font-size:10px}.sheet-gantt .sheet-actions button,.sheet-gantt .sheet-actions select{min-height:36px;padding:5px 9px;border-radius:5px}.sheet-gantt .sheet-detail summary{background:transparent;padding:5px 0;min-height:30px}@media(max-width:650px){.sheet-gantt .sheet-actions button,.sheet-gantt .sheet-actions select{min-height:34px;padding:4px}.sheet-gantt .sheet-group-name small{font-size:9px}}
 
 .sheet-gantt .sheet-name button{min-height:32px!important}
+
+.sheet-proposal{background:transparent;border:1px dashed #697586!important;box-sizing:border-box}.sheet-run.sheet-proposal{top:15px;height:20px;z-index:0}.sheet-legend i.sheet-proposal{height:10px}
+
+.sheet-proposal-notice{font-size:12px;padding:7px 10px;background:#fff4d5;border:1px solid #e1c68b;margin-bottom:8px}

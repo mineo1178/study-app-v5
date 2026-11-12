@@ -1,0 +1,11 @@
+import {it,expect} from 'vitest';
+import {taskSuggestion} from './schedule-proposals';
+import type {PlanningTask} from './model';
+import type {LearningSchedule} from './schedule';
+const task={id:'one',unit:'第12回',subject:'science',category:'予習シリーズ',materialName:'要点',status:'not_started'} as PlanningTask;
+const row={taskId:'one',unit:task.unit,subject:task.subject,category:task.category,materialName:task.materialName,materialId:'legacy-one',recommendedEndDate:'2026-11-20',phases:[{phase:'first_and_marking',day:'2026-11-19',minutes:25,conditional:false},{phase:'correction',day:'2026-11-20',minutes:10,conditional:true}]};
+const plan=(rows:unknown)=>({proposalImport:{source:{planningPolicy:{taskSchedules:rows}}}} as unknown as LearningSchedule);
+it('returns explicit reference phases without adopted ranges or completion',()=>{expect(taskSuggestion(task,plan([row]))?.phases).toHaveLength(2);expect(taskSuggestion(task,plan([row]))?.phases[1].conditional).toBe(true);});
+it('does not bind by name or a different material identity',()=>{expect(taskSuggestion(task,plan([{...row,taskId:'other'}]))).toBeNull();expect(taskSuggestion(task,plan([{...row,materialId:'other'}]))).toBeNull();expect(taskSuggestion(task,plan([{...row,unit:'第11回'}]))).toBeNull();});
+it('rejects duplicate or malformed reference rows',()=>{expect(taskSuggestion(task,plan([row,row]))).toBeNull();expect(taskSuggestion(task,plan([{...row,phases:[{...row.phases[0],minutes:-1}]}]))).toBeNull();expect(taskSuggestion(task,plan([{...row,recommendedEndDate:'bad'}]))).toBeNull();});
+it('does not fabricate reference dates for missing data or completed tasks',()=>{expect(taskSuggestion(task,null)).toBeNull();expect(taskSuggestion({...task,status:'completed'},plan([row]))).toBeNull();});
