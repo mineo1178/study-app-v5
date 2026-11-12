@@ -1,0 +1,7 @@
+export async function seedDailyTop(){
+ const {seedChildPlans}=await import('./child-study-client');await seedChildPlans();
+ const {auth}=await import('./timer-client');if(auth.app.options.projectId!=='demo-study-hotfix')throw Error('Emulator only');
+ const {getFirestore,doc,getDoc,writeBatch}=await import('firebase/firestore'),db=getFirestore(auth.app),root='families/hotfix-study-family/tasks',base=(await getDoc(doc(db,root,'normal'))).data()!,{emptyPlan}=await import('../src/planning/model'),batch=writeBatch(db);
+ for(const [id,first,middle] of [['lag-behind',40,10],['lag-ahead',50,15]] as const){const ahead=id==='lag-ahead',ranges=[{id:'first',label:'測定範囲1',units:first,minutes:10,day:'2026-11-12',done:true,graded:true,corrected:true,actualDay:'2026-11-12',actualSeconds:null},{id:'middle',label:'測定範囲2',units:middle,minutes:5,day:ahead?'2026-11-13':'2026-11-12',done:ahead,graded:ahead,corrected:ahead,actualDay:ahead?'2026-11-12':null,actualSeconds:null},{id:'last',label:'測定範囲3',units:100-first-middle,minutes:15,day:'2026-11-13',done:false,graded:false,corrected:false,actualDay:null,actualSeconds:null}];batch.set(doc(db,root,id),{...base,id,title:ahead?'測定課題・先行':'測定課題・遅れ',materialName:'測定教材',status:'in_progress',history:[],planning:{...emptyPlan(),ranges,baseline:{id:'measured-fixed',createdDay:'2026-11-10',targetDay:'2026-11-13',daily:{'2026-11-12':50,'2026-11-13':50},evidence:{source:'Emulator fixture',count:1,firstSeconds:60,redoSeconds:null,redoDays:0,conditions:'fixture',manualMinutes:null,provisional:false}}}});}
+ await batch.commit();
+}

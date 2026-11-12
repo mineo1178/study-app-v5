@@ -179,7 +179,7 @@ if (hasFirebaseConfig) {
 // ==========================================
 
 const FAMILY_ID = "oomine-study-2026";
-const APP_VERSION = "v1.89.8";
+const APP_VERSION = "v1.89.9";
 
 // Firestore Path 固定（変更禁止）
 // 実DB構造:
@@ -3279,7 +3279,7 @@ function SessionApp({ session, logout, initialSample }: { session?: FamilySessio
   const [activeStudyTaskReadError, setActiveStudyTaskReadError] = useState(false);
   const [deviceRestoreState, setDeviceRestoreState] = useState("not checked");
 
-  const [showGantt, setShowGantt] = useState(true);
+  const [showGantt, setShowGantt] = useState(false);
   const [activeTab, setActiveTab] = useState("daily");
   const planningActive = useCallback(() => isSampleMode || !!session?.active(), [isSampleMode, session]);
   const [calculationRunning, setCalculationRunning] = useState(false);
@@ -4519,8 +4519,10 @@ function SessionApp({ session, logout, initialSample }: { session?: FamilySessio
 
       <main className="design20-main flex-1 overflow-y-auto overscroll-contain no-scrollbar flex flex-col pb-24 md:pb-32 lg:pb-40">
         <StudyReview records={pendingReviews} onConfirm={confirmStudyTime} />
-        {activeTab === "daily" && !showGantt && <div className="flex gap-2 p-3"><button className="rounded-xl border p-3" onClick={() => setShowGantt(false)}>タスク一覧</button><button className="rounded-xl border p-3" onClick={() => setShowGantt(true)}>学習スケジュール</button></div>}
-        {activeTab === "daily" && showGantt ? <StudyGantt key={`${user?.uid ?? "sample"}-${isSampleMode}`} tasks={tasks} db={session?.database ?? null} familyId={FAMILY_ID} uid={isSampleMode ? "sample" : user!.uid} sample={isSampleMode} calculationAttempts={sampleCalculationAttempts} onTaskList={()=>setShowGantt(false)} active={planningActive} onLocal={(id, updates) => { const latest = tasksRef.current.find(t => t.id === id); if (latest && (latest.planning?.revision ?? 0) <= updates.planning.revision) updateLocalTask(id, updates); }} onActual={(id, rangeId, actual) => { const latest = tasksRef.current.find(t => t.id === id); if (latest) updateLocalTask(id, { scheduleActuals: { ...latest.scheduleActuals, [rangeId]: actual } }); }} onOpen={setDetailTaskId} onCreated={task => setTasks(current => current.some(t => t.id === task.id) ? current : [...current, task])} /> : activeTab === "daily" ? (
+        {activeTab === "daily" && <div className="flex gap-2 p-3"><button className="rounded-xl border p-3" onClick={() => setShowGantt(value => !value)}>{showGantt ? "学習に戻る" : "学習スケジュール"}</button></div>}
+        {activeTab === "daily" && showGantt && <StudyGantt key={`${user?.uid ?? "sample"}-${isSampleMode}`} tasks={tasks} db={session?.database ?? null} familyId={FAMILY_ID} uid={isSampleMode ? "sample" : user!.uid} sample={isSampleMode} calculationAttempts={sampleCalculationAttempts} onTaskList={()=>setShowGantt(false)} active={planningActive} onLocal={(id, updates) => { const latest = tasksRef.current.find(t => t.id === id); if (latest && (latest.planning?.revision ?? 0) <= updates.planning.revision) updateLocalTask(id, updates); }} onActual={(id, rangeId, actual) => { const latest = tasksRef.current.find(t => t.id === id); if (latest) updateLocalTask(id, { scheduleActuals: { ...latest.scheduleActuals, [rangeId]: actual } }); }} onOpen={setDetailTaskId} onCreated={task => setTasks(current => current.some(t => t.id === task.id) ? current : [...current, task])} />}
+        {activeTab === "daily" ? (
+          <section hidden={showGantt} aria-label="学習トップ" className="min-w-0">
           <DailyView
             game={game}
             gachaState={gachaState}
@@ -4551,6 +4553,7 @@ function SessionApp({ session, logout, initialSample }: { session?: FamilySessio
             setDeleteConfirmation={setConfirmModalData}
             pauseAllOtherTasks={pauseAllOtherTasks}
           />
+          </section>
         ) : activeTab === "tests" ? (
           <TestsView
             tests={tests}
@@ -4609,7 +4612,7 @@ function SessionApp({ session, logout, initialSample }: { session?: FamilySessio
         <div className="design20-nav-items h-16 md:h-20 lg:h-24 grid grid-cols-5 items-center px-1 md:px-6 lg:px-10 [&>button]:min-w-0 [&_span]:whitespace-nowrap">
           <button
             aria-current={activeTab === "daily" ? "page" : undefined}
-            onClick={() => setActiveTab("daily")}
+            onClick={() => { setShowGantt(false); setActiveTab("daily"); }}
             className={`flex-1 flex flex-col items-center justify-center h-full space-y-1 md:space-y-2 transition-all duration-300 ${activeTab === "daily" ? "text-blue-600 -translate-y-1 md:-translate-y-2" : "text-slate-400 hover:text-slate-500"}`}
           >
             <div

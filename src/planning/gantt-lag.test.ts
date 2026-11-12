@@ -1,0 +1,12 @@
+import {it,expect} from 'vitest';
+import {emptyPlan,type PlanningTask} from './model';
+import {ganttLag,lagLabel} from './gantt-lag';
+import type {LearningSchedule} from './schedule';
+const task=(id='one',minutes=20):PlanningTask=>({id,unit:'第11回',subject:'math',category:'教材',materialName:'教材',title:'課題',status:'in_progress',isRunning:false,history:[],planning:{...emptyPlan(),ranges:[{id:'done',label:'前半',units:40,minutes,day:'2026-11-12',done:true,graded:true,corrected:true,actualDay:'2026-11-12',actualSeconds:null},{id:'rest',label:'後半',units:60,minutes,day:'2026-11-13',done:false,graded:false,corrected:false,actualDay:null,actualSeconds:null}],baseline:{id:'fixed',createdDay:'2026-11-10',targetDay:'2026-11-14',daily:{'2026-11-12':50,'2026-11-14':50},evidence:{source:'saved',count:1,firstSeconds:60,redoSeconds:null,redoDays:0,conditions:'measured',manualMinutes:null,provisional:false}}}});
+it('uses the same measured progress for manual and fixed comparisons',()=>{expect(ganttLag([task()],null,'2026-11-12')).toEqual({manual:0,goal:-10});expect(lagLabel(-10)).toBe('−10pt 遅れ');expect(lagLabel(15)).toBe('＋15pt 先行');expect(lagLabel(0)).toBe('予定どおり');});
+it('does not infer progress from in-progress status or ungraded work',()=>{const t=task();t.planning!.ranges.forEach(r=>{r.done=false;r.graded=false;r.corrected=false;r.actualDay=null;});expect(ganttLag([t],null,'2026-11-12')).toEqual({manual:null,goal:null});});
+it('does not use unadopted proposal phases for a delay',()=>{const t={...task(),planning:undefined},plan={items:[],proposalImport:{source:{planningPolicy:{taskSchedules:[{taskId:t.id,phases:[{day:'2026-11-12',minutes:20}]}]}}}} as unknown as LearningSchedule;expect(ganttLag([t],plan,'2026-11-12')).toEqual({manual:null,goal:null});});
+it('aggregates only complete measured weights and comparison data',()=>{const a=task('a',10),b=task('b',30);b.status='completed';expect(ganttLag([a,b],null,'2026-11-12',true)).toEqual({manual:45,goal:35});b.planning!.ranges=[];expect(ganttLag([a,b],null,'2026-11-12',true)).toEqual({manual:null,goal:null});});
+it('keeps completed tasks at 100 and does not fabricate a missing fixed comparison',()=>{const t=task();t.status='completed';t.planning!.baseline=null;expect(ganttLag([t],null,'2026-11-12')).toEqual({manual:60,goal:null});});
+
+it('does not render non-finite legacy quantities as a comparison',()=>{const t=task();t.planning!.ranges[0].units=NaN;expect(ganttLag([t],null,'2026-11-12')).toEqual({manual:null,goal:null});});
