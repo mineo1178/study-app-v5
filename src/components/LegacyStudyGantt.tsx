@@ -1,3 +1,4 @@
+import { measuredProgress, measuredAggregate, displayItem, progressText, planRegistered, targetDisplay, dayDisplay } from '../planning/gantt-display';
 import { loadCalculationHistory, withCalculationHistory } from "../planning/calculation-history";
 import type { CalculationAttempt } from "../daily-calculation";
 import { MaterialImport } from "./MaterialImport";
@@ -5,10 +6,10 @@ import type { newMaterialTask } from "../planning/materials";
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { doc, onSnapshot, runTransaction, type Firestore } from "firebase/firestore";
 import { SUBJECTS, getJstDay, type Subject } from "../review/model";
-import { addDays, aggregate, correctRangeInputs, dailyWork, difference, emptyPlan, makeBaseline, monday, normalizeCapacities, planOf, progressOf, rangeComplete, validatePlan, validatePlanTransition, type PlanRange, type PlanningTask, type TaskPlan } from "../planning/model";
+import { addDays, correctRangeInputs, dailyWork, difference, emptyPlan, makeBaseline, monday, normalizeCapacities, planOf, rangeComplete, validatePlan, validatePlanTransition, type PlanRange, type PlanningTask, type TaskPlan } from "../planning/model";
 import { saveTaskPlan } from "../planning/repository";
 import "./StudyGantt.css";
-const percent = (value: number | null) => value === null ? "進捗率未確認" : Math.round(value) + "%";
+const percent = (value: number | null) => value === null ? "進捗未測定" : Math.round(value) + "%";
 const diffText = (value: ReturnType<typeof difference>) => value ? (value.points >= 0 ? "+" : "") + value.points.toFixed(1) + "ポイント" : "未測定または基準未設定のため除外";
 type Props = { tasks: PlanningTask[]; db: Firestore | null; familyId: string; uid: string; sample: boolean; active: () => boolean; onLocal: (id: string, updates: { planning: TaskPlan; status?: "completed" }) => void; onOpen: (id: string) => void; onCreated: (task: ReturnType<typeof newMaterialTask>) => void; calculationAttempts?: CalculationAttempt[] };
 export function LegacyStudyGantt({ tasks, db, familyId, uid, sample, active, onLocal, onOpen, onCreated, calculationAttempts = [] }: Props) {
@@ -89,7 +90,7 @@ export function LegacyStudyGantt({ tasks, db, familyId, uid, sample, active, onL
     } catch(e) { if (active()) setError((e as Error).message); }
     finally { if (active()) setBusy(false); }
   }
-  const p = selected ? progressOf(selected) : null;
+  const p = selected ? measuredProgress(selected,displayItem(selected,null)) : null;
   const manualDiff = selected ? difference(p, dailyWork(planOf(selected)), today) : null;
   const goalDiff = selected ? difference(p, planOf(selected).baseline?.daily ?? null, today) : null;
   const unplaced = tasks.filter(t => t.status !== "completed" && (!planOf(t).ranges.length || planOf(t).ranges.some(r => !r.day)));
@@ -111,14 +112,14 @@ export function LegacyStudyGantt({ tasks, db, familyId, uid, sample, active, onL
     <div className="gantt-legend"><span>赤い実線：手動計画</span><span>紫の破線：固定目標基準</span><span>今日の縦線から左＝遅れ／右＝先行</span><span>青＝予定、緑＝実績</span></div>
     <div className="gantt-table" style={{ "--gantt-days": span } as CSSProperties}>
       <div className="gantt-head"><span>回／教科／教材・範囲</span><span>進捗率</span><span>終了予定日</span><span>履歴からの目標終了日</span><div className="gantt-dates">{days.map(day => <span key={day} className={day === today ? "is-today" : ""}>{day.slice(5)}</span>)}</div></div>
-      {groups.map(unit => <details open key={unit} className="gantt-unit"><summary>{unit} · {percent(aggregate(tasks.filter(t => t.unit === unit)))}</summary>{Object.entries(SUBJECTS).map(([subject, name]) => {
+      {groups.map(unit => <details open key={unit} className="gantt-unit"><summary>{unit} · {percent(measuredAggregate(tasks.filter(t => t.unit === unit)))}</summary>{Object.entries(SUBJECTS).map(([subject, name]) => {
         const children = orderedTasks.filter(t => t.unit === unit && t.subject === subject);
-        return children.length ? <details open key={subject}><summary>{name} · {percent(aggregate(children))}</summary>{[...new Set(children.map(t => t.materialName || t.category))].map(material => <details open key={material}><summary>{material} · {percent(aggregate(children.filter(t => (t.materialName || t.category) === material)))}</summary>{children.filter(t => (t.materialName || t.category) === material).map(task => {
-          const plan = planOf(task), progress = progressOf(task), red = difference(progress, dailyWork(plan), today), purple = difference(progress, plan.baseline?.daily ?? null, today);
+        return children.length ? <details open key={subject}><summary>{name} · {percent(measuredAggregate(children))}</summary>{[...new Set(children.map(t => t.materialName || t.category))].map(material => <details open key={material}><summary>{material} · {percent(measuredAggregate(children.filter(t => (t.materialName || t.category) === material)))}</summary>{children.filter(t => (t.materialName || t.category) === material).map(task => {
+          const plan = planOf(task), progress = measuredProgress(task,displayItem(task,null)), red = difference(progress, dailyWork(plan), today), purple = difference(progress, plan.baseline?.daily ?? null, today);
           const todayIndex = days.indexOf(today), center = (todayIndex + .5) / span * 100;
           return <div className="gantt-task" key={task.id} data-task-id={task.id}>
-            <div className="gantt-row"><button disabled={busy} className={selectedId === task.id ? "is-selected" : ""} onClick={() => choose(task)}>{task.title}</button><span>{percent(progress)}</span><span>{plan.endDay || "未設定"}{plan.endDay && plan.endDay < today && task.status !== "completed" ? "（予定超過）" : ""}</span><span>{plan.baseline?.targetDay || "未設定"}{plan.baseline?.evidence.provisional ? "（仮目標）" : ""}</span>
-              <div className="gantt-axis-scroll" role="region" aria-label={task.title + "の日付軸"} tabIndex={0}><div className="gantt-dates gantt-axis">{days.map(day => <button disabled={busy} key={day} className={day === today ? "is-today" : ""} aria-label={task.title + "を" + day + "に配置"} onClick={() => { if (selectedId === task.id && selectedRange) { setDraft({ ...draft, ranges: draft.ranges.map(r => r.id === selectedRange ? { ...r, day } : r) }); setNotice("配置を変更しました。計画を保存してください。"); } else { choose(task); } setRangeDay(day); }}><small>{day.slice(5)}</small><span className="gantt-plan">{plan.ranges.filter(r => r.day === day).length ? "予定" : "　"}</span><span className="gantt-actual">{plan.ranges.some(r => r.actualDay === day) ? "実績" : "　"}</span></button>)}
+            <div className="gantt-row"><button disabled={busy} className={selectedId === task.id ? "is-selected" : ""} onClick={() => choose(task)}>{task.title}</button><span>{progressText(task,displayItem(task,null))}／{planRegistered(task,null)?"計画登録あり":"計画未登録"}</span><span>{plan.endDay || "未設定"}{plan.endDay && plan.endDay < today && task.status !== "completed" ? "（予定超過）" : ""}</span><span>{plan.baseline?.targetDay || targetDisplay(task,null,tasks,today).label}{plan.baseline?.evidence.provisional ? "（仮目標）" : ""}</span>
+              <div className="gantt-axis-scroll" role="region" aria-label={task.title + "の日付軸"} tabIndex={0}><div className="gantt-dates gantt-axis">{days.map(day => <button disabled={busy} key={day} className={day === today ? "is-today" : ""} aria-label={task.title + "を" + day + "に配置"} onClick={() => { if (selectedId === task.id && selectedRange) { setDraft({ ...draft, ranges: draft.ranges.map(r => r.id === selectedRange ? { ...r, day } : r) }); setNotice("配置を変更しました。計画を保存してください。"); } else { choose(task); } setRangeDay(day); }}><small>{day.slice(5)}</small><span>{dayDisplay(task,displayItem(task,null),null,day).planned&&<span className="gantt-plan" title="この日に保存された予定範囲があります">予定</span>}</span><span>{dayDisplay(task,displayItem(task,null),null,day).actual&&<span className="gantt-actual" title="この日の保存済み範囲実績または学習履歴があります">実績</span>}</span></button>)}
               {todayIndex >= 0 && <svg viewBox="0 0 100 40" preserveAspectRatio="none" aria-label="進捗差の稲妻線" className="gantt-lines"><line x1={center} x2={center} y1={0} y2={40} stroke="#64748b" strokeDasharray="1 1" />{[red, purple].map((diff, i) => diff && <polyline key={i} points={center + ",0 " + Math.max(0, Math.min(100, center + diff.points * .35)) + ",20 " + center + ",40"} fill="none" stroke={i ? "#7e22ce" : "#dc2626"} strokeWidth="1" strokeDasharray={i ? "2 1" : undefined} />)}</svg>}</div></div>
             </div>
             {selectedId === task.id && <p className="gantt-diff">手動計画差：{diffText(red)} ／ 固定目標差：{diffText(purple)}</p>}

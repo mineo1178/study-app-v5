@@ -1,3 +1,4 @@
+import { assessProposal, candidateReason } from './proposal-matching';
 import { getJstDay } from '../review/model';
 import { canonical,materialKey,parseSchedule,actualOf,scheduleProgress,type LearningSchedule,type ScheduleItem } from './schedule';
 import { estimate,makeBaseline,planOf,type PlanningTask } from './model';
@@ -8,9 +9,9 @@ export function matchingTasks(p:OfficialProposal,tasks:PlanningTask[]){return ta
 export function initialResolutions(source:OfficialPlan,tasks:PlanningTask[],current:LearningSchedule|null):ProposalResolution[]{return source.taskProposals.map(p=>{
  const old=current?.proposalImport?.source.planId===source.planId?current.proposalImport.records.find(r=>r.proposalTaskId===p.proposalTaskId):undefined;
  if(old)return{...structuredClone(old),...(current?.proposalImport?.source.revision!==source.revision?{adoptRecommendation:false,adoptHistoryTarget:false}:{})};
- const exact=matchingTasks(p,tasks).filter(t=>t.category===p.category&&materialKey(t)===p.materialId&&t.planning?.ranges.some(r=>r.label===scopeText(p)));
- const task=exact.length===1?exact[0]:null;
- return{proposalTaskId:p.proposalTaskId,taskId:task?.id??p.appBinding.taskId,identity:task?taskIdentity(task):null,verified:!!task,reason:task?'回・教科・カテゴリ・materialId・範囲が完全一致':'',selected:false,adoptRecommendation:false,adoptedDay:null,adoptHistoryTarget:false};
+ const assessment=assessProposal(p,tasks),best=assessment.candidates[0];
+ const task=best&&(assessment.rank==='A'||best.score>(assessment.candidates[1]?.score??-1))?best.task:null;
+ return{proposalTaskId:p.proposalTaskId,taskId:task?.id??p.appBinding.taskId,identity:null,verified:false,reason:task?candidateReason(p,task):'',selected:false,adoptRecommendation:false,adoptedDay:null,adoptHistoryTarget:false};
  });}
 export function reconciliationErrors(input:ProposalImport,tasks:PlanningTask[],binding:string):string[]{
  const errors:string[]=[],used=new Set<string>();if(input.source.accountBinding&&input.source.accountBinding!==binding)errors.push('正式予定のアカウント識別子が一致しません。');
@@ -21,7 +22,7 @@ export function reconciliationErrors(input:ProposalImport,tasks:PlanningTask[],b
  }
  return errors;
 }
-function oldItem(t:PlanningTask):ScheduleItem{
+export function oldItem(t:PlanningTask):ScheduleItem{
  const p=planOf(t),b=p.baseline;return{taskId:t.id,unit:t.unit,subject:t.subject as ScheduleItem['subject'],category:t.category,materialName:t.materialName,materialId:materialKey(t),title:t.title,endDay:p.endDay||null,deadline:p.deadline||null,ranges:p.ranges.map(r=>({id:r.id,label:r.label,units:r.units,minutes:r.minutes,day:r.day||null})),dailyWork:Object.fromEntries([...new Set(p.ranges.filter(r=>r.day).map(r=>r.day))].map(d=>[d,{units:p.ranges.filter(r=>r.day===d).reduce((n,r)=>n+r.units,0),minutes:p.ranges.filter(r=>r.day===d).reduce((n,r)=>n+r.minutes,0)}])),baseline:{id:b?.id??'unset',targetDay:b?.targetDay??null,daily:b?.daily??{},evidence:{provisional:b?.evidence.provisional??true,historyCount:b?.evidence.count??0,estimatedMinutes:b?.evidence.estimatedMinutes??null,method:b?.evidence.source??'固定目標未設定・根拠不足',conditions:[b?.evidence.conditions??'作業量・容量・有効な履歴の照合が必要'],manualAdjustmentMinutes:b?.evidence.manualMinutes??null}}};
 }
 export function proposalHistory(t:PlanningTask){const units=planOf(t).ranges.reduce((n,r)=>n+r.units,0);if(!units)return{units:null,firstSeconds:null,redoCount:null,redoSeconds:null,redoDays:null,count:0,refs:[] as string[]};const evidence=estimate(t,[t],null);const rows=t.history.flatMap((h,index)=>h.reviewStatus!=='pending'&&!h.operationCheck&&(h.graded===true||typeof h.score==='number'&&Number.isFinite(h.score))&&h.duration>0&&h.attemptType&&h.units===units?[{h,index}]:[]);return{units,firstSeconds:evidence.firstSeconds,redoCount:evidence.redoCount??null,redoSeconds:evidence.redoSeconds,redoDays:evidence.redoDaysKnown?evidence.redoDays:null,count:evidence.count,refs:rows.map(({h,index})=>`${t.id}:${index}:${h.attemptType}:${h.units}:${h.duration}:${h.endAt??h.date??'日付未確認'}`)};}
