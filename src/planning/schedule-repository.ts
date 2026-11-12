@@ -20,6 +20,7 @@ export async function importSchedule(db:Firestore,family:string,owner:ScheduleOw
    if(pointer.data()?.versionId!==versionId)throw new Error('このrevisionは旧計画履歴です。新revisionで取り込んでください。');
    return{duplicate:true,versionId};
   }
+  if(plan.proposalImport&&(pointer.data()?.versionId??null)!==plan.baseVersion)throw new Error('採用済み計画が更新されています。最新計画から照合プレビューを作り直してください。');
   const importedAt=Date.now(),meta:SchedulePointer={schemaVersion:1,planId:plan.planId,revision:plan.revision,versionId,digest,generatedAt:plan.generatedAt,importedAt};
   tx.set(version,{plan,digest,importedAt});tx.set(ledger,{revision:plan.revision,digest});tx.set(root,meta);
   return{duplicate:false,versionId};
