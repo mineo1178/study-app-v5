@@ -9,3 +9,5 @@
 .sheet-proposal{background:transparent;border:1px dashed #697586!important;box-sizing:border-box}.sheet-run.sheet-proposal{top:15px;height:20px;z-index:0}.sheet-legend i.sheet-proposal{height:10px}
 
 .sheet-proposal-notice{font-size:12px;padding:7px 10px;background:#fff4d5;border:1px solid #e1c68b;margin-bottom:8px}
+
+.sheet-reference-state{font-size:12px;padding:7px 10px;background:#eef3fa;border:1px solid #cad6e6;margin:5px 0 8px;overflow-wrap:anywhere}.sheet-reference-state p{margin:3px 0}.sheet-reference-state button{font-size:12px;min-height:34px;padding:4px 9px;border:1px solid #bac9dd;border-radius:5px;background:white}.sheet-reference-state strong{color:#815b26}
