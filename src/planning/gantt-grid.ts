@@ -4,8 +4,8 @@ import type { LearningSchedule } from './schedule';
 export const compareRounds=(a:string,b:string)=>{const number=(v:string)=>Number(v.match(/第\s*([0-9０-９]+)\s*回/)?.[1].normalize('NFKC'));const x=number(a),y=number(b);return Number.isFinite(x)&&Number.isFinite(y)?y-x: Number.isFinite(x)?-1:Number.isFinite(y)?1:b.localeCompare(a,'ja',{numeric:true});};
 export const taskCounts=(input:PlanningTask[])=>{const tasks=[...new Map(input.map(t=>[t.id,t])).values()];return({total:tasks.length,completed:tasks.filter(t=>t.status==='completed').length,inProgress:tasks.filter(t=>t.status==='in_progress').length,notStarted:tasks.filter(t=>t.status==='not_started').length});};
 export type GanttRow={key:string;kind:'unit'|'subject'|'material'|'task';depth:number;label:string;tasks:PlanningTask[];task?:PlanningTask};
-export function ganttRows(tasks:PlanningTask[],plan:LearningSchedule|null,collapsed:ReadonlySet<string>=new Set()):GanttRow[]{
- const rows:GanttRow[]=[],units=[...new Set([...tasks.map(t=>t.unit),...plan?.scope.map(s=>s.unit)??[]])].sort(compareRounds);
+export function ganttRows(tasks:PlanningTask[],_plan:LearningSchedule|null,collapsed:ReadonlySet<string>=new Set()):GanttRow[]{
+ const rows:GanttRow[]=[],units=[...new Set(tasks.map(t=>t.unit))].sort(compareRounds);
  tasks=[...new Map(tasks.map(t=>[t.id,t])).values()];
  for(const unit of units){const children=tasks.filter(t=>t.unit===unit),key=JSON.stringify(['unit',unit]);rows.push({key,kind:'unit',depth:0,label:unit,tasks:children});if(collapsed.has(key))continue;
  for(const subject of [...new Set(children.map(t=>t.subject))].sort((a,b)=>{const order=['math','japanese','science','social'];return (order.includes(a)?order.indexOf(a):4)-(order.includes(b)?order.indexOf(b):4);})){const subjects=children.filter(t=>t.subject===subject),subjectKey=JSON.stringify(['subject',unit,subject]);rows.push({key:subjectKey,kind:'subject',depth:1,label:subject,tasks:subjects});if(collapsed.has(subjectKey))continue;
