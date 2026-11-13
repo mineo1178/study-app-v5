@@ -1,11 +1,16 @@
 import type { ScheduleActual } from "./schedule";
 import { getJstDay } from "../review/model";
 
+export type WbsEdit={taskId:string;startDay:string;endDay:string;progress:number|null;updatedBy:string;updatedAt:number};
+export function validateWbs(value:WbsEdit){
+ if(!value.taskId||!value.updatedBy||!Number.isFinite(value.updatedAt)||value.updatedAt<=0||[value.startDay,value.endDay].some(d=>d!==''&&!validDay(d))||(value.startDay&&value.endDay&&value.endDay<value.startDay)||(value.progress!==null&&(!Number.isFinite(value.progress)||value.progress<0||value.progress>100)))throw Error('開始日・終了日の順序と進捗率（0〜100%）を確認してください。');
+}
+
 export type PlanRange = { id: string; label: string; units: number; minutes: number; day: string; done: boolean; graded: boolean; corrected: boolean; actualDay: string | null; actualSeconds: number | null };
 export type Evidence = { source: string; count: number; firstCount?: number; redoCount?: number; estimatedMinutes?: number | null; redoDaysKnown?: boolean; firstSeconds: number | null; redoSeconds: number | null; redoDays: number; conditions: string; manualMinutes: number | null; provisional: boolean };
 export type Baseline = { id: string; createdDay: string; targetDay: string | null; daily: Record<string, number>; evidence: Evidence };
 export type RangeCorrection = { id: string; day: string; reason: string; baselineId: string | null; previousRanges: PlanRange[]; revisedRanges: PlanRange[] };
-export type TaskPlan = { rangeCorrections?: RangeCorrection[]; schemaVersion: 1; revision: number; order?: number; endDay: string; deadline: string; ranges: PlanRange[]; baseline: Baseline | null; baselineHistory: Baseline[]; material?: { materialId: string; title: string; requirement: "required" | "reinforcement" | "advanced"; selected: boolean; references: string[] } };
+export type TaskPlan = { wbs?: WbsEdit; rangeCorrections?: RangeCorrection[]; schemaVersion: 1; revision: number; order?: number; endDay: string; deadline: string; ranges: PlanRange[]; baseline: Baseline | null; baselineHistory: Baseline[]; material?: { materialId: string; title: string; requirement: "required" | "reinforcement" | "advanced"; selected: boolean; references: string[] } };
 export type PlanningTask = { scheduleActuals?: Record<string,ScheduleActual>; id: string; unit: string; subject: string; category: string; materialName: string; title: string; status: "not_started" | "in_progress" | "completed"; isRunning: boolean; currentDuration?: number; planning?: TaskPlan; history: { duration: number; operationCheck?: boolean; reviewStatus?: string; score?: number; graded?: boolean; attemptType?: string; units?: number; endAt?: number; date?: string }[] };
 export const emptyPlan = (): TaskPlan => ({ schemaVersion: 1, revision: 0, order: 0, endDay: "", deadline: "", ranges: [], baseline: null, baselineHistory: [] });
 export const validDay = (day: string) => /^\d{4}-\d{2}-\d{2}$/.test(day) && Number.isFinite(Date.parse(day)) && new Date(day).toISOString().slice(0, 10) === day;
@@ -75,6 +80,7 @@ export function makeBaseline(task: PlanningTask, all: PlanningTask[], capacities
   return { id, createdDay: today, targetDay: remaining === 0 ? last : null, daily: remaining === 0 ? daily : {}, evidence };
 }
 export function validatePlan(plan: TaskPlan) {
+  if(plan.wbs)validateWbs(plan.wbs);
   if (plan.schemaVersion !== 1 || !Number.isSafeInteger(plan.revision) || plan.revision < 0 || plan.ranges.length > 100 || new Set(plan.ranges.map(r => r.id)).size !== plan.ranges.length || (plan.endDay && !validDay(plan.endDay)) || (plan.deadline && !validDay(plan.deadline))) throw new Error("計画の形式を確認してください。");
   if (plan.ranges.some(r => !r.id || !r.label.trim() || r.label.length > 150 || !(r.units > 0 && r.units <= 10000) || !(r.minutes > 0 && r.minutes <= 1440) || (r.day && !validDay(r.day)) || (r.actualDay !== null && !validDay(r.actualDay)) || (r.actualSeconds !== null && (!Number.isFinite(r.actualSeconds) || r.actualSeconds < 0)))) throw new Error("分割範囲・作業量・予定時間を確認してください。");
   if (plan.order !== undefined && (!Number.isInteger(plan.order) || plan.order < 0 || plan.order > 10000)) throw new Error("順番は0〜10000にしてください。");

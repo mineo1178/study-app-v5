@@ -2,6 +2,7 @@ import { doc, runTransaction, type Firestore } from "firebase/firestore";
 import { emptyPlan, rangeComplete, validatePlan, validatePlanTransition, type TaskPlan } from "./model";
 export async function saveTaskPlan(db: Firestore, family: string, taskId: string, expectedRevision: number, plan: TaskPlan, active: () => boolean, complete = false) {
   validatePlan(plan);
+  if(plan.wbs && plan.wbs.taskId!==taskId)throw Error("WBSの対象課題を確認してください。");
   return runTransaction(db, async tx => {
     const ref = doc(db, "families", family, "tasks", taskId);
     const snapshot = await tx.get(ref);
