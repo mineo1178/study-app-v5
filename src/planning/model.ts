@@ -1,3 +1,4 @@
+import {validateQuestionMeasurement,validateQuestionPlan,type QuestionMeasurement,type QuestionPlan,type QuestionGoal} from './question-progress';
 import type { ScheduleActual } from "./schedule";
 import { getJstDay } from "../review/model";
 
@@ -11,7 +12,7 @@ export type Evidence = { source: string; count: number; firstCount?: number; red
 export type Baseline = { id: string; createdDay: string; targetDay: string | null; daily: Record<string, number>; evidence: Evidence; basisStatus?:'unmeasured'|'measured_work' };
 export type TargetRevision = { id:string; revision:number; changedAt:number; reason:string; memo:string; oldTargetDay:string|null; newTargetDay:string; previousBaseline:unknown; sourceVersion:string|null; phases?:{phase:string;day:string;minutes:number;conditional:boolean}[] };
 export type RangeCorrection = { id: string; day: string; reason: string; baselineId: string | null; previousRanges: PlanRange[]; revisedRanges: PlanRange[] };
-export type TaskPlan = { wbs?: WbsEdit; targetRevisions?:TargetRevision[]; rangeCorrections?: RangeCorrection[]; schemaVersion: 1; revision: number; order?: number; endDay: string; deadline: string; ranges: PlanRange[]; baseline: Baseline | null; baselineHistory: Baseline[]; material?: { materialId: string; title: string; requirement: "required" | "reinforcement" | "advanced"; selected: boolean; references: string[] } };
+export type TaskPlan = { questionMeasurement?:QuestionMeasurement;questionMeasurementHistory?:QuestionMeasurement[];questionPlan?:QuestionPlan;questionPlanHistory?:QuestionPlan[];questionGoal?:QuestionGoal;questionGoalHistory?:QuestionGoal[]; wbs?: WbsEdit; targetRevisions?:TargetRevision[]; rangeCorrections?: RangeCorrection[]; schemaVersion: 1; revision: number; order?: number; endDay: string; deadline: string; ranges: PlanRange[]; baseline: Baseline | null; baselineHistory: Baseline[]; material?: { materialId: string; title: string; requirement: "required" | "reinforcement" | "advanced"; selected: boolean; references: string[] } };
 export type PlanningTask = { scheduleActuals?: Record<string,ScheduleActual>; id: string; unit: string; subject: string; category: string; materialName: string; title: string; status: "not_started" | "in_progress" | "completed"; isRunning: boolean; currentDuration?: number; planning?: TaskPlan; history: { duration: number; operationCheck?: boolean; reviewStatus?: string; score?: number; graded?: boolean; attemptType?: string; units?: number; endAt?: number; date?: string }[] };
 export const emptyPlan = (): TaskPlan => ({ schemaVersion: 1, revision: 0, order: 0, endDay: "", deadline: "", ranges: [], baseline: null, baselineHistory: [] });
 export const validDay = (day: string) => /^\d{4}-\d{2}-\d{2}$/.test(day) && Number.isFinite(Date.parse(day)) && new Date(day).toISOString().slice(0, 10) === day;
@@ -81,6 +82,8 @@ export function makeBaseline(task: PlanningTask, all: PlanningTask[], capacities
   return { id, createdDay: today, targetDay: remaining === 0 ? last : null, daily: remaining === 0 ? daily : {}, evidence };
 }
 export function validatePlan(plan: TaskPlan) {
+  if(plan.questionMeasurement)validateQuestionMeasurement(plan.questionMeasurement);if(plan.questionPlan)validateQuestionPlan(plan.questionPlan);if(plan.questionGoal){validateQuestionPlan(plan.questionGoal.plan);const g=plan.questionGoal;if(!g.id||!Number.isSafeInteger(g.revision)||g.revision<1||!Number.isFinite(g.adoptedAt)||g.adoptedAt<=0||!g.reason.trim()||g.reason.length>200)throw Error('数量固定目標のrevision・採用理由を確認してください。');}
+  if([plan.questionMeasurementHistory,plan.questionPlanHistory,plan.questionGoalHistory].some(h=>(h?.length??0)>50))throw Error("数量・目標履歴は50件までです。");
   if(plan.wbs)validateWbs(plan.wbs);
   if (plan.schemaVersion !== 1 || !Number.isSafeInteger(plan.revision) || plan.revision < 0 || plan.ranges.length > 100 || new Set(plan.ranges.map(r => r.id)).size !== plan.ranges.length || (plan.endDay && !validDay(plan.endDay)) || (plan.deadline && !validDay(plan.deadline))) throw new Error("計画の形式を確認してください。");
   if (plan.ranges.some(r => !r.id || !r.label.trim() || r.label.length > 150 || !(r.units > 0 && r.units <= 10000) || !(r.minutes > 0 && r.minutes <= 1440) || (r.day && !validDay(r.day)) || (r.actualDay !== null && !validDay(r.actualDay)) || (r.actualSeconds !== null && (!Number.isFinite(r.actualSeconds) || r.actualSeconds < 0)))) throw new Error("分割範囲・作業量・予定時間を確認してください。");
@@ -107,6 +110,8 @@ export function correctRangeInputs(old: TaskPlan, revised: PlanRange[], reason: 
   return result;
 }
 export function validatePlanTransition(old: TaskPlan, next: TaskPlan) {
+  for(const [value,history] of [['questionMeasurement','questionMeasurementHistory'],['questionPlan','questionPlanHistory'],['questionGoal','questionGoalHistory']] as const){const expected=[...old[history]??[],...(old[value]&&canonical(old[value])!==canonical(next[value])?[old[value]]:[])];if(canonical(expected)!==canonical(next[history]??[])||old[value]&&!next[value])throw Error('数量・固定目標の変更履歴を維持してください。');}
+
   const previousTargets=old.targetRevisions??[],targets=next.targetRevisions??[];
   if(canonical(previousTargets)!==canonical(targets)){
     const change=targets.at(-1);

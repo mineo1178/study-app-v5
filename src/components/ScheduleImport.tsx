@@ -1,3 +1,4 @@
+import {phaseName} from '../planning/schedule-proposals';
 import {prepareScheduleFile} from '../planning/import-file';
 import {referencePlan,referenceSummary} from '../planning/schedule-reference';
 import {referenceChanges,planIdentity} from '../planning/schedule-view';
@@ -8,8 +9,9 @@ import {useEffect,useRef,useState,type ChangeEvent,type RefObject} from 'react';
 import {canonical,materialKey,parseSchedule,scheduleDiff,scheduleErrors,stageImportConflicts,type LearningSchedule} from '../planning/schedule';
 import type {PlanningTask} from '../planning/model';
 import {downloadJson} from '../planning/download-json';
-export function ScheduleImport({current,tasks,binding,busy,active,onImport,onShowGantt,autoSave=false,inputRef,onResult}:{current:LearningSchedule|null;tasks:PlanningTask[];binding:string;busy:boolean;active:()=>boolean;onImport:(plan:LearningSchedule)=>Promise<void>;onShowGantt?:()=>void;autoSave?:boolean;inputRef?:RefObject<HTMLInputElement|null>;onResult?:(message:string,failed:boolean)=>void}){
+export function ScheduleImport({current,tasks,binding,busy,active,onImport,onShowGantt,autoSave=false,inputRef,onResult,onReview}:{current:LearningSchedule|null;tasks:PlanningTask[];binding:string;busy:boolean;active:()=>boolean;onImport:(plan:LearningSchedule)=>Promise<void>;onShowGantt?:()=>void;autoSave?:boolean;inputRef?:RefObject<HTMLInputElement|null>;onResult?:(message:string,failed:boolean)=>void;onReview?:()=>void}){
  const [official,setOfficial]=useState<{source:OfficialPlan;records?:ProposalResolution[]}|null>(null),[preview,setPreview]=useState<LearningSchedule|null>(null);
+ const [reviewRaw,setReviewRaw]=useState<string|null>(null);
  const [error,setError]=useState(''),[confirmed,setConfirmed]=useState(false),[notice,setNotice]=useState(''),[referenceOnly,setReferenceOnly]=useState(false),[filename,setFilename]=useState('');
  const generation=useRef(0),ownInput=useRef<HTMLInputElement>(null),saving=useRef(false);
  const input=inputRef??ownInput;
@@ -18,12 +20,13 @@ export function ScheduleImport({current,tasks,binding,busy,active,onImport,onSho
  const same=!!preview&&current?.planId===preview.planId&&current.revision===preview.revision,identical=same&&canonical(current)===canonical(preview);
  const revisionError=same&&!identical?'同じrevisionの内容が変わっています。ローカルでrevisionを増やしてください。':preview&&current?.planId===preview.planId&&preview.revision<current.revision?'旧revisionは取り込めません。':'';
  const identity=planIdentity(current),refs=preview?(preview.proposalImport?referenceSummary(tasks,preview,'0001-01-01','9999-12-31'):{provided:preview.items.length,matched:preview.items.filter(i=>tasks.some(t=>t.id===i.taskId)).length,unmatched:0}):null;
- async function choose(e:ChangeEvent<HTMLInputElement>){const f=e.target.files?.[0],request=++generation.current;if(!f)return;setFilename(f.name);setError('');setPreview(null);setOfficial(null);setConfirmed(false);setNotice('');try{
+ async function choose(e:ChangeEvent<HTMLInputElement>){const f=e.target.files?.[0],request=++generation.current;if(!f)return;setFilename(f.name);setReviewRaw(null);setError('');setPreview(null);setOfficial(null);setConfirmed(false);setNotice('');try{
   if(f.size>150000)throw new Error('計画ファイルは150KBまでです。');const raw=await f.text(),v=JSON.parse(raw);if(!active()||request!==generation.current)return;
   if(autoSave){
    if(saving.current)throw Error('計画を保存中です。');
    const prepared=prepareScheduleFile(raw,tasks,current,binding);
    setPreview(prepared.plan);setReferenceOnly(prepared.referenceOnly);
+   if(prepared.requiresApproval){setReviewRaw(raw);setNotice('未採用の回復提案です。差分を確認して採用してください。固定目標は別採用です。');onReview?.();return;}
    saving.current=true;
    try{await onImport(prepared.plan);}finally{saving.current=false;}
    if(active()&&request===generation.current){
@@ -35,7 +38,7 @@ export function ScheduleImport({current,tasks,binding,busy,active,onImport,onSho
   if(v.schemaVersion==='learning-schedule/1'){const plan=parseSchedule(raw);if(plan.accountBinding&&plan.accountBinding!==binding)throw new Error('計画のアカウント識別子が現在の認証アカウントと一致しません。');if(plan.proposalImport){setOfficial({source:plan.proposalImport.source,records:plan.proposalImport.records});if(plan.items.some(i=>i.stages?.length)){setPreview(plan);setReferenceOnly(false);}else{setPreview(referencePlan(plan.proposalImport.source,tasks,current,binding));setReferenceOnly(true);}}else{setPreview(plan);setReferenceOnly(false);}}
   else{const data=readOfficialFile(raw,binding);setOfficial(data);setPreview(referencePlan(data.source,tasks,current,binding));setReferenceOnly(true);}
  }catch(err){if(active()&&request===generation.current){setPreview(null);setOfficial(null);setError((err as Error).message);onResult?.((err as Error).message,true);}}finally{if(input.current)input.current.value='';}}
- async function save(){if(saving.current||!preview||!active())return;saving.current=true;setError('');setNotice('');try{await onImport(preview);if(active()){setNotice(referenceOnly?'参照予定を保存しました':'採用設定を保存しました');setConfirmed(false);}}catch(err){if(active())setError((err as Error).message);}finally{saving.current=false;}}
+ async function save(){if(saving.current||!preview||!active())return;saving.current=true;setError('');setNotice('');try{if(reviewRaw){const prepared=prepareScheduleFile(reviewRaw,tasks,current,binding);if(!confirmed)throw Error('日程変更の採用確認が必要です。');await onImport(prepared.plan);}else await onImport(preview);if(active()){setNotice(referenceOnly?'参照予定を保存しました':'採用設定を保存しました');setConfirmed(false);setReviewRaw(null);onResult?.(referenceOnly?'参照予定を保存しました（採用済み日程は保持）':'計画更新完了：'+preview.items.filter(i=>i.stages?.length).length+'課題の予定を反映',false);onShowGantt?.();}}catch(err){if(active())setError((err as Error).message);}finally{saving.current=false;}}
  const blocked=busy||!!errors.length||!!revisionError||identical;
  return <section id="schedule-import" className="plan-import" aria-label="学習計画の取込">
  <section className="plan-step"><h3><span>STEP 1</span> ファイル選択</h3><input ref={input} hidden aria-label="学習計画JSON" type="file" accept="application/json,.json" disabled={busy||!binding||!tasks.length} onChange={e=>void choose(e)}/><button className="plan-primary" disabled={busy||!binding||!tasks.length} onClick={()=>input.current?.click()}>計画ファイルを選ぶ</button><p className="plan-filename">{filename||'ファイル未選択'}</p>{error&&<p role="alert">{error}</p>}</section>
@@ -47,13 +50,13 @@ export function ScheduleImport({current,tasks,binding,busy,active,onImport,onSho
  {!referenceOnly&&<p>採用設定を含む形式です。採用は下の詳細設定で確認してください。工程参照には正式JSONを選択します。</p>}
  <details><summary>差分・未確認事項の詳細</summary><p>採用済み予定：追加 {diff?.added}・変更 {diff?.changed}・除外 {diff?.removed}。旧実績・固定目標は変更しません。</p>{preview.gaps.map((g,i)=><p key={i}>{g}</p>)}{preview.notes.map((n,i)=><p key={i}>{n}</p>)}</details></section>
  {referenceOnly&&<section className="plan-step"><h3><span>STEP 3</span> 参照保存</h3><p>現在のアカウントへ参照だけを保存します。正式採用・学習実績・固定目標は変更しません。</p><button className="plan-primary" disabled={blocked} onClick={()=>void save()}>{busy?'保存中…':'参照予定を保存'}</button></section>}</>}
- {notice&&<section className="plan-saved"><p role="status">{notice}</p>{onShowGantt&&<button className="plan-primary" onClick={onShowGantt}>ガントを見る</button>}</section>}
- <details className="plan-advanced" aria-label="詳細設定・エクスポート"><summary>詳細設定・エクスポート</summary>
+ {notice&&<section className={reviewRaw?"plan-pending":"plan-saved"}><p role="status">{notice}</p>{onShowGantt&&<button className="plan-primary" onClick={onShowGantt}>ガントを見る</button>}</section>}
+ <details open={reviewRaw?true:undefined} className="plan-advanced" aria-label="詳細設定・エクスポート"><summary>詳細設定・エクスポート</summary>
  <p>現在：{identity.planId??'未登録'} ／ 資料revision {identity.revision??'—'} ／ アプリrevision {identity.appRevision??'—'}</p><p>旧revisionと固定目標は従来どおり履歴に保持します。</p>
  <button disabled={busy||!binding||!tasks.length} onClick={()=>downloadJson('task-catalog.v1.json',{schemaVersion:'task-catalog/1',generatedAt:new Date().toISOString(),accountBinding:binding,tasks:tasks.map(t=>({taskId:t.id,unit:t.unit,subject:t.subject,category:t.category,materialName:t.materialName,materialId:materialKey(t),title:t.title,status:t.status,wbs:t.planning?.wbs??null}))})}>計画作成用の課題一覧を保存</button>
  <button disabled={busy||!binding} onClick={()=>downloadJson('schedule-feedback.v1.json',exportScheduleFeedback(tasks,current,binding))}>照合・進捗・採用予定を保存</button>
  {current?.proposalImport&&<button disabled={busy} onClick={()=>setOfficial({source:current.proposalImport!.source})}>正式教材提案の照合を開く</button>}
  {official&&<OfficialSchedulePreview key={official.source.planId+official.source.revision+JSON.stringify(official.records)} source={official.source} initial={official.records} current={current} tasks={tasks} binding={binding} busy={busy} onPreview={p=>{setPreview(p);setReferenceOnly(false);setConfirmed(false);setNotice('');}}/>}
- {preview&&!referenceOnly&&<section className="plan-adoption"><h3>採用設定の確認</h3><p>{preview.planId} ／ アプリrevision {preview.revision}。対応・範囲・予定日の差分を確認してください。</p><label><input type="checkbox" aria-label="現在のアカウントへの取込を確認" checked={confirmed} disabled={busy} onChange={e=>setConfirmed(e.target.checked)}/>現在のアカウントで対応と採用差分を確認しました</label><button disabled={blocked||!confirmed} onClick={()=>void save()}>採用設定を保存</button></section>}
+ {reviewRaw&&preview&&<section aria-label="回復案の日程差分"><p>現在の採用済み計画は保存するまで変わりません。固定目標候補は別採用です。</p>{preview.items.filter(i=>i.stages?.length).map(item=>{const previous=current?.items.find(i=>i.taskId===item.taskId);return <article className="plan-task-diff" key={item.taskId}><strong>{item.unit}／{item.materialName}／{item.title}</strong><p>終了 {previous?.endDay??'未設定'} → {item.endDay??'未設定'} ／ 数量{item.questionPlan?.confirmed?item.questionPlan.total+'問':'未確認'}</p><details><summary>日別工程の変更</summary><p>現在：{previous?.stages?.map(s=>s.day+' '+phaseName(s.phase)+' '+s.minutes+'分').join('／')??'未設定'}</p><p>提案：{item.stages?.map(s=>s.day+' '+phaseName(s.phase)+' '+s.minutes+'分').join('／')}</p></details></article>;})}</section>}{preview&&!referenceOnly&&<section className="plan-adoption"><h3>採用設定の確認</h3><p>{preview.planId} ／ アプリrevision {preview.revision}。対応・範囲・予定日の差分を確認してください。</p><label><input type="checkbox" aria-label="現在のアカウントへの取込を確認" checked={confirmed} disabled={busy} onChange={e=>setConfirmed(e.target.checked)}/>現在のアカウントで対応と採用差分を確認しました</label><button disabled={blocked||!confirmed} onClick={()=>void save()}>採用設定を保存</button></section>}
  </details></section>;
 }

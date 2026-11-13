@@ -1,9 +1,11 @@
+import {questionWeight} from './question-progress';
 import type {PlanningTask} from './model';
 import type {LearningSchedule} from './schedule';
 import {displayDifference,displayItem} from './gantt-display';
 export function ganttLag(tasks:PlanningTask[],plan:LearningSchedule|null,today:string,parent=false){
- const rows=tasks.map(task=>{const item=displayItem(task,plan);const c=displayDifference(task,item,today),known=c.progress!==null&&Number.isFinite(c.progress);return{...c,manual:known&&c.manual&&Number.isFinite(c.manual.points)?c.manual:null,goal:known&&c.goal&&Number.isFinite(c.goal.points)?c.goal:null,weight:item.ranges.reduce((n,r)=>n+r.minutes,0)};});
+ const rows=tasks.map(task=>{const item=displayItem(task,plan);const c=displayDifference(task,item,today),known=c.progress!==null&&Number.isFinite(c.progress);return{...c,manual:known&&c.manual&&Number.isFinite(c.manual.points)?c.manual:null,goal:known&&c.goal&&Number.isFinite(c.goal.points)?c.goal:null,weight:questionWeight(task)?.work??item.ranges.reduce((n,r)=>n+r.minutes,0),unitKey:questionWeight(task)?.unitKey??'legacy'};});
  if(!parent&&rows.length===1)return{manual:rows[0].manual?.points??null,goal:rows[0].goal?.points??null};
+ const units=new Set(rows.map(r=>r.unitKey));if(parent&&units.size>1)return{manual:null,goal:null};
  const sum=rows.reduce((n,r)=>n+r.weight,0),measured=rows.length>0&&rows.every(r=>r.progress!==null&&Number.isFinite(r.progress)&&r.weight>0&&Number.isFinite(r.weight));
  const weighted=(key:'manual'|'goal')=>measured&&rows.every(r=>r[key]!==null)?rows.reduce((n,r)=>n+r[key]!.points*r.weight,0)/sum:null;
  return{manual:weighted('manual'),goal:weighted('goal')};

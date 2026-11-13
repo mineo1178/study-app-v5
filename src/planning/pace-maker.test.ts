@@ -1,0 +1,8 @@
+import {it,expect} from 'vitest';
+import {paceMaker} from './pace-maker';
+import {scheduleTask,scheduleFixture} from '../../tests/schedule-fixture';
+import {officialFixture} from '../../tests/official-fixture';
+const fixture=()=>{const p=scheduleFixture();p.proposalImport={source:officialFixture(),records:[]};p.capacities={'2026-11-13':0,'2026-11-14':90,'2026-11-15':90,'2026-11-16':60,'2026-11-17':60,'2026-11-18':60,'2026-11-19':60};p.items[0].stages=[{phase:'first_and_marking',day:'2026-11-14',minutes:20,conditional:false},{phase:'correction',day:'2026-11-15',minutes:10,conditional:true},{phase:'final_check',day:'2026-11-19',minutes:2,conditional:false}];return p;};
+it('proposes all stages by Thursday and never converts study seconds to progress',()=>{const p=fixture(),a=paceMaker([{...scheduleTask,history:[{duration:99999}]}],p,'2026-11-13');expect(a.deadline).toBe('2026-11-19');expect(a.estimated).toBe(32);expect(a.shortfall).toBe(0);expect(a.actual).toBeNull();expect(a.allocations.reduce((n,r)=>n+r.minutes,0)).toBe(32);expect(a.allocations.some(r=>r.phase==='採点')).toBe(true);});
+it('reports missing minutes and affected tasks when capacity is insufficient',()=>{const p=fixture();for(const d in p.capacities)p.capacities[d]=0;const a=paceMaker([scheduleTask],p,'2026-11-13');expect(a.shortfall).toBe(32);expect(new Set(a.shortfalls.map(s=>s.taskId))).toEqual(new Set(['normal']));});
+it('does not place work before Friday-only material availability',()=>{const p=fixture();p.proposalImport!.source.planningPolicy.taskSchedules=[{taskId:'normal',availability:{notBefore:'2026-11-20'}}];const a=paceMaker([scheduleTask],p,'2026-11-13');expect(a.shortfall).toBe(32);expect(a.allocations).toHaveLength(0);});

@@ -25,3 +25,5 @@ export async function verifyTargetPointer(){
  if(!rejected)throw Error('Schedule pointer conflict accepted');
  if((await getDoc(ref)).data()?.planning)throw Error('Rejected target was saved');return true;
 }
+
+export async function readSchedulePointer(){if(auth.app.options.projectId!=="demo-study-hotfix")throw Error("Emulator only");return (await getDoc(doc(getFirestore(auth.app),"families/hotfix-study-family/learningSchedules/"+auth.currentUser!.uid))).data();}

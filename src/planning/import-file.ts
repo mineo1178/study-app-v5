@@ -3,12 +3,12 @@ import {referencePlan} from './schedule-reference';
 import {canonical,parseSchedule,scheduleErrors,stageImportConflicts,type LearningSchedule} from './schedule';
 import type {PlanningTask} from './model';
 
-function approvedStages(plan:LearningSchedule,tasks:PlanningTask[]){
+function approvedStages(plan:LearningSchedule,tasks:PlanningTask[],reviewPending=false){
  const source=plan.proposalImport?.source;
  const decision=source?.planningPolicy.adoptionDecision as {
-  status?:string;selectedTaskIds?:string[];completedTaskIds?:string[];pendingTaskIds?:string[];
+  status?:string;prioritySelectionStatus?:string;selectedTaskIds?:string[];completedTaskIds?:string[];pendingTaskIds?:string[];
  }|undefined;
- if(source?.planId!==plan.planId||decision?.status!=='guardian_selected_priority_plan')throw Error('工程の採用方針を確認できません。詳細管理で差分を確認してください。');
+ if(source?.planId!==plan.planId||!(decision?.status==='guardian_selected_priority_plan'||reviewPending&&decision?.status==='guardian_review_required_for_schedule_revision'&&decision.prioritySelectionStatus==='B_ten_task_priority_unchanged_from_adopted_r3'))throw Error('工程の採用方針を確認できません。詳細管理で差分を確認してください。');
  const selected=decision.selectedTaskIds,completed=decision.completedTaskIds,pending=decision.pendingTaskIds;
  if(!Array.isArray(selected)||!Array.isArray(completed)||!Array.isArray(pending)||new Set(selected).size!==selected.length||selected.length!==plan.items.length||plan.items.some(item=>!selected.includes(item.taskId)))throw Error('選択済み課題と取込対象が一致しません。');
  if(selected.length!==10||completed.length!==1||pending.length!==9||plan.items.some(item=>item.unit!=='第11回'))throw Error('第11回B案10課題・工程9課題を確認してください。');
@@ -56,10 +56,11 @@ export function prepareScheduleFile(raw:string,tasks:PlanningTask[],current:Lear
  const errors=[...scheduleErrors(plan,tasks,binding),...stageImportConflicts(plan,current)];
  if(errors.length)throw Error(errors.join('\n'));
  if(!duplicate&&plan.proposalImport&&plan.baseVersion!==(current?current.planId+'--r'+current.revision:null))throw Error('採用済み計画が更新されています。最新計画からファイルを更新してください。');
- if(!referenceOnly&&plan.items.some(item=>item.stages?.length))approvedStages(plan,tasks);
+ const decision=plan.proposalImport?.source.planningPolicy.adoptionDecision as {status?:string}|undefined;const requiresApproval=!referenceOnly&&!duplicate&&decision?.status==='guardian_review_required_for_schedule_revision';if(requiresApproval&&current?.planId!==plan.planId)throw Error('回復案の照合元計画が一致しません。');
+ if(!referenceOnly&&plan.items.some(item=>item.stages?.length))approvedStages(plan,tasks,requiresApproval||!!duplicate&&decision?.status==='guardian_review_required_for_schedule_revision');
  if(!referenceOnly&&!duplicate){
   const removed=current?.items.filter(old=>!plan.items.some(item=>item.taskId===old.taskId)&&(old.endDay||old.ranges.length||old.stages?.length||old.baseline.targetDay))??[];
   if(removed.length)throw Error('既存の採用予定が対象から外れます。詳細管理で確認してください。');
  }
- return {plan,referenceOnly,duplicate,scheduledCount:plan.items.filter(item=>item.stages?.length).length};
+ return {plan,referenceOnly,duplicate,requiresApproval,scheduledCount:plan.items.filter(item=>item.stages?.length).length};
 }
