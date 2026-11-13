@@ -9,7 +9,7 @@ import {useEffect,useRef,useState,type ChangeEvent,type RefObject} from 'react';
 import {canonical,materialKey,parseSchedule,scheduleDiff,scheduleErrors,stageImportConflicts,type LearningSchedule} from '../planning/schedule';
 import type {PlanningTask} from '../planning/model';
 import {downloadJson} from '../planning/download-json';
-export function ScheduleImport({current,tasks,binding,busy,active,onImport,onShowGantt,autoSave=false,inputRef,onResult,onReview}:{current:LearningSchedule|null;tasks:PlanningTask[];binding:string;busy:boolean;active:()=>boolean;onImport:(plan:LearningSchedule)=>Promise<void>;onShowGantt?:()=>void;autoSave?:boolean;inputRef?:RefObject<HTMLInputElement|null>;onResult?:(message:string,failed:boolean)=>void;onReview?:()=>void}){
+export function ScheduleImport({current,tasks,binding,busy,active,onImport,onShowGantt,autoSave=false,inputRef,onResult,onReview,onCandidate}:{current:LearningSchedule|null;tasks:PlanningTask[];binding:string;busy:boolean;active:()=>boolean;onImport:(plan:LearningSchedule)=>Promise<void>;onShowGantt?:()=>void;autoSave?:boolean;inputRef?:RefObject<HTMLInputElement|null>;onResult?:(message:string,failed:boolean)=>void;onReview?:()=>void;onCandidate?:(plan:LearningSchedule|null)=>void}){
  const [official,setOfficial]=useState<{source:OfficialPlan;records?:ProposalResolution[]}|null>(null),[preview,setPreview]=useState<LearningSchedule|null>(null);
  const [reviewRaw,setReviewRaw]=useState<string|null>(null);
  const [error,setError]=useState(''),[confirmed,setConfirmed]=useState(false),[notice,setNotice]=useState(''),[referenceOnly,setReferenceOnly]=useState(false),[filename,setFilename]=useState('');
@@ -20,13 +20,13 @@ export function ScheduleImport({current,tasks,binding,busy,active,onImport,onSho
  const same=!!preview&&current?.planId===preview.planId&&current.revision===preview.revision,identical=same&&canonical(current)===canonical(preview);
  const revisionError=same&&!identical?'同じrevisionの内容が変わっています。ローカルでrevisionを増やしてください。':preview&&current?.planId===preview.planId&&preview.revision<current.revision?'旧revisionは取り込めません。':'';
  const identity=planIdentity(current),refs=preview?(preview.proposalImport?referenceSummary(tasks,preview,'0001-01-01','9999-12-31'):{provided:preview.items.length,matched:preview.items.filter(i=>tasks.some(t=>t.id===i.taskId)).length,unmatched:0}):null;
- async function choose(e:ChangeEvent<HTMLInputElement>){const f=e.target.files?.[0],request=++generation.current;if(!f)return;setFilename(f.name);setReviewRaw(null);setError('');setPreview(null);setOfficial(null);setConfirmed(false);setNotice('');try{
+ async function choose(e:ChangeEvent<HTMLInputElement>){const f=e.target.files?.[0],request=++generation.current;if(!f)return;setFilename(f.name);setReviewRaw(null);onCandidate?.(null);setError('');setPreview(null);setOfficial(null);setConfirmed(false);setNotice('');try{
   if(f.size>150000)throw new Error('計画ファイルは150KBまでです。');const raw=await f.text(),v=JSON.parse(raw);if(!active()||request!==generation.current)return;
   if(autoSave){
    if(saving.current)throw Error('計画を保存中です。');
    const prepared=prepareScheduleFile(raw,tasks,current,binding);
    setPreview(prepared.plan);setReferenceOnly(prepared.referenceOnly);
-   if(prepared.requiresApproval){setReviewRaw(raw);setNotice('未採用の回復提案です。差分を確認して採用してください。固定目標は別採用です。');onReview?.();return;}
+   if(prepared.requiresApproval){onCandidate?.(prepared.plan);setReviewRaw(raw);setNotice('未採用の回復提案です。差分を確認して採用してください。固定目標は別採用です。');onReview?.();return;}
    saving.current=true;
    try{await onImport(prepared.plan);}finally{saving.current=false;}
    if(active()&&request===generation.current){
