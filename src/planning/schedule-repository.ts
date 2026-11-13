@@ -1,5 +1,5 @@
 import { doc, runTransaction, type Firestore } from 'firebase/firestore';
-import { actualOf, parseSchedule, scheduleDigest, scheduleErrors, type LearningSchedule, type ScheduleActual } from './schedule';
+import { actualOf, parseSchedule, scheduleDigest, scheduleErrors, stageImportConflicts, type LearningSchedule, type ScheduleActual } from './schedule';
 import type { PlanningTask } from './model';
 export type ScheduleOwner={uid:string;binding:string;active:()=>boolean};
 export type SchedulePointer={schemaVersion:1;planId:string;revision:number;versionId:string;digest:string;generatedAt:string;importedAt:number};
@@ -21,6 +21,11 @@ export async function importSchedule(db:Firestore,family:string,owner:ScheduleOw
    return{duplicate:true,versionId};
   }
   if(plan.proposalImport&&(pointer.data()?.versionId??null)!==plan.baseVersion)throw new Error('採用済み計画が更新されています。最新計画から照合プレビューを作り直してください。');
+  if(plan.items.some(i=>i.stages?.length)&&pointer.exists()){
+   const previous=await tx.get(doc(root,'plans',pointer.data().versionId));
+   const conflicts=stageImportConflicts(plan,previous.data()?.plan??null);
+   if(conflicts.length)throw new Error(conflicts.join('\n'));
+  }
   const importedAt=Date.now(),meta:SchedulePointer={schemaVersion:1,planId:plan.planId,revision:plan.revision,versionId,digest,generatedAt:plan.generatedAt,importedAt};
   tx.set(version,{plan,digest,importedAt});tx.set(ledger,{revision:plan.revision,digest});tx.set(root,meta);
   return{duplicate:false,versionId};

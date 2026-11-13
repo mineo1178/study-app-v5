@@ -4,7 +4,7 @@ import {OfficialSchedulePreview} from './OfficialSchedulePreview';
 import {exportScheduleFeedback,readOfficialFile} from '../planning/official-schedule';
 import type {OfficialPlan,ProposalResolution} from '../planning/official-schema';
 import {useEffect,useRef,useState,type ChangeEvent} from 'react';
-import {canonical,materialKey,parseSchedule,scheduleDiff,scheduleErrors,type LearningSchedule} from '../planning/schedule';
+import {canonical,materialKey,parseSchedule,scheduleDiff,scheduleErrors,stageImportConflicts,type LearningSchedule} from '../planning/schedule';
 import type {PlanningTask} from '../planning/model';
 import {downloadJson} from '../planning/download-json';
 export function ScheduleImport({current,tasks,binding,busy,active,onImport,onShowGantt}:{current:LearningSchedule|null;tasks:PlanningTask[];binding:string;busy:boolean;active:()=>boolean;onImport:(plan:LearningSchedule)=>Promise<void>;onShowGantt?:()=>void}){
@@ -12,13 +12,13 @@ export function ScheduleImport({current,tasks,binding,busy,active,onImport,onSho
  const [error,setError]=useState(''),[confirmed,setConfirmed]=useState(false),[notice,setNotice]=useState(''),[referenceOnly,setReferenceOnly]=useState(false),[filename,setFilename]=useState('');
  const generation=useRef(0),input=useRef<HTMLInputElement>(null),saving=useRef(false);
  useEffect(()=>()=>{++generation.current;},[]);
- const errors=preview?scheduleErrors(preview,tasks,binding):[],diff=preview?scheduleDiff(preview,current):null,changes=preview?referenceChanges(current,preview):null;
+ const errors=preview?[...scheduleErrors(preview,tasks,binding),...stageImportConflicts(preview,current)]:[],diff=preview?scheduleDiff(preview,current):null,changes=preview?referenceChanges(current,preview):null;
  const same=!!preview&&current?.planId===preview.planId&&current.revision===preview.revision,identical=same&&canonical(current)===canonical(preview);
  const revisionError=same&&!identical?'同じrevisionの内容が変わっています。ローカルでrevisionを増やしてください。':preview&&current?.planId===preview.planId&&preview.revision<current.revision?'旧revisionは取り込めません。':'';
  const identity=planIdentity(current),refs=preview?(preview.proposalImport?referenceSummary(tasks,preview,'0001-01-01','9999-12-31'):{provided:preview.items.length,matched:preview.items.filter(i=>tasks.some(t=>t.id===i.taskId)).length,unmatched:0}):null;
  async function choose(e:ChangeEvent<HTMLInputElement>){const f=e.target.files?.[0],request=++generation.current;if(!f)return;setFilename(f.name);setError('');setPreview(null);setOfficial(null);setConfirmed(false);setNotice('');try{
   if(f.size>150000)throw new Error('計画ファイルは150KBまでです。');const raw=await f.text(),v=JSON.parse(raw);if(!active()||request!==generation.current)return;
-  if(v.schemaVersion==='learning-schedule/1'){const plan=parseSchedule(raw);if(plan.accountBinding&&plan.accountBinding!==binding)throw new Error('計画のアカウント識別子が現在の認証アカウントと一致しません。');if(plan.proposalImport){setOfficial({source:plan.proposalImport.source,records:plan.proposalImport.records});setPreview(referencePlan(plan.proposalImport.source,tasks,current,binding));setReferenceOnly(true);}else{setPreview(plan);setReferenceOnly(false);}}
+  if(v.schemaVersion==='learning-schedule/1'){const plan=parseSchedule(raw);if(plan.accountBinding&&plan.accountBinding!==binding)throw new Error('計画のアカウント識別子が現在の認証アカウントと一致しません。');if(plan.proposalImport){setOfficial({source:plan.proposalImport.source,records:plan.proposalImport.records});if(plan.items.some(i=>i.stages?.length)){setPreview(plan);setReferenceOnly(false);}else{setPreview(referencePlan(plan.proposalImport.source,tasks,current,binding));setReferenceOnly(true);}}else{setPreview(plan);setReferenceOnly(false);}}
   else{const data=readOfficialFile(raw,binding);setOfficial(data);setPreview(referencePlan(data.source,tasks,current,binding));setReferenceOnly(true);}
  }catch(err){if(active()&&request===generation.current){setPreview(null);setOfficial(null);setError((err as Error).message);}}}
  async function save(){if(saving.current||!preview||!active())return;saving.current=true;setError('');setNotice('');try{await onImport(preview);if(active()){setNotice(referenceOnly?'参照予定を保存しました':'採用設定を保存しました');setConfirmed(false);}}catch(err){if(active())setError((err as Error).message);}finally{saving.current=false;}}

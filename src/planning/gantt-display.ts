@@ -14,7 +14,8 @@ export function targetDisplay(task:PlanningTask,plan:LearningSchedule|null,tasks
 export function historyDay(h:PlanningTask['history'][number]){return typeof h.endAt==='number'&&Number.isFinite(h.endAt)?getJstDay(h.endAt):h.date&&validDay(h.date)?h.date:null;}
 export function dayDisplay(task:PlanningTask,item:ScheduleItem,plan:LearningSchedule|null,day:string){
  const registered=planRegistered(task,plan),ranges=registered?item.ranges.filter(r=>r.day===day):[],adopted=boundProposals(task,plan).filter(b=>b.record.selected&&b.record.adoptedDay===day);
+ const stages=item.stages?.filter(s=>s.day===day)??[];
  const actualRanges=item.ranges.filter(r=>{const a=actualOf(task,r.id),old=task.planning?.ranges.find(o=>o.id===r.id);return a?.actualDay===day&&(a.done||a.graded||a.corrected||(old?.actualSeconds??0)>0);});
  const histories=task.history.filter(h=>historyDay(h)===day&&h.duration>0&&!h.operationCheck&&h.reviewStatus!=='pending');
- return{ranges,adopted,planned:ranges.length>0||adopted.length>0,minutes:ranges.length?ranges.reduce((n,r)=>n+r.minutes,0):adopted.length&&adopted.every(b=>b.proposal.estimatedWorkSeconds!==null)?adopted.reduce((n,b)=>n+b.proposal.estimatedWorkSeconds!/60,0):null,actual:actualRanges.length>0||histories.length>0,actualRanges:actualRanges.length,seconds:histories.reduce((n,h)=>n+h.duration,0),historyCount:histories.length};
+ return{ranges,adopted,stages,planned:ranges.length>0||stages.length>0||adopted.length>0,minutes:stages.length?stages.reduce((n,s)=>n+s.minutes,0):ranges.length?ranges.reduce((n,r)=>n+r.minutes,0):adopted.length&&adopted.every(b=>b.proposal.estimatedWorkSeconds!==null)?adopted.reduce((n,b)=>n+b.proposal.estimatedWorkSeconds!/60,0):null,actual:actualRanges.length>0||histories.length>0,actualRanges:actualRanges.length,seconds:histories.reduce((n,h)=>n+h.duration,0),historyCount:histories.length};
 }

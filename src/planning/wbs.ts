@@ -8,7 +8,7 @@ export function editWbs(task:PlanningTask,values:Pick<WbsEdit,'startDay'|'endDay
  const wbs={...values,taskId:task.id,updatedBy:uid,updatedAt:now};validateWbs(wbs);return {...structuredClone(planOf(task)),wbs};
 }
 export function wbsDates(task:PlanningTask,plan:LearningSchedule|null){
- const w=planOf(task).wbs,item=displayItem(task,plan),days=item.ranges.flatMap(r=>r.day?[r.day]:[]).sort(),end=endDisplay(task,plan),suggestion=taskSuggestion(task,plan),proposed=suggestion?.phases.map(p=>p.day).sort()??[];
+ const w=planOf(task).wbs,item=displayItem(task,plan),days=[...item.ranges.flatMap(r=>r.day?[r.day]:[]),...item.stages?.map(s=>s.day)??[]].sort(),end=endDisplay(task,plan),suggestion=taskSuggestion(task,plan),proposed=suggestion?.phases.map(p=>p.day).sort()??[];
  const start=w?.startDay||days[0]||proposed[0]||null,finish=w?.endDay||end.day||suggestion?.recommendedEndDate||end.reference[0]||null;
  return {start,end:finish,startSource:w?.startDay?'手動予定':days.length?'予定':start?'提案':'',endSource:w?.endDay?'手動予定':end.day?'予定':finish?'提案':'',manualStart:w?.startDay??'',manualEnd:w?.endDay??''};
 }
