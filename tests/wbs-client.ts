@@ -17,3 +17,10 @@ export async function verifyWbsTransactions(){
 }
 
 export async function bumpRevision(){const db=getFirestore(auth.app),ref=doc(db,'families/hotfix-study-family/tasks/normal'),d=(await getDoc(ref)).data()!;await updateDoc(ref,{'planning.revision':d.planning.revision+1});}
+export async function seedWbsProposal(){
+ if(auth.app.options.projectId!=='demo-study-hotfix'||!auth.currentUser)throw Error('Emulator only');
+ const {officialFixture}=await import('./official-fixture'),{accountKey,materialKey}=await import('../src/planning/schedule'),{referencePlan}=await import('../src/planning/schedule-reference'),{importSchedule}=await import('../src/planning/schedule-repository'),{addDays}=await import('../src/planning/model'),{getJstDay}=await import('../src/review/model');
+ const db=getFirestore(auth.app),task={...(await getDoc(doc(db,'families/hotfix-study-family/tasks/round12-math'))).data(),id:'round12-math'} as PlanningTask,source=officialFixture(),today=getJstDay(Date.now()),binding=await accountKey(db.app.options.projectId!,'hotfix-study-family',auth.currentUser.uid);
+ source.planId='wbs-proposal';source.planningPolicy.taskSchedules=[{taskId:task.id,unit:task.unit,subject:task.subject,category:task.category,materialName:task.materialName,materialId:materialKey(task),recommendedEndDate:addDays(today,3),phases:[{phase:'first_and_marking',day:addDays(today,1),minutes:25,conditional:false}]}];
+ await importSchedule(db,'hotfix-study-family',{uid:auth.currentUser.uid,binding,active:()=>true},referencePlan(source,[task],null,binding));
+}
