@@ -1,16 +1,18 @@
+import {prepareScheduleFile} from '../planning/import-file';
 import {referencePlan,referenceSummary} from '../planning/schedule-reference';
 import {referenceChanges,planIdentity} from '../planning/schedule-view';
 import {OfficialSchedulePreview} from './OfficialSchedulePreview';
 import {exportScheduleFeedback,readOfficialFile} from '../planning/official-schedule';
 import type {OfficialPlan,ProposalResolution} from '../planning/official-schema';
-import {useEffect,useRef,useState,type ChangeEvent} from 'react';
+import {useEffect,useRef,useState,type ChangeEvent,type RefObject} from 'react';
 import {canonical,materialKey,parseSchedule,scheduleDiff,scheduleErrors,stageImportConflicts,type LearningSchedule} from '../planning/schedule';
 import type {PlanningTask} from '../planning/model';
 import {downloadJson} from '../planning/download-json';
-export function ScheduleImport({current,tasks,binding,busy,active,onImport,onShowGantt}:{current:LearningSchedule|null;tasks:PlanningTask[];binding:string;busy:boolean;active:()=>boolean;onImport:(plan:LearningSchedule)=>Promise<void>;onShowGantt?:()=>void}){
+export function ScheduleImport({current,tasks,binding,busy,active,onImport,onShowGantt,autoSave=false,inputRef,onResult}:{current:LearningSchedule|null;tasks:PlanningTask[];binding:string;busy:boolean;active:()=>boolean;onImport:(plan:LearningSchedule)=>Promise<void>;onShowGantt?:()=>void;autoSave?:boolean;inputRef?:RefObject<HTMLInputElement|null>;onResult?:(message:string,failed:boolean)=>void}){
  const [official,setOfficial]=useState<{source:OfficialPlan;records?:ProposalResolution[]}|null>(null),[preview,setPreview]=useState<LearningSchedule|null>(null);
  const [error,setError]=useState(''),[confirmed,setConfirmed]=useState(false),[notice,setNotice]=useState(''),[referenceOnly,setReferenceOnly]=useState(false),[filename,setFilename]=useState('');
- const generation=useRef(0),input=useRef<HTMLInputElement>(null),saving=useRef(false);
+ const generation=useRef(0),ownInput=useRef<HTMLInputElement>(null),saving=useRef(false);
+ const input=inputRef??ownInput;
  useEffect(()=>()=>{++generation.current;},[]);
  const errors=preview?[...scheduleErrors(preview,tasks,binding),...stageImportConflicts(preview,current)]:[],diff=preview?scheduleDiff(preview,current):null,changes=preview?referenceChanges(current,preview):null;
  const same=!!preview&&current?.planId===preview.planId&&current.revision===preview.revision,identical=same&&canonical(current)===canonical(preview);
@@ -18,9 +20,21 @@ export function ScheduleImport({current,tasks,binding,busy,active,onImport,onSho
  const identity=planIdentity(current),refs=preview?(preview.proposalImport?referenceSummary(tasks,preview,'0001-01-01','9999-12-31'):{provided:preview.items.length,matched:preview.items.filter(i=>tasks.some(t=>t.id===i.taskId)).length,unmatched:0}):null;
  async function choose(e:ChangeEvent<HTMLInputElement>){const f=e.target.files?.[0],request=++generation.current;if(!f)return;setFilename(f.name);setError('');setPreview(null);setOfficial(null);setConfirmed(false);setNotice('');try{
   if(f.size>150000)throw new Error('計画ファイルは150KBまでです。');const raw=await f.text(),v=JSON.parse(raw);if(!active()||request!==generation.current)return;
+  if(autoSave){
+   if(saving.current)throw Error('計画を保存中です。');
+   const prepared=prepareScheduleFile(raw,tasks,current,binding);
+   setPreview(prepared.plan);setReferenceOnly(prepared.referenceOnly);
+   saving.current=true;
+   try{await onImport(prepared.plan);}finally{saving.current=false;}
+   if(active()&&request===generation.current){
+    const message=prepared.duplicate?'同じ計画を確認しました・保存済み':prepared.referenceOnly?'参照計画の更新完了':'計画更新完了：'+prepared.scheduledCount+'課題の予定を反映';
+    setNotice(message);onResult?.(message,false);onShowGantt?.();
+   }
+   return;
+  }
   if(v.schemaVersion==='learning-schedule/1'){const plan=parseSchedule(raw);if(plan.accountBinding&&plan.accountBinding!==binding)throw new Error('計画のアカウント識別子が現在の認証アカウントと一致しません。');if(plan.proposalImport){setOfficial({source:plan.proposalImport.source,records:plan.proposalImport.records});if(plan.items.some(i=>i.stages?.length)){setPreview(plan);setReferenceOnly(false);}else{setPreview(referencePlan(plan.proposalImport.source,tasks,current,binding));setReferenceOnly(true);}}else{setPreview(plan);setReferenceOnly(false);}}
   else{const data=readOfficialFile(raw,binding);setOfficial(data);setPreview(referencePlan(data.source,tasks,current,binding));setReferenceOnly(true);}
- }catch(err){if(active()&&request===generation.current){setPreview(null);setOfficial(null);setError((err as Error).message);}}}
+ }catch(err){if(active()&&request===generation.current){setPreview(null);setOfficial(null);setError((err as Error).message);onResult?.((err as Error).message,true);}}finally{if(input.current)input.current.value='';}}
  async function save(){if(saving.current||!preview||!active())return;saving.current=true;setError('');setNotice('');try{await onImport(preview);if(active()){setNotice(referenceOnly?'参照予定を保存しました':'採用設定を保存しました');setConfirmed(false);}}catch(err){if(active())setError((err as Error).message);}finally{saving.current=false;}}
  const blocked=busy||!!errors.length||!!revisionError||identical;
  return <section id="schedule-import" className="plan-import" aria-label="学習計画の取込">

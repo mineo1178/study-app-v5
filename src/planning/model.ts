@@ -8,9 +8,10 @@ export function validateWbs(value:WbsEdit){
 
 export type PlanRange = { id: string; label: string; units: number; minutes: number; day: string; done: boolean; graded: boolean; corrected: boolean; actualDay: string | null; actualSeconds: number | null };
 export type Evidence = { source: string; count: number; firstCount?: number; redoCount?: number; estimatedMinutes?: number | null; redoDaysKnown?: boolean; firstSeconds: number | null; redoSeconds: number | null; redoDays: number; conditions: string; manualMinutes: number | null; provisional: boolean };
-export type Baseline = { id: string; createdDay: string; targetDay: string | null; daily: Record<string, number>; evidence: Evidence };
+export type Baseline = { id: string; createdDay: string; targetDay: string | null; daily: Record<string, number>; evidence: Evidence; basisStatus?:'unmeasured'|'measured_work' };
+export type TargetRevision = { id:string; revision:number; changedAt:number; reason:string; memo:string; oldTargetDay:string|null; newTargetDay:string; previousBaseline:unknown; sourceVersion:string|null; phases?:{phase:string;day:string;minutes:number;conditional:boolean}[] };
 export type RangeCorrection = { id: string; day: string; reason: string; baselineId: string | null; previousRanges: PlanRange[]; revisedRanges: PlanRange[] };
-export type TaskPlan = { wbs?: WbsEdit; rangeCorrections?: RangeCorrection[]; schemaVersion: 1; revision: number; order?: number; endDay: string; deadline: string; ranges: PlanRange[]; baseline: Baseline | null; baselineHistory: Baseline[]; material?: { materialId: string; title: string; requirement: "required" | "reinforcement" | "advanced"; selected: boolean; references: string[] } };
+export type TaskPlan = { wbs?: WbsEdit; targetRevisions?:TargetRevision[]; rangeCorrections?: RangeCorrection[]; schemaVersion: 1; revision: number; order?: number; endDay: string; deadline: string; ranges: PlanRange[]; baseline: Baseline | null; baselineHistory: Baseline[]; material?: { materialId: string; title: string; requirement: "required" | "reinforcement" | "advanced"; selected: boolean; references: string[] } };
 export type PlanningTask = { scheduleActuals?: Record<string,ScheduleActual>; id: string; unit: string; subject: string; category: string; materialName: string; title: string; status: "not_started" | "in_progress" | "completed"; isRunning: boolean; currentDuration?: number; planning?: TaskPlan; history: { duration: number; operationCheck?: boolean; reviewStatus?: string; score?: number; graded?: boolean; attemptType?: string; units?: number; endAt?: number; date?: string }[] };
 export const emptyPlan = (): TaskPlan => ({ schemaVersion: 1, revision: 0, order: 0, endDay: "", deadline: "", ranges: [], baseline: null, baselineHistory: [] });
 export const validDay = (day: string) => /^\d{4}-\d{2}-\d{2}$/.test(day) && Number.isFinite(Date.parse(day)) && new Date(day).toISOString().slice(0, 10) === day;
@@ -86,6 +87,7 @@ export function validatePlan(plan: TaskPlan) {
   if (plan.order !== undefined && (!Number.isInteger(plan.order) || plan.order < 0 || plan.order > 10000)) throw new Error("順番は0〜10000にしてください。");
   if ((plan.rangeCorrections?.length ?? 0) > 50) throw new Error("範囲の訂正履歴は50件までです。");
   if (plan.baselineHistory.length > 50) throw new Error("目標基準の履歴は50件までです。");
+  if((plan.targetRevisions?.length??0)>50||plan.targetRevisions?.some(r=>!r.id||!Number.isSafeInteger(r.revision)||r.revision<1||!Number.isFinite(r.changedAt)||!r.reason.trim()||r.reason.length>100||r.memo.length>200||!validDay(r.newTargetDay)||(r.oldTargetDay!==null&&!validDay(r.oldTargetDay))))throw Error('目標変更の理由・日付・履歴を確認してください。');
 }
 
 export function normalizeCapacities(value: unknown): Record<string, number> {
@@ -105,6 +107,11 @@ export function correctRangeInputs(old: TaskPlan, revised: PlanRange[], reason: 
   return result;
 }
 export function validatePlanTransition(old: TaskPlan, next: TaskPlan) {
+  const previousTargets=old.targetRevisions??[],targets=next.targetRevisions??[];
+  if(canonical(previousTargets)!==canonical(targets)){
+    const change=targets.at(-1);
+    if(targets.length!==previousTargets.length+1||canonical(targets.slice(0,-1))!==canonical(previousTargets)||!change||change.revision!==old.revision+1||next.baseline?.id!==change.id||next.baseline?.targetDay!==change.newTargetDay||(old.baseline&&canonical(change.previousBaseline)!==canonical(old.baseline)))throw Error('変更前の目標とrevision履歴を維持してください。');
+  }
   const previousCorrections = old.rangeCorrections ?? [], corrections = next.rangeCorrections ?? [];
   if (canonical(previousCorrections) !== canonical(corrections)) {
     const c = corrections.at(-1);

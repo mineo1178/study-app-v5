@@ -12,7 +12,14 @@ export function wbsDates(task:PlanningTask,plan:LearningSchedule|null){
  const start=w?.startDay||days[0]||proposed[0]||null,finish=w?.endDay||end.day||suggestion?.recommendedEndDate||end.reference[0]||null;
  return {start,end:finish,startSource:w?.startDay?'手動予定':days.length?'予定':start?'提案':'',endSource:w?.endDay?'手動予定':end.day?'予定':finish?'提案':'',manualStart:w?.startDay??'',manualEnd:w?.endDay??''};
 }
-export function wbsProgress(task:PlanningTask,plan:LearningSchedule|null){const manual=planOf(task).wbs?.progress;return {value:manual??measuredProgress(task,displayItem(task,plan)),source:manual!==null&&manual!==undefined?'手動':'実績'};}
+export function wbsProgress(task:PlanningTask,plan:LearningSchedule|null){
+ if(task.status==='completed')return {value:100,source:'実績'};
+ const manual=planOf(task).wbs?.progress;
+ if(manual!==null&&manual!==undefined)return {value:manual,source:'手動'};
+ const actual=measuredProgress(task,displayItem(task,plan));
+ if(actual!==null)return {value:actual,source:'実績'};
+ return task.status==='not_started'?{value:0,source:'初期'}:{value:null,source:'実績'};
+}
 export function wbsSummary(tasks:PlanningTask[],plan:LearningSchedule|null){
  const values=tasks.map(task=>({...wbsProgress(task,plan),weight:displayItem(task,plan).ranges.reduce((n,r)=>n+r.minutes,0)})),total=values.reduce((n,r)=>n+r.weight,0);
  const progress=values.length&&Number.isFinite(total)&&values.every(v=>v.value!==null&&Number.isFinite(v.value)&&Number.isFinite(v.weight)&&v.weight>0)?values.reduce((n,v)=>n+v.value!*v.weight,0)/total:null;

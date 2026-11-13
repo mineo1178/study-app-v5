@@ -9,6 +9,10 @@ export function lagIndicators(tasks:PlanningTask[],plan:LearningSchedule|null,to
  if(delay)rows.push({text:(parent?'最大':'')+delay+'日遅れ',tone:'manual',description:'採用済み終了予定日を過ぎた未完了課題です。手動100%でも完了扱いにしません。'});
  if(lag.manual===0&&lag.goal===0)rows.push({text:'予定内',tone:'',description:'実績と採用済み手動計画・固定目標の進捗差は0ptです。'});
  else{if(lag.manual!==null)rows.push({text:'赤 '+shortPoints(lag.manual),tone:'manual',description:'採用済み手動計画と実績の進捗差'});if(lag.goal!==null)rows.push({text:'紫 '+shortPoints(lag.goal),tone:'goal',description:'固定目標と同じ実績の進捗差'});}
- if(lag.manual===null&&lag.goal===null){const reference=!parent&&tasks.length===1?progressFacts(tasks[0],plan,today).reference:null;if(reference&&(reference.red!==null||reference.purple!==null)){rows.push({text:'手動参考差',tone:'reference',description:'管理用の手動進捗による参考比較です。実績ベースの遅れ件数には含めません。'});rows.push({text:[reference.red!==null?'赤 '+shortPoints(reference.red):'',reference.purple!==null?'紫 '+shortPoints(reference.purple):''].filter(Boolean).join('／'),tone:'reference',description:'採用済みの日別基準だけを参照しています。'});}else rows.push({text:'比較不可',tone:'',description:parent?'全子課題の実績・作業量・予定時間の重み・採用済み基準が必要です。':'不足項目は課題詳細の「進捗の根拠・赤紫分析」で確認できます。'});}
+ const reference=lag.manual===null&&lag.goal===null&&!parent&&tasks.length===1?progressFacts(tasks[0],plan,today).reference:null;
+ if(reference&&(reference.red!==null||reference.purple!==null)){
+  rows.push({text:'管理'+reference.manual+'%／予定'+(reference.planned===null?'—':Math.round(reference.planned*10)/10+'%'),tone:'reference',description:'管理用の手動参考差。実績の稲妻線・遅れ件数には含めません。'+reference.basis});
+  rows.push({text:[reference.red!==null?'参考 '+shortPoints(reference.red):'',reference.purple!==null?'目標参考 '+shortPoints(reference.purple):''].filter(Boolean).join('／'),tone:'reference',description:'手動進捗による参考比較です。実績比較とは別です。'});
+ }else if(lag.manual===null&&lag.goal===null)rows.push({text:'比較不可',tone:'',description:parent?'全子課題の実績・作業量・予定時間の重み・採用済み基準が必要です。':'不足項目は課題詳細の「進捗の根拠・赤紫分析」で確認できます。'});
  return rows;
 }
