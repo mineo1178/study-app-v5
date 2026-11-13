@@ -1,6 +1,6 @@
 import {it,expect} from 'vitest';
 import {emptyPlan,type PlanningTask} from './model';
-import {ganttLag,lagLabel} from './gantt-lag';
+import {ganttLag,lagLabel,comparisonReasons} from './gantt-lag';
 import type {LearningSchedule} from './schedule';
 const task=(id='one',minutes=20):PlanningTask=>({id,unit:'第11回',subject:'math',category:'教材',materialName:'教材',title:'課題',status:'in_progress',isRunning:false,history:[],planning:{...emptyPlan(),ranges:[{id:'done',label:'前半',units:40,minutes,day:'2026-11-12',done:true,graded:true,corrected:true,actualDay:'2026-11-12',actualSeconds:null},{id:'rest',label:'後半',units:60,minutes,day:'2026-11-13',done:false,graded:false,corrected:false,actualDay:null,actualSeconds:null}],baseline:{id:'fixed',createdDay:'2026-11-10',targetDay:'2026-11-14',daily:{'2026-11-12':50,'2026-11-14':50},evidence:{source:'saved',count:1,firstSeconds:60,redoSeconds:null,redoDays:0,conditions:'measured',manualMinutes:null,provisional:false}}}});
 it('uses the same measured progress for manual and fixed comparisons',()=>{expect(ganttLag([task()],null,'2026-11-12')).toEqual({manual:0,goal:-10});expect(lagLabel(-10)).toBe('−10pt 遅れ');expect(lagLabel(15)).toBe('＋15pt 先行');expect(lagLabel(0)).toBe('予定どおり');});
@@ -10,3 +10,5 @@ it('aggregates only complete measured weights and comparison data',()=>{const a=
 it('keeps completed tasks at 100 and does not fabricate a missing fixed comparison',()=>{const t=task();t.status='completed';t.planning!.baseline=null;expect(ganttLag([t],null,'2026-11-12')).toEqual({manual:60,goal:null});});
 
 it('does not render non-finite legacy quantities as a comparison',()=>{const t=task();t.planning!.ranges[0].units=NaN;expect(ganttLag([t],null,'2026-11-12')).toEqual({manual:null,goal:null});});
+
+it('explains missing quantity, actuals, manual schedule and fixed baseline separately',()=>{const t=task();expect(comparisonReasons({...t,planning:undefined},null,'2026-11-12').progress).toContain('範囲・作業量');t.planning!.ranges.forEach(r=>{r.done=false;r.graded=false;r.corrected=false;r.actualDay=null;});expect(comparisonReasons(t,null,'2026-11-12').progress).toContain('範囲実績');const measured=task();measured.planning!.ranges.forEach(r=>r.day='');measured.planning!.baseline=null;const reasons=comparisonReasons(measured,null,'2026-11-12');expect(reasons.manual).toContain('採用済み日別予定');expect(reasons.goal).toContain('固定目標');});

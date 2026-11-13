@@ -9,3 +9,8 @@ export function ganttLag(tasks:PlanningTask[],plan:LearningSchedule|null,today:s
  return{manual:weighted('manual'),goal:weighted('goal')};
 }
 export function lagLabel(points:number){const rounded=Math.round(points*10)/10;return rounded===0?'予定どおり':(rounded>0?'＋':'−')+Math.abs(rounded)+'pt '+(rounded>0?'先行':'遅れ');}
+export function comparisonReasons(task:PlanningTask,plan:LearningSchedule|null,today:string){
+ const item=displayItem(task,plan),c=displayDifference(task,item,today),points=ganttLag([task],plan,today),units=item.ranges.reduce((n,r)=>n+r.units,0);
+ const progress=c.progress===null||!Number.isFinite(c.progress)?!item.ranges.length||!Number.isFinite(units)||units<=0?'範囲・作業量が未登録または有効な数値ではないため、実績進捗率を計算できません。':'採点・必要な直しまでの範囲実績が未測定です。学習時間だけでは進捗率を推測しません。':null;
+ return{progress,manual:points.manual===null?progress??(c.manual===null?'採用済み日別予定の作業量・基準が未設定です。未採用提案は遅れ判定に使いません。':'採用済み日別予定の基準値を計算できません。'):null,goal:points.goal===null?progress??(c.goal===null?'採用済み固定目標の日別基準が未設定です。':'採用済み固定目標の基準値を計算できません。'):null};
+}
