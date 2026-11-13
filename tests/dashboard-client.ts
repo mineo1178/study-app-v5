@@ -1,0 +1,18 @@
+import {auth} from './timer-client';
+import {doc,getFirestore,writeBatch} from 'firebase/firestore';
+import {emptyPlan,type PlanningTask} from '../src/planning/model';
+import {accountKey,materialKey} from '../src/planning/schedule';
+import {importSchedule} from '../src/planning/schedule-repository';
+import {scheduleFixture} from './schedule-fixture';
+export async function seedDashboard(){
+ if(location.hostname!=='127.0.0.1'||auth.app.options.projectId!=='demo-study-hotfix'||!auth.currentUser)throw Error('Emulator only');
+ const db=getFirestore(auth.app),family='hotfix-study-family',batch=writeBatch(db);
+ const tasks:PlanningTask[]=Array.from({length:91},(_,i)=>({id:i===0?'normal':i===1?'legacy':i===46?'next':'dashboard-'+i,unit:i<46?'第11回':'第12回',subject:['math','japanese','science','social'][i%4],category:'教材',materialName:'監査教材',title:i===0?'比較できる課題':i===11?'先行する課題':i===12?'手動100の未完了課題':'課題'+i,status:i>=1&&i<=10||i>=47&&i<=49?'completed':i===0||i>=11&&i<=24?'in_progress':'not_started',isRunning:false,history:i===12?[{id:'history-12',duration:600,endAt:Date.parse('2026-11-13T10:00:00+09:00'),reviewStatus:'not_required',date:'11/13'}]:[]}));
+ for(const i of [0,11]){const scope={scopeId:'scope-'+tasks[i].id,label:'問題1〜10',total:10,confirmed:true,weights:{first:1,grading:1,mastery:1,confirmed:true}},plan={...scope,daily:{'2026-11-13':{first:10,grading:8,mastery:0},'2026-11-19':{first:0,grading:2,mastery:10}}};tasks[i].planning={...emptyPlan(),questionMeasurement:{...scope,firstDone:i===0?6:10,graded:i===0?4:10,redoNeeded:i===0?2:6,redoDone:0,correctionStatus:'required',noErrorsConfirmed:false,observedAt:Date.now()},questionPlan:plan,questionGoal:{id:'g-'+i,revision:1,adoptedAt:Date.now(),reason:'Emulator only',plan:{...scope,daily:{'2026-11-13':{first:10,grading:5,mastery:0},'2026-11-19':{first:0,grading:5,mastery:10}}}}};}
+ tasks[12].planning={...emptyPlan(),wbs:{taskId:tasks[12].id,startDay:'',endDay:'',progress:100,updatedBy:auth.currentUser.uid,updatedAt:Date.now()}};
+ for(const t of tasks)batch.set(doc(db,'families',family,'tasks',t.id),{...t,currentDuration:0,sessionStartTime:null,lastUpdatedAt:Date.now(),currentMemo:'',createdAt:new Date().toISOString()});
+ await batch.commit();
+ const plan=scheduleFixture(),binding=await accountKey(db.app.options.projectId!,family,auth.currentUser.uid);
+ plan.scope=[{unit:'第11回',subjects:['math','japanese','science','social'],deadline:null}];plan.accountBinding=binding;plan.baseVersion=null;plan.items=[tasks[0],tasks[1],...tasks.slice(11,19)].map(t=>({...structuredClone(plan.items[0]),taskId:t.id,unit:t.unit,subject:t.subject as 'math',materialName:t.materialName,title:t.title,materialId:materialKey(t),endDay:'2026-11-19',ranges:[],dailyWork:{},baseline:{id:'unset',targetDay:null,daily:{},evidence:{provisional:true,historyCount:0,estimatedMinutes:null,method:'未測定',conditions:[],manualAdjustmentMinutes:null}}}));
+ await importSchedule(db,family,{uid:auth.currentUser.uid,binding,active:()=>true},plan);
+}

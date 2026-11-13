@@ -1,4 +1,37 @@
 import {paceMaker} from '../planning/pace-maker';
+import {dashboardFacts} from '../planning/dashboard';
+import {progressSummary} from '../planning/progress-summary';
 import type {PlanningTask} from '../planning/model';
 import {canonical,type LearningSchedule} from '../planning/schedule';
-export function PaceDashboard({tasks,plan,today,onSelect,proposal}:{tasks:PlanningTask[];plan:LearningSchedule|null;today:string;onSelect:(id:string)=>void;proposal?:LearningSchedule|null}){const active=paceMaker(tasks,plan,today),p=proposal?{...paceMaker(tasks,proposal,today),actual:active.actual,planned:active.planned,difference:active.difference,formalRed:active.formalRed,formalPurple:active.formalPurple,manualReference:active.manualReference,referenceCurrent:active.referenceCurrent,referencePlanned:active.referencePlanned,referenceDifference:active.referenceDifference}:active,rows=plan?.proposalImport?.source.planningPolicy.taskSchedules,sourceProposal=Array.isArray(rows)&&rows.some(r=>plan?.items.some(i=>i.taskId===r.taskId&&canonical(i.stages)!==canonical(r.phases))),adviceLabel=proposal||sourceProposal?'回復日程 r'+(proposal?.revision??plan?.proposalImport?.source.revision)+'を参照中（未採用）':p.allocationBasis==='existing_phase_dates_preserved'?'採用済み工程の残作業':'再配置案（未採用）',number=(v:number|null)=>v===null?'未測定':Math.round(v*10)/10+'%',next=[...p.allocations].filter(a=>a.phase!=='最終確認').sort((a,b)=>a.day.localeCompare(b.day))[0],days=[today,...new Set(p.allocations.map(a=>a.day))].filter((d,i,a)=>a.indexOf(d)===i).sort();return <section className="pace-dashboard" aria-label="学習ペースメーカー"><div className="pace-facts"><span>件数完了 {p.completed}/{p.total}（{p.total?Math.round(100*p.completed/p.total):0}%）</span><span>残り {p.remaining}課題</span><span>今日の目標 {number(p.planned??p.referencePlanned)}{p.planned===null&&p.referencePlanned!==null?'（参考）':''}</span><span>{p.actual===null&&p.referenceCurrent!==null?'管理 '+number(p.referenceCurrent)+'（参考・1課題）':'実績 '+number(p.actual)+'（比較可能部分）'}</span><span>予定差 {p.difference===null?(p.referenceDifference===null?'—':'参考 '+(p.referenceDifference>=0?'+':'')+Math.round(p.referenceDifference*10)/10+'pt'):(p.difference>=0?'+':'')+Math.round(p.difference*10)/10+'pt'}</span><span>木曜まで 仮必要{p.estimated===null?'未算出':p.estimated+'分'}</span><span>仮容量 {p.available===null?'未確認':Math.floor(p.available)+'分'}</span><span>{p.shortfall===null?'見込み未確認':p.shortfall>0?'不足 '+Math.ceil(p.shortfall)+'分':'仮容量内・他の予定は未確認'}</span></div><div>{next&&<button onClick={()=>onSelect(next.taskId)}>次に取り組む課題を入力</button>}</div>{proposal&&<p>回復日程r{proposal.revision}は未採用。進捗差は採用済み計画で比較します。</p>}<small>正式比較 赤{p.formalRed}/{p.remaining}・紫{p.formalPurple}/{p.remaining} ／ 手動参考{p.manualReference}件</small><details><summary>木曜{p.deadline.slice(5)}までの学習提案</summary><p>{adviceLabel}・計画時間による仮見積。時間を進捗率には換算しません。</p>{p.quantityTargets.map((q,i)=><p key={i}>採用数量 {q.day} {q.title}：演習{q.first}・採点{q.grading}・習得{q.mastery}問</p>)}{days.map(day=><div key={day}><strong>{day===today?'今日':day}：{Math.ceil(p.allocations.filter(a=>a.day===day).reduce((n,a)=>n+a.minutes,0))}分</strong>{p.allocations.filter(a=>a.day===day).map((a,i)=><p key={i}>{a.title}：{a.phase} {Math.ceil(a.minutes)}分{a.conditional?'（必要な場合）':''}</p>)}</div>)}{p.shortfalls.map((s,i)=><p key={i}>{s.title}：{s.phase} 不足{Math.ceil(s.minutes)}分／{s.reason}</p>)}{!!p.unconfirmed.length&&<p>範囲・総数の確認待ち {p.unconfirmed.length}課題。実際の残量は入力後に再計算します。</p>}</details></section>;}
+
+export function PaceDashboard({tasks,plan,today,onSelect,proposal}:{tasks:PlanningTask[];plan:LearningSchedule|null;today:string;onSelect:(id:string)=>void;proposal?:LearningSchedule|null}){
+ const active=paceMaker(tasks,plan,today),p=proposal?paceMaker(tasks,proposal,today):active;
+ const summary=dashboardFacts(tasks,plan,today),totals=progressSummary(tasks,plan,today),rows=plan?.proposalImport?.source.planningPolicy.taskSchedules;
+ const sourceProposal=Array.isArray(rows)&&rows.some(r=>plan?.items.some(i=>i.taskId===r.taskId&&canonical(i.stages)!==canonical(r.phases)));
+ const adviceLabel=proposal||sourceProposal?'回復日程 r'+(proposal?.revision??plan?.proposalImport?.source.revision)+'を参照中（未採用）':p.allocationBasis==='existing_phase_dates_preserved'?'採用済み工程の残作業':'再配置案（未採用）';
+ const next=[...p.allocations].filter(a=>a.phase!=='最終確認').sort((a,b)=>a.day.localeCompare(b.day))[0];
+ const days=[today,...new Set(p.allocations.map(a=>a.day))].filter((d,i,a)=>a.indexOf(d)===i).sort();
+ const difference=active.difference,deadline=summary.deadline??p.deadline,proposedDeadline=!summary.deadline;
+ return <section className="pace-dashboard" aria-label="学習進捗サマリー">
+  <div className="pace-cards">
+   <div className="pace-card pace-completion"><span>全体進捗・課題完了率</span><strong>{summary.percent}<small>%</small></strong><span>{summary.counts.completed}/{summary.counts.total}件完了</span><div className="pace-bar" role="progressbar" aria-label="課題完了率" aria-valuenow={summary.percent} aria-valuemin={0} aria-valuemax={100}><i style={{width:summary.percent+'%'}}/></div></div>
+   <div className="pace-card"><span>残課題</span><strong>残り{summary.counts.total-summary.counts.completed}<small>件</small></strong><span>取り組み中{summary.counts.inProgress}件</span></div>
+   <div className="pace-card"><span>学習ペース</span><strong className={difference!==null&&difference<0?'pace-behind':''}>{difference===null?'比較基準不足':Math.round(Math.abs(difference)*10)/10+'pt '+(difference<0?'遅れ':difference>0?'先行':'予定どおり')}</strong><span>{difference===null?'比較可能な実績・予定を確認':'採用済み計画の比較可能部分'}</span></div>
+   <div className="pace-card"><span>{proposedDeadline?'提案期限':'次の期限'}</span><strong>{deadline.slice(5).replace('-','/')}<small>まで</small></strong><span>{p.estimated===null?'残り時間は算出条件不足':'残り'+p.estimated+'分（'+(proposal||sourceProposal?'提案・':'')+'仮見積）'}</span></div>
+  </div>
+  <div className="pace-analysis"><span>赤 {active.formalRed}/{summary.comparisonTotal} ・ 紫 {active.formalPurple}/{summary.comparisonTotal}</span>{summary.missing.length>0&&<small title={summary.missing.join('・')}>不足：{summary.missing.map(reason=>({'範囲・総問題数':'範囲・総数','範囲別実績':'実績','日別数量・同じ範囲の予定':'日別数量','採用済み固定目標':'固定目標'}[reason])).join('・')}</small>}</div>
+  <details><summary>学習提案・進捗の詳細</summary>
+   <p>線は課題を展開して確認できます。親行は件数ベースの完了率、子課題は実績／手動の管理進捗率です。手動100%だけでは課題完了になりません。</p>
+   <p>期限超過 {totals.overdue}件 ／ 比較可能な遅れ {totals.behind}件 ／ 比較不可 {totals.unavailable}件。手動参考比較 {active.manualReference}件は正式比較と別です。</p>
+   <p>{adviceLabel}・計画時間による仮見積。時間を進捗率には換算しません。{proposedDeadline&&'表示期限は提案で、採用済みの期限ではありません。'}</p>
+   <p>仮容量 {p.available===null?'未確認':Math.floor(p.available)+'分'} ／ {p.shortfall===null?'見込み未確認':p.shortfall>0?'不足 '+Math.ceil(p.shortfall)+'分':'仮容量内・他の予定は未確認'}</p>
+   {next&&<button onClick={()=>onSelect(next.taskId)}>次に取り組む課題を入力</button>}
+   {proposal&&<p>回復日程r{proposal.revision}は未採用。進捗差は採用済み計画で比較します。</p>}
+   {active.referenceDifference!==null&&<p>手動参考 {Math.round(active.referenceDifference*10)/10}pt（1課題・正式比較には含めません）</p>}
+   {p.quantityTargets.map((q,i)=><p key={i}>{proposal?'候補数量（未採用）':'採用数量'} {q.day} {q.title}：演習{q.first}・採点{q.grading}・習得{q.mastery}問</p>)}
+   {days.map(day=><div key={day}><b>{day===today?'今日':day}：{Math.ceil(p.allocations.filter(a=>a.day===day).reduce((n,a)=>n+a.minutes,0))}分</b>{p.allocations.filter(a=>a.day===day).map((a,i)=><p key={i}>{a.title}：{a.phase} {Math.ceil(a.minutes)}分{a.conditional?'（必要な場合）':''}</p>)}</div>)}
+   {p.shortfalls.map((s,i)=><p key={i}>{s.title}：{s.phase} 不足{Math.ceil(s.minutes)}分／{s.reason}</p>)}
+   {!!p.unconfirmed.length&&<p>範囲・総数の確認待ち {p.unconfirmed.length}課題。実際の残量は入力後に再計算します。</p>}
+  </details>
+ </section>;
+}
