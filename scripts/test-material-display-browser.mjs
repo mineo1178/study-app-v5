@@ -26,7 +26,8 @@ try{
   assert.equal(await row('done').locator('.sheet-deadline-badge').count(),0);assert.equal(await row('unknown').locator('.sheet-deadline-badge').count(),0);
   assert.match(await grid.getByLabel('期限警告の凡例').innerText(),/赤い警告ラベル：期限超過（未完了かつ確定期限を経過）/);
   assert.match(await grid.getByLabel('期限警告の凡例').innerText(),/赤実線.*期限警告とは別/);
-  assert.match(await row('unknown-A').locator('.sheet-material-candidate').innerText(),/火山と地震.*対応未確認/);
+  assert.equal(await row('unknown-A').locator('.sheet-material-candidate').innerText(),'対応未確認');
+  assert.match(await row('unknown-A').locator('.sheet-material-candidate').getAttribute('title'),/火山と地震.*対応未確認/);
   for(const name of ['漢字テスト','言語知識テスト','理科まとめプリント','レベルアッププリント'])assert.match(await row('catalog-'+name).locator('.sheet-task-name').innerText(),new RegExp(name));
   assert.match(await row('catalog-レベルアッププリント').innerText(),/SSクラス対象/);
   assert.match(await row('catalog-理科まとめプリント').innerText(),/正式表題未確認/);

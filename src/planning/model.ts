@@ -1,6 +1,7 @@
 import {validateQuestionMeasurement,validateQuestionPlan,type QuestionMeasurement,type QuestionPlan,type QuestionGoal} from './question-progress';
 import type { ScheduleActual } from "./schedule";
 import { getJstDay } from "../review/model";
+import type {MaterialBinding} from './material-binding';
 
 export type WbsEdit={taskId:string;startDay:string;endDay:string;progress:number|null;updatedBy:string;updatedAt:number};
 export function validateWbs(value:WbsEdit){
@@ -13,7 +14,7 @@ export type Baseline = { id: string; createdDay: string; targetDay: string | nul
 export type TargetRevision = { id:string; revision:number; changedAt:number; reason:string; memo:string; oldTargetDay:string|null; newTargetDay:string; previousBaseline:unknown; sourceVersion:string|null; phases?:{phase:string;day:string;minutes:number;conditional:boolean}[] };
 export type RangeCorrection = { id: string; day: string; reason: string; baselineId: string | null; previousRanges: PlanRange[]; revisedRanges: PlanRange[] };
 export type TaskPlan = { questionMeasurement?:QuestionMeasurement;questionMeasurementHistory?:QuestionMeasurement[];questionPlan?:QuestionPlan;questionPlanHistory?:QuestionPlan[];questionGoal?:QuestionGoal;questionGoalHistory?:QuestionGoal[]; wbs?: WbsEdit; targetRevisions?:TargetRevision[]; rangeCorrections?: RangeCorrection[]; schemaVersion: 1; revision: number; order?: number; endDay: string; deadline: string; ranges: PlanRange[]; baseline: Baseline | null; baselineHistory: Baseline[]; material?: { materialId: string; title: string; requirement: "required" | "reinforcement" | "advanced"; selected: boolean; references: string[] } };
-export type PlanningTask = { scheduleActuals?: Record<string,ScheduleActual>; id: string; unit: string; subject: string; category: string; materialName: string; title: string; status: "not_started" | "in_progress" | "completed"; isRunning: boolean; currentDuration?: number; planning?: TaskPlan; history: { duration: number; operationCheck?: boolean; reviewStatus?: string; score?: number; graded?: boolean; attemptType?: string; units?: number; endAt?: number; date?: string }[] };
+export type PlanningTask = { materialDisplayBindings?:Record<string,MaterialBinding>; displayMaterialBinding?:MaterialBinding; scheduleActuals?: Record<string,ScheduleActual>; id: string; unit: string; subject: string; category: string; materialName: string; title: string; status: "not_started" | "in_progress" | "completed"; isRunning: boolean; currentDuration?: number; planning?: TaskPlan; history: { duration: number; operationCheck?: boolean; reviewStatus?: string; score?: number; graded?: boolean; attemptType?: string; units?: number; endAt?: number; date?: string }[] };
 export const emptyPlan = (): TaskPlan => ({ schemaVersion: 1, revision: 0, order: 0, endDay: "", deadline: "", ranges: [], baseline: null, baselineHistory: [] });
 export const validDay = (day: string) => /^\d{4}-\d{2}-\d{2}$/.test(day) && Number.isFinite(Date.parse(day)) && new Date(day).toISOString().slice(0, 10) === day;
 export const addDays = (day: string, days: number) => new Date(Date.parse(day) + days * 86400000).toISOString().slice(0, 10);

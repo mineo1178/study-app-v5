@@ -1,9 +1,10 @@
 import metadata from './material-catalog.generated.json';
 import type {PlanningTask} from './model';
+import {bindingMaterial} from './material-binding';
 
 export const CATALOG_DISPLAY = metadata;
 export function catalogMaterialDisplay(task:PlanningTask){
- const row=CATALOG_DISPLAY.find(m=>m.materialId===task.planning?.material?.materialId&&(!m.round||task.unit===`第${m.round}回`)&&(!m.subject||task.subject===m.subject)&&['プリント',m.name].includes(task.category));
+ const row=bindingMaterial(task,task.displayMaterialBinding)??CATALOG_DISPLAY.find(m=>m.materialId===task.planning?.material?.materialId&&(!m.round||task.unit===`第${m.round}回`)&&(!m.subject||task.subject===m.subject)&&['プリント',m.name].includes(task.category));
  if(!row)return null;
  const suffix=(row.difficulty?' '+row.difficulty:'')+(row.targetClass?'〔'+row.targetClass+'クラス対象〕':'')+(row.topic?'（'+row.topic+'）':'')+(!row.nameConfirmed?'（正式表題未確認）':'');
  return {label:row.name+suffix,taskLabel:suffix.trim()||row.name,nameConfirmed:row.nameConfirmed};
