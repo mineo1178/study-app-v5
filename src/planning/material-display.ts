@@ -1,3 +1,4 @@
+import {catalogMaterialDisplay,catalogCandidateInfo} from './catalog-display';
 import type {PlanningTask} from './model';
 import {VERIFIED_PRINT_MATERIALS} from './verified-print-materials';
 
@@ -12,9 +13,9 @@ export function printMaterialDisplay(task:PlanningTask){
 }
 export function taskDisplayName(task:PlanningTask){
  const material=task.materialName||task.category;
- return printMaterialDisplay(task)?.label??(material===task.title||material.endsWith(' - '+task.title)||material.endsWith('／'+task.title)?material:material+' ／ '+task.title);
+ return catalogMaterialDisplay(task)?.label??(printMaterialDisplay(task)?.confirmed?null:printMaterialDisplay(task)?.label)??(material===task.title||material.endsWith(' - '+task.title)||material.endsWith('／'+task.title)?material:material+' ／ '+task.title);
 }
 export function taskDisplayTitle(task:PlanningTask){
- const display=printMaterialDisplay(task);
- return display?display.label+' ／ 元の登録：'+task.materialName+'／'+task.title:task.materialName+'／'+task.title;
+ const display=catalogMaterialDisplay(task),candidate=catalogCandidateInfo(task);
+ return taskDisplayName(task)+' ／ 元の登録：'+task.materialName+'／'+task.title+(display?' ／ 台帳の確認済み情報':candidate?' ／ '+candidate.label:'');
 }
