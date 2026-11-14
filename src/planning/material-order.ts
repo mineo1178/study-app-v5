@@ -1,4 +1,5 @@
 import type {PlanningTask} from './model';
+import {printMaterialDisplay} from './material-display';
 
 const normalized=(s:string)=>s.normalize('NFKC').replace(/[\s・･]/g,'').replace(/錬成/g,'練成');
 const natural=(a:string,b:string)=>a.localeCompare(b,'ja',{numeric:true,sensitivity:'base'});
@@ -17,16 +18,18 @@ export function materialKind(task:PlanningTask){
 }
 function sectionRank(task:PlanningTask){
  const title=normalized(task.title);
- // Existing curriculum defines the print sequence B (BASIC), S (STANDARD), A (ADVANCE).
- const test=title.match(/(?:確認|計算)テスト(BASIC|STANDARD|ADVANCE|B|S|A)$/i);
- if(test)return /^(B|BASIC)$/i.test(test[1])?0:/^(S|STANDARD)$/i.test(test[1])?1:2;
+ // B/S/A on a legacy task is not evidence of its PDF's difficulty.
+ const display=printMaterialDisplay(task);
+ if(display?.confirmed)return ['BASIC','STANDARD','ADVANCE'].indexOf(display.difficulty!);
  const sections=['要点','要点チェック','類題','基本問題','練習問題','トレーニング','応用問題','実戦演習','発展問題','まとめ','まとめてみよう'];
  const index=sections.indexOf(title);return index<0?100:index;
 }
 function family(task:PlanningTask){
+ const display=printMaterialDisplay(task);if(display)return display.group;
  const name=normalized(task.materialName||task.category),title=normalized(task.title);
  return title&&name.endsWith('-'+title)?name.slice(0,-title.length-1):title&&name.endsWith('/'+title)?name.slice(0,-title.length-1):name;
 }
 export function compareStudyTasks(a:PlanningTask,b:PlanningTask){
- return materialKind(a)-materialKind(b)||natural(family(a),family(b))||(a.planning?.order??0)-(b.planning?.order??0)||sectionRank(a)-sectionRank(b)||natural(normalized(a.title),normalized(b.title))||natural(normalized(a.materialName),normalized(b.materialName))||a.id.localeCompare(b.id);
+ const verifiedOrder=printMaterialDisplay(a)?.confirmed&&printMaterialDisplay(b)?.confirmed?sectionRank(a)-sectionRank(b):0;
+ return materialKind(a)-materialKind(b)||natural(family(a),family(b))||verifiedOrder||(a.planning?.order??0)-(b.planning?.order??0)||sectionRank(a)-sectionRank(b)||natural(normalized(a.title),normalized(b.title))||natural(normalized(a.materialName),normalized(b.materialName))||a.id.localeCompare(b.id);
 }

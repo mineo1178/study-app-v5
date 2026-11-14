@@ -1,4 +1,5 @@
 import {compareStudyTasks} from './material-order';
+import {printMaterialDisplay,taskDisplayName} from './material-display';
 import type { PlanningTask } from './model';
 import { displayItem,endDisplay,targetDisplay,measuredProgress,dayDisplay } from './gantt-display';
 import type { LearningSchedule } from './schedule';
@@ -10,7 +11,7 @@ export function ganttRows(tasks:PlanningTask[],_plan:LearningSchedule|null,colla
  tasks=[...new Map(tasks.map(t=>[t.id,t])).values()];
  for(const unit of units){const children=tasks.filter(t=>t.unit===unit),key=JSON.stringify(['unit',unit]);rows.push({key,kind:'unit',depth:0,label:unit,tasks:children});if(collapsed.has(key))continue;
  for(const subject of [...new Set(children.map(t=>t.subject))].sort((a,b)=>{const order=['math','japanese','science','social'];return (order.includes(a)?order.indexOf(a):4)-(order.includes(b)?order.indexOf(b):4);})){const subjects=children.filter(t=>t.subject===subject).sort(compareStudyTasks),subjectKey=JSON.stringify(['subject',unit,subject]);rows.push({key:subjectKey,kind:'subject',depth:1,label:subject,tasks:subjects});if(collapsed.has(subjectKey))continue;
- for(const material of [...new Set(subjects.map(t=>t.materialName||t.category))]){const materials=subjects.filter(t=>(t.materialName||t.category)===material),materialKey=JSON.stringify(['material',unit,subject,material]);if(materials.length>1){rows.push({key:materialKey,kind:'material',depth:2,label:material,tasks:materials});if(collapsed.has(materialKey))continue;}for(const task of materials)rows.push({key:'task-'+task.id,kind:'task',depth:materials.length>1?3:2,label:materials.length===1?material===task.title||material.endsWith(' - '+task.title)||material.endsWith('／'+task.title)?material:material+' ／ '+task.title:task.title,tasks:[task],task});}
+ for(const material of [...new Set(subjects.map(t=>printMaterialDisplay(t)?.group??(t.materialName||t.category)))]){const materials=subjects.filter(t=>(printMaterialDisplay(t)?.group??(t.materialName||t.category))===material),materialKey=JSON.stringify(['material',unit,subject,material]);if(materials.length>1){rows.push({key:materialKey,kind:'material',depth:2,label:material,tasks:materials});if(collapsed.has(materialKey))continue;}for(const task of materials)rows.push({key:'task-'+task.id,kind:'task',depth:materials.length>1?3:2,label:materials.length===1?taskDisplayName(task):printMaterialDisplay(task)?.taskLabel??task.title,tasks:[task],task});}
  }}return rows;
 }
 export function contiguousRuns(flags:boolean[]){const runs:{start:number;end:number}[]=[];for(let i=0;i<flags.length;i++){if(!flags[i])continue;const start=i;while(i+1<flags.length&&flags[i+1])i++;runs.push({start,end:i});}return runs;}

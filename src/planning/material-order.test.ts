@@ -8,9 +8,9 @@ it('orders books before prints, absorbs verified aliases and keeps unknowns unkn
  const before=JSON.stringify(rows);expect([...rows].sort(compareStudyTasks).map(t=>t.id)).toEqual(['y','e','r','k','j','b','p','pp','u']);expect(JSON.stringify(rows)).toBe(before);expect(materialKind(rows[1])).toBe(8);
  expect(materialKind({...rows[0],planning:{...emptyPlan(),material:{materialId:'m',title:'予習シリーズ',selected:true,requirement:'required',references:[]}}})).toBe(0);
 });
-it('uses natural section/numeric order, existing B-S-A order, and stable ID tie breaks',()=>{
+it('uses natural section/numeric order, unconfirmed lexical order, and stable ID tie breaks',()=>{
  const sections=['まとめ','発展問題','応用問題','練習問題','基本問題'].map((title,i)=>task('s'+i,'演習問題集',title));expect([...sections].sort(compareStudyTasks).map(t=>t.title)).toEqual(['基本問題','練習問題','応用問題','発展問題','まとめ']);
- const prints=['確認テストA','確認テストB','確認テストS'].map((t,i)=>task('p'+i,'プリント',t));expect([...prints].sort(compareStudyTasks).map(t=>t.title)).toEqual(['確認テストB','確認テストS','確認テストA']);
+ const prints=['確認テストA','確認テストB','確認テストS'].map((t,i)=>task('p'+i,'プリント',t));expect([...prints].sort(compareStudyTasks).map(t=>t.title)).toEqual(['確認テストA','確認テストB','確認テストS']);
  const numeric=[task('n10','計算','10'),task('n2','計算','②'),task('n1','計算','①')];expect([...numeric].sort(compareStudyTasks).map(t=>t.id)).toEqual(['n1','n2','n10']);
  const same=[task('z','その他','資料'),task('a','その他','資料')];expect([...same].reverse().sort(compareStudyTasks).map(t=>t.id)).toEqual([...same].sort(compareStudyTasks).map(t=>t.id));
 });
