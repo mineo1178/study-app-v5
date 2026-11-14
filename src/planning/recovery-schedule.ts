@@ -9,8 +9,11 @@ import {visibleEvents,type EventCalendar} from './events';
 export function recoverySchedule(tasks:PlanningTask[],plan:LearningSchedule|null,calendar:EventCalendar,today:string,candidate?:LearningSchedule|null){
  const unique=[...new Map(tasks.map(t=>[t.id,t])).values()];
  const jobs=unique.filter(t=>t.status!=='completed').map(task=>{
+  const rows=(candidate??plan)?.proposalImport?.source.planningPolicy.taskSchedules;
+  const row=Array.isArray(rows)?rows.find(r=>r.taskId===task.id&&r.unit===task.unit&&r.subject===task.subject&&r.category===task.category&&r.materialName===task.materialName):undefined;
+  const work=row?.workEstimate as Record<string,unknown>|undefined;
   const item=displayItem(task,plan),suggestion=taskSuggestion(task,candidate??plan),stages=suggestion?.phases??item.stages??[];
-  const sum=(phase:string)=>stages.filter(s=>s.phase===phase).reduce((n,s)=>n+s.minutes,0);
+  const sum=(phase:string)=>typeof work?.[phase]==='number'&&Number.isFinite(work[phase])&&Number(work[phase])>=0?Number(work[phase]):stages.filter(s=>s.phase===phase).reduce((n,s)=>n+s.minutes,0);
   const m=task.planning?.questionMeasurement,total=m?.confirmed?m.total:null,ranges=item.ranges,units=ranges.reduce((n,r)=>n+r.units,0);
   const fraction=(field:'done'|'graded'|'corrected')=>units>0?Math.max(0,1-ranges.reduce((n,r)=>n+((actualOf(task,r.id)?.[field]??task.planning?.ranges.find(old=>old.id===r.id)?.[field])?r.units:0),0)/units):1;
   const remaining=(count:number|null|undefined,fallback:number)=>total&&count!=null?Math.max(0,1-count/total):fallback;
@@ -25,8 +28,7 @@ export function recoverySchedule(tasks:PlanningTask[],plan:LearningSchedule|null
   const deadline=taskDeadline(task,plan,calendar),overdue=!!deadline.day&&deadline.day<today;
   const test=visibleEvents(calendar).find(e=>e.day>=today&&e.rounds.includes(task.unit)&&['karite','placement'].includes(e.kind));
   const last=overdue?(test?addDays(test.day,-1):addDays(today,13)):deadline.day??addDays(today,13);
-  const rows=(candidate??plan)?.proposalImport?.source.planningPolicy.taskSchedules;
-  const notBefore=Array.isArray(rows)?rows.find(r=>r.taskId===task.id)?.availability?.notBefore:undefined;
+  const notBefore=row?.availability?.notBefore??(Array.isArray(rows)?rows.find(r=>r.taskId===task.id)?.availability?.notBefore:undefined);
   const unknown=[...(!first?['演習・採点時間']:[]),...(!redoEstimate&&redoFraction>0?['必要な直し時間']:[]),...(!sum('final_check')?['最終確認時間']:[]),...(!total&&!units?['範囲・総数']:[]),...(total&&(m?.firstDone==null||m?.graded==null||m?.correctionStatus==='unknown')?['工程別残量']:[]),...(!deadline.confirmed?['正式期限']:[])];
   return{taskId:task.id,unit:task.unit,title:task.materialName||task.title,deadline:deadline.day,overdue,last,notBefore:notBefore??today,phases,unknown,basis:evidence.firstSeconds!==null?'同じ作業量の採点済み履歴を参考':'保存済み工程・範囲の仮見積'};
  });
