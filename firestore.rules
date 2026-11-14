@@ -28,13 +28,73 @@ service cloud.firestore {
             && getAfter(/databases/$(database)/documents/families/$(familyId)/studyMaterials/$(m.materialId)).data.get('unit', data.unit) == data.unit
             && getAfter(/databases/$(database)/documents/families/$(familyId)/studyMaterials/$(m.materialId)).data.get('subject', data.subject) == data.subject);
         }
-        allow read, delete: if isFamilyMember(familyId);
-        allow create: if isFamilyMember(familyId) && materialLink(request.resource.data);
+        function archivePath(uid, id) { return /databases/$(database)/documents/families/$(familyId)/taskArchives/$(uid)/entries/$(id); }
+        function safeDelete() {
+          let d = request.resource.data.get('_deletion', {});
+          let backup = getAfter(archivePath(request.auth.uid, d.operationId)).data;
+          return resource.data.get('_deletion', null) == null && d.keys().hasOnly(['uid','operationId'])
+            && d.uid == request.auth.uid && !exists(archivePath(d.uid, d.operationId))
+            && backup.at == request.time && backup.actor == d.uid && backup.originals[taskId] == resource.data
+            && backup.taskIds.hasAny([taskId])
+            && resource.data.get('isRunning', false) == false && resource.data.get('currentDuration', 0) == 0
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['_deletion']);
+        }
+        function safeRestore() {
+          let d = resource.data.get('_deletion', {});
+          let r = request.resource.data.get('_restoration', {});
+          let auditPath = /databases/$(database)/documents/families/$(familyId)/taskArchives/$(request.auth.uid)/restores/$(r.operationId);
+          let backup = get(archivePath(d.uid, d.operationId)).data.originals[taskId];
+          return d.uid == request.auth.uid && r.uid == request.auth.uid && r.keys().hasOnly(['uid','operationId'])
+            && request.resource.data.get('_deletion', null) == null
+            && request.resource.data.diff(backup).affectedKeys().hasOnly(['_restoration'])
+            && !exists(auditPath) && getAfter(auditPath).data.taskId == taskId
+            && getAfter(auditPath).data.archiveId == d.operationId;
+        }
+        function activeUpdate() {
+          return resource.data.get('_deletion', null) == null && request.resource.data.get('_deletion', null) == null
+            && request.resource.data._writeVersion is int && request.resource.data._writeVersion == resource.data.get('_writeVersion', 0) + 1
+            && request.resource.data.get('_restoration', null) == resource.data.get('_restoration', null)
+            && request.resource.data.keys().hasAll(resource.data.keys())
+            && request.resource.data.get('materialDisplayBindings', {}).diff(resource.data.get('materialDisplayBindings', {})).affectedKeys().hasOnly([request.auth.uid])
+            && request.resource.data.get('history', []).size() >= resource.data.get('history', []).size()
+            && (request.resource.data.get('planning', {}).get('revision', 0) >= resource.data.get('planning', {}).get('revision', 0));
+        }
+        allow read: if isFamilyMember(familyId);
+        // Older clients cannot bypass the backup with a physical delete.
+        allow delete: if false;
+        allow create: if isFamilyMember(familyId) && !request.resource.data.keys().hasAny(['_deletion','_restoration']) && materialLink(request.resource.data);
         allow update: if isFamilyMember(familyId) && (
+          (request.resource.data.keys().hasAny(['_deletion']) && safeDelete())
+          || (resource.data.keys().hasAny(['_deletion']) && request.resource.data.keys().hasAny(['_restoration']) && safeRestore())
+          || (activeUpdate() && (
           (material(request.resource.data) == material(resource.data)
             && request.resource.data.get('unit', null) == resource.data.get('unit', null)
             && request.resource.data.get('subject', null) == resource.data.get('subject', null))
-          || materialLink(request.resource.data));
+          || materialLink(request.resource.data))));
+      }
+      match /taskArchives/{uid} {
+        function ownArchive() { return isFamilyMember(familyId) && request.auth.uid == uid; }
+        match /entries/{operationId} {
+          allow read: if ownArchive();
+          allow create: if ownArchive()
+            && request.resource.data.keys().hasOnly(['schemaVersion','operation','operationId','actor','at','count','taskIds','originals'])
+            && request.resource.data.schemaVersion == 1 && request.resource.data.operation == 'delete'
+            && request.resource.data.operationId == operationId && request.resource.data.actor == uid && request.resource.data.at == request.time
+            && request.resource.data.count is int && request.resource.data.count > 0 && request.resource.data.count <= 100
+            && request.resource.data.taskIds is list && request.resource.data.taskIds.size() == request.resource.data.count
+            && request.resource.data.originals is map && request.resource.data.originals.size() == request.resource.data.count;
+          allow update, delete: if false;
+        }
+        match /restores/{operationId} {
+          allow read: if ownArchive();
+          allow create: if ownArchive()
+            && request.resource.data.keys().hasOnly(['taskId','archiveId','actor','at','operation'])
+            && request.resource.data.actor == uid && request.resource.data.at == request.time && request.resource.data.operation == 'restore'
+            && get(/databases/$(database)/documents/families/$(familyId)/tasks/$(request.resource.data.taskId)).data._deletion.uid == uid
+            && get(/databases/$(database)/documents/families/$(familyId)/tasks/$(request.resource.data.taskId)).data._deletion.operationId == request.resource.data.archiveId
+            && getAfter(/databases/$(database)/documents/families/$(familyId)/tasks/$(request.resource.data.taskId)).data._restoration.operationId == operationId;
+          allow update, delete: if false;
+        }
       }
       match /studyMaterialFiles/{sha256} {
         allow read: if isFamilyMember(familyId);

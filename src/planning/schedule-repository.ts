@@ -1,4 +1,5 @@
 import { doc, runTransaction, type Firestore } from 'firebase/firestore';
+import { taskWriteVersion, retryTaskWrite } from '../task-write';
 import { actualOf, parseSchedule, scheduleDigest, scheduleErrors, stageImportConflicts, type LearningSchedule, type ScheduleActual } from './schedule';
 import type { PlanningTask } from './model';
 export type ScheduleOwner={uid:string;binding:string;active:()=>boolean};
@@ -12,7 +13,7 @@ export async function importSchedule(db:Firestore,family:string,owner:ScheduleOw
   const root=scheduleRoot(db,family,owner.uid),version=doc(root,'plans',versionId),ledger=doc(root,'ledgers',plan.planId);
   const [pointer,existing,watermark,...snapshots]=await Promise.all([tx.get(root),tx.get(version),tx.get(ledger),...plan.items.map(i=>tx.get(doc(db,'families',family,'tasks',i.taskId)))]);
   if(!owner.active())throw new Error('利用者が切り替わりました。');
-  const tasks=snapshots.filter(s=>s.exists()).map(s=>({...s.data(),id:s.id,history:s.data().history??[]}) as PlanningTask),errors=scheduleErrors(plan,tasks,owner.binding);
+  const tasks=snapshots.filter(s=>s.exists()).filter(s=>!s.data()._deletion).map(s=>({...s.data(),id:s.id,history:s.data().history??[]}) as PlanningTask),errors=scheduleErrors(plan,tasks,owner.binding);
   if(errors.length)throw new Error(errors.join('\n'));
   assertScheduleRevision(plan,digest,watermark.exists()?watermark.data() as {revision:number;digest:string}:undefined);
   if(existing.exists()){
@@ -36,15 +37,15 @@ export async function importSchedule(db:Firestore,family:string,owner:ScheduleOw
 }
 export async function recordScheduleActual(db:Firestore,family:string,owner:ScheduleOwner,versionId:string,taskId:string,rangeId:string,patch:Partial<Pick<ScheduleActual,'done'|'graded'|'corrected'>>,today:string){
  if(!owner.active())throw new Error('利用者が切り替わりました。');
- return runTransaction(db,async tx=>{
+ return retryTaskWrite(() => runTransaction(db,async tx=>{
   const root=scheduleRoot(db,family,owner.uid),taskRef=doc(db,'families',family,'tasks',taskId);
   const [pointer,version,task]=await Promise.all([tx.get(root),tx.get(doc(root,'plans',versionId)),tx.get(taskRef)]);
   if(!owner.active())throw new Error('利用者が切り替わりました。');
   if(pointer.data()?.versionId!==versionId||!version.exists())throw new Error('計画が更新されました。最新の計画を確認してください。');
-  if(!task.exists())throw new Error('タスクが削除されています。');
+  if(!task.exists()||task.data()._deletion)throw new Error('タスクが削除されています。');
   const plan=parseSchedule(JSON.stringify(version.data().plan)),item=plan.items.find(i=>i.taskId===taskId),saved={...task.data(),id:taskId,history:task.data().history??[]} as PlanningTask;
   if(!item?.ranges.some(r=>r.id===rangeId)||scheduleErrors({...plan,items:[item]},[saved],owner.binding).length)throw new Error('範囲と既存taskIdの対応を確認してください。');
   const old=actualOf(saved,rangeId),flags={done:patch.done??old?.done??false,graded:patch.graded??old?.graded??false,corrected:patch.corrected??old?.corrected??false},actual:ScheduleActual={...flags,label:item.ranges.find(r=>r.id===rangeId)!.label,units:item.ranges.find(r=>r.id===rangeId)!.units,actualDay:flags.done?(old?.actualDay??today):null,recordedAt:Date.now()};
-  tx.update(taskRef,{['scheduleActuals.'+rangeId]:actual});return actual;
- });
+  tx.update(taskRef,{['scheduleActuals.'+rangeId]:actual,_writeVersion:taskWriteVersion(task.data())});return actual;
+ }));
 }

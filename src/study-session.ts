@@ -1,4 +1,5 @@
 import { doc, getDocFromServer, getDocsFromServer, runTransaction, type CollectionReference, type DocumentData, type Firestore } from "firebase/firestore";
+import { taskWriteVersion, retryTaskWrite } from './task-write';
 import { getCreditedStudyMinutes, getElapsedSeconds, getLatestRunningTask, getPausedTaskUpdates, getSessionReviewFlags, type SessionReviewFlag, type StudyTaskLike } from "./study-utils";
 import { BACKGROUND_REVIEW_MS, getStudyStopReview, type ReviewReason, type StudyObservation } from "./study-idle";
 
@@ -138,7 +139,7 @@ export const commitStudySessionOperation = async (database: Firestore, tasksColl
   if (operation.kind === "confirm") await getDocFromServer(target);
   const refs = operation.kind === "start" ? (await getDocsFromServer(tasksCollection)).docs.map((item) => item.ref) : [target];
   if (!refs.some((ref) => ref.id === target.id)) refs.push(target);
-  return runTransaction(database, async (transaction) => {
+  return retryTaskWrite(() => runTransaction(database, async (transaction) => {
     const familyRef = tasksCollection.parent;
     if (!familyRef) throw new Error("Study tasks must belong to a family document");
     const familySnapshot = await transaction.get(familyRef);
@@ -146,7 +147,7 @@ export const commitStudySessionOperation = async (database: Firestore, tasksColl
     const transactionRefs = [...refs];
     if (operation.kind === "start" && typeof activeTaskId === "string" && !transactionRefs.some((ref) => ref.id === activeTaskId)) transactionRefs.push(doc(tasksCollection, activeTaskId));
     const snapshots = await Promise.all(transactionRefs.map((ref) => transaction.get(ref)));
-    const tasks = snapshots.filter((snapshot) => snapshot.exists()).map((snapshot) => {
+    const tasks = snapshots.filter((snapshot) => snapshot.exists()).filter(snapshot => !snapshot.data()._deletion).map((snapshot) => {
       const data = snapshot.data();
       const start = data.sessionStartTime;
       const activity = data.lastActivityAt;
@@ -163,10 +164,10 @@ export const commitStudySessionOperation = async (database: Firestore, tasksColl
     prepared.updates.forEach((updates, id) => {
       const safeUpdates = { ...updates };
       delete safeUpdates.pendingSync;
-      transaction.update(doc(tasksCollection, id), safeUpdates);
+      transaction.update(doc(tasksCollection, id), { ...safeUpdates, _writeVersion: taskWriteVersion(snapshots.find(s => s.id === id)!.data()!) });
     });
     return { status: prepared.status, tasks: tasks.map((task) => ({ ...task, ...prepared.updates.get(task.id), pendingSync: false })) };
-  });
+  }));
 };
 
 export const drainStudySessionOperations = async (

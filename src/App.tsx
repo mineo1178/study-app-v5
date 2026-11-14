@@ -1,3 +1,5 @@
+import {archiveTasks,restoreTask,isDeletedTask,updateTaskSafely,taskUpdateBase,createTasksSafely} from './task-safety';
+import {DeletedTasks,type DeletedTask} from './components/DeletedTasks';
 import { studyTargetAverage } from "./planning/target-time";
 import { TargetTime } from "./components/TargetTime";
 import { StudyGantt } from "./components/StudyGantt";
@@ -87,10 +89,10 @@ import {
   updateDoc,
   deleteDoc,
   serverTimestamp,
-  writeBatch,
   query,
   getDoc,
   runTransaction,
+  type DocumentData,
 } from "firebase/firestore";
 import {
   getElapsedSeconds,
@@ -102,7 +104,6 @@ import {
   type SessionReviewFlag,
   getSubjectTaskStats,
   getTaskStats,
-  removeTasksForUnit,
 } from "./study-utils";
 import { ProducerHome } from "./components/game/ProducerHome";
 import { useEncoreGame } from "./game/use-encore-game";
@@ -179,7 +180,7 @@ if (hasFirebaseConfig) {
 // ==========================================
 
 const FAMILY_ID = "oomine-study-2026";
-const APP_VERSION = "v1.89.27";
+const APP_VERSION = "v1.89.28";
 
 // Firestore Path 固定（変更禁止）
 // 実DB構造:
@@ -3307,6 +3308,9 @@ function SessionApp({ session, logout, initialSample }: { session?: FamilySessio
   } | null>(null);
 
   const tasksRef = useRef<Task[]>([]);
+  const serverTasks = useRef(new Map<string, DocumentData>());
+  const [deletedTasks,setDeletedTasks] = useState<DeletedTask[]>([]);
+  const [taskSafetyError,setTaskSafetyError] = useState('');
   const deviceRestoreLoggedRef = useRef(false);
   const retryMountLoggedRef = useRef(false);
 
@@ -3405,11 +3409,14 @@ function SessionApp({ session, logout, initialSample }: { session?: FamilySessio
 
       try {
         recordDiagnostic({ type: "READ_START", source: "study" });
-        const taskSnap = await getDocs(query(getTasksCol(dbInstance)));
+        const taskSnap = await getDocsFromServer(query(getTasksCol(dbInstance)));
+        serverTasks.current = new Map(taskSnap.docs.map(d=>[d.id,d.data()]));
+        setDeletedTasks(taskSnap.docs.filter(d=>d.data()._deletion?.uid===session!.user.uid).map(d=>({id:d.id,label:d.data().unit+' / '+d.data().materialName,operationId:d.data()._deletion.operationId})));
         const testSnap = await getDocs(query(getTestsCol(dbInstance)));
+        if (!session?.active()) return;
         log({ type: "READ_SUCCESS", source: "study", code: "READ_ALLOWED" });
 
-        const fetchedTasks = taskSnap.docs.map((doc) => {
+        const fetchedTasks = taskSnap.docs.filter(d=>!isDeletedTask(d.data())).map((doc) => {
           const data = doc.data();
           return { ...normalizeTask({ id: doc.id, ...data } as Task), pendingSync: false };
         });
@@ -3419,7 +3426,7 @@ function SessionApp({ session, logout, initialSample }: { session?: FamilySessio
         });
 
         setTasks((prev) => {
-          const mergedTasks = mergeTasksFromCloud(prev, fetchedTasks);
+          const mergedTasks = mergeTasksFromCloud(prev.filter(t=>!serverTasks.current.get(t.id)?._deletion), fetchedTasks);
           setCache(CACHE_KEY_TASKS, mergedTasks);
           return mergedTasks;
         });
@@ -3497,11 +3504,13 @@ function SessionApp({ session, logout, initialSample }: { session?: FamilySessio
         setEncoreStudySource({ status: "loading", tasks: [] });
         return;
       }
-      setEncoreStudySource({ status: "ready", tasks: snapshot.docs.map(item => item.data() as EncoreTask) });
-      const cloudTasks = snapshot.docs.map((item) => ({
+      serverTasks.current = new Map(snapshot.docs.map(d=>[d.id,d.data()]));
+      setDeletedTasks(snapshot.docs.filter(d=>d.data()._deletion?.uid===user.uid).map(d=>({id:d.id,label:d.data().unit+' / '+d.data().materialName,operationId:d.data()._deletion.operationId})));
+      setEncoreStudySource({ status: "ready", tasks: snapshot.docs.filter(d=>!isDeletedTask(d.data())).map(item => item.data() as EncoreTask) });
+      const cloudTasks = snapshot.docs.filter(d=>!isDeletedTask(d.data())).map((item) => ({
         ...normalizeTask({ ...item.data(), id: item.id } as Task), pendingSync: false,
       }));
-      setTasks((current) => mergeTasksFromCloud(current, cloudTasks));
+      setTasks((current) => mergeTasksFromCloud(current.filter(t=>!serverTasks.current.get(t.id)?._deletion), cloudTasks));
     }, (error) => {
       if (!active || !session?.active()) return;
       setEncoreStudySource({ status: "error", tasks: [] });
@@ -3653,9 +3662,12 @@ function SessionApp({ session, logout, initialSample }: { session?: FamilySessio
       }
       if (isLegacyTimerUpdate(cloudUpdates)) { setSyncState("offline"); return; }
       try {
-        const taskRef = getTaskDoc(dbInstance, id);
-        const { pendingSync, ...safeCloudUpdates } = cloudUpdates;
-        await updateDoc(taskRef, safeCloudUpdates);
+        const { pendingSync, __taskBase, ...safeCloudUpdates } = cloudUpdates;
+        const source = serverTasks.current.get(id);
+        if (!source) throw Error('最新の課題を取得してから保存してください。');
+        const base = __taskBase ?? taskUpdateBase(source, safeCloudUpdates);
+        cloudUpdates = {...safeCloudUpdates,__taskBase:base};
+        await updateTaskSafely(dbInstance,FAMILY_ID,id,safeCloudUpdates,base,()=>!!session?.active());
         const retainedLegacy = isLegacyTimerUpdate(getPendingTaskUpdates()[id] || {});
         if (!retainedLegacy) clearPendingTaskUpdate(id);
         updateLocalTask(id, { pendingSync: retainedLegacy || getPendingSessionOperations().some((item) => item.taskId === id) });
@@ -3668,11 +3680,12 @@ function SessionApp({ session, logout, initialSample }: { session?: FamilySessio
         );
       } catch (e) {
         queuePendingTaskUpdate(id, cloudUpdates);
+        setTaskSafetyError((e as Error).message);
         updateLocalTask(id, { pendingSync: true });
         setSyncState("offline");
       }
     },
-    [isSampleMode, updateLocalTask, flushStudySessionOperations, recordDeviceTestEvent, clearPendingTaskUpdate, getPendingSessionOperations, getPendingTaskUpdates, getSafeDb, queuePendingTaskUpdate, setCache],
+    [isSampleMode, updateLocalTask, flushStudySessionOperations, recordDeviceTestEvent, clearPendingTaskUpdate, getPendingSessionOperations, getPendingTaskUpdates, getSafeDb, queuePendingTaskUpdate, setCache, session],
   );
 
   const flushPendingTaskUpdates = useCallback(async () => {
@@ -3689,8 +3702,9 @@ function SessionApp({ session, logout, initialSample }: { session?: FamilySessio
       for (const [id, updates] of entries) {
         // v1.81のセッション照合情報がないタイマー更新はblind replayしない。
         if (isLegacyTimerUpdate(updates)) { setSyncState("offline"); continue; }
-        const { pendingSync, ...safeCloudUpdates } = updates as any;
-        await updateDoc(getTaskDoc(dbInstance, id), safeCloudUpdates);
+        const { pendingSync, __taskBase, ...safeCloudUpdates } = updates as any;
+        if (!__taskBase) { setTaskSafetyError('古い未同期データは自動上書きしていません。最新の課題を確認して再保存してください。'); setSyncState('offline'); continue; }
+        await updateTaskSafely(dbInstance,FAMILY_ID,id,safeCloudUpdates,__taskBase,()=>!!session?.active());
         clearPendingTaskUpdate(id);
         updateLocalTask(id, { pendingSync: getPendingSessionOperations().some((item) => item.taskId === id) });
       }
@@ -3704,7 +3718,7 @@ function SessionApp({ session, logout, initialSample }: { session?: FamilySessio
     } catch (e) {
       setSyncState("offline");
     }
-  }, [isSampleMode, updateLocalTask, flushStudySessionOperations, clearPendingTaskUpdate, getPendingSessionOperations, getPendingTaskUpdates, getSafeDb]);
+  }, [isSampleMode, updateLocalTask, flushStudySessionOperations, clearPendingTaskUpdate, getPendingSessionOperations, getPendingTaskUpdates, getSafeDb, session]);
 
   useEffect(() => {
     const retry = (source: string) => {
@@ -4323,31 +4337,30 @@ function SessionApp({ session, logout, initialSample }: { session?: FamilySessio
       });
     });
 
-    setTasks((prev) => [...newTasks, ...prev]);
-    setSelectedUnit(unitName);
-
     const dbInstance = getSafeDb();
-    if (!dbInstance || !auth?.currentUser || isSampleMode) return;
-    const batch = writeBatch(dbInstance);
-    newTasks.forEach((t) =>
-      batch.set(getTaskDoc(dbInstance, t.id), {
-        ...t,
-        lastUpdatedAt: Date.now(),
-      }),
-    );
-    await batch.commit();
+    if (!isSampleMode) {
+      if (!dbInstance || !session?.active()) throw Error('接続を確認してください。');
+      await createTasksSafely(dbInstance,FAMILY_ID,newTasks,()=>!!session?.active());
+    }
+    setTasks(prev=>[...newTasks,...prev]); setSelectedUnit(unitName);
   };
 
-  const deleteUnitTasks = async (unit: string) => {
-    const toDelete = tasks.filter((t) => t.unit === unit);
-    setTasks((prev) => removeTasksForUnit(prev, unit));
-    if (selectedUnit === unit) setSelectedUnit(null);
-
-    const dbInstance = getSafeDb();
-    if (!dbInstance || !auth?.currentUser || isSampleMode) return;
-    const batch = writeBatch(dbInstance);
-    toDelete.forEach((t) => batch.delete(getTaskDoc(dbInstance, t.id)));
-    await batch.commit();
+  const deleteTasksSafely = async (ids:string[], bulk=false) => {
+    try {
+      if (bulk && window.prompt(`${ids.length}課題をバックアップ付きで削除します。確認のため件数を入力してください。`) !== String(ids.length)) return;
+      if (!isSampleMode) {
+        const database=getSafeDb(); if(!database||!user||!session?.active())throw Error('接続を確認してください。');
+        await archiveTasks({db:database,family:FAMILY_ID,uid:user.uid,active:()=>!!session?.active()},ids,ids.length,undefined,new Map(serverTasks.current));
+      }
+      setTasks(prev=>prev.filter(t=>!ids.includes(t.id))); setTaskSafetyError('');
+    } catch(e) { setTaskSafetyError((e as Error).message); }
+  };
+  const deleteUnitTasks = async (unit:string) => {
+    await deleteTasksSafely(tasks.filter(t=>t.unit===unit).map(t=>t.id),true);
+  };
+  const restoreDeletedTask = async(id:string) => {
+    const database=getSafeDb(); if(!database||!user||!session?.active())throw Error('接続を確認してください。');
+    await restoreTask({db:database,family:FAMILY_ID,uid:user.uid,active:()=>!!session?.active()},id);
   };
 
   const onAddCustomTask = async (
@@ -4372,14 +4385,12 @@ function SessionApp({ session, logout, initialSample }: { session?: FamilySessio
       history: [],
       createdAt: new Date().toISOString(),
     };
-    setTasks((prev) => [...prev, newTask]);
-
     const dbInstance = getSafeDb();
-    if (!dbInstance || !auth?.currentUser || isSampleMode) return;
-    await setDoc(getTaskDoc(dbInstance, newTask.id), {
-      ...newTask,
-      lastUpdatedAt: Date.now(),
-    });
+    if (!isSampleMode) {
+      if(!dbInstance||!session?.active())throw Error('接続を確認してください。');
+      await createTasksSafely(dbInstance,FAMILY_ID,[newTask],()=>!!session?.active());
+    }
+    setTasks(prev=>[...prev,newTask]);
   };
 
   const unitsWithTasks = useMemo(
@@ -4518,6 +4529,8 @@ function SessionApp({ session, logout, initialSample }: { session?: FamilySessio
       </header>
 
       <main className="design20-main flex-1 overflow-y-auto overscroll-contain no-scrollbar flex flex-col pb-24 md:pb-32 lg:pb-40">
+        {taskSafetyError&&<p role="alert" className="p-3 text-red-700 bg-red-50">{taskSafetyError}</p>}
+        {activeTab==='schedule'&&!isSampleMode&&<DeletedTasks tasks={deletedTasks} onRestore={restoreDeletedTask}/>}
         <StudyReview records={pendingReviews} onConfirm={confirmStudyTime} />
         {scheduleOpened && <section hidden={activeTab !== "schedule"} aria-label="スケジュール画面" className="min-w-0"><StudyGantt key={`${user?.uid ?? "sample"}-${isSampleMode}`} tasks={tasks} db={session?.database ?? null} familyId={FAMILY_ID} uid={isSampleMode ? "sample" : user!.uid} sample={isSampleMode} calculationAttempts={sampleCalculationAttempts} onTaskList={()=>setActiveTab("daily")} active={planningActive} onLocal={(id, updates) => { const latest = tasksRef.current.find(t => t.id === id); if (latest && (latest.planning?.revision ?? 0) <= updates.planning.revision) updateLocalTask(id, updates); }} onActual={(id, rangeId, actual) => { const latest = tasksRef.current.find(t => t.id === id); if (latest) updateLocalTask(id, { scheduleActuals: { ...latest.scheduleActuals, [rangeId]: actual } }); }} onOpen={id=>{setActiveTab("daily");setDetailTaskId(id);}} onCreated={task => setTasks(current => current.some(t => t.id === task.id) ? current : [...current, task])} /></section>}
           <section hidden={activeTab !== "daily"} aria-label="学習トップ" className="min-w-0">
@@ -4533,12 +4546,9 @@ function SessionApp({ session, logout, initialSample }: { session?: FamilySessio
             deleteTask={(id: string) => {
               setConfirmModalData({
                 title: "タスクの削除",
-                message: "本当にこのタスクを削除しますか？",
+                message: "バックアップを保存して、この課題を一覧から削除します。スケジュール画面から復元できます。",
                 onConfirm: async () => {
-                  setTasks((prev) => prev.filter((t) => t.id !== id));
-                  const dbInstance = getSafeDb();
-                  if (dbInstance && user && !isSampleMode)
-                    await deleteDoc(getTaskDoc(dbInstance, id));
+                  await deleteTasksSafely([id]);
                 },
               });
             }}
@@ -4693,7 +4703,7 @@ function SessionApp({ session, logout, initialSample }: { session?: FamilySessio
         onCreate={addUnitWithPresets}
       />
 
-      {detailTaskId && (
+      {detailTaskId && tasks.some(t=>t.id===detailTaskId) && (
         <TaskDetailModal
           allTasks={tasks}
           task={tasks.find((t: Task) => t.id === detailTaskId)!}
@@ -4710,12 +4720,9 @@ function SessionApp({ session, logout, initialSample }: { session?: FamilySessio
           onDelete={() => {
             setConfirmModalData({
               title: "タスクの削除",
-              message: "本当にこのタスクを削除しますか？",
+              message: "バックアップを保存して、この課題を一覧から削除します。スケジュール画面から復元できます。",
               onConfirm: async () => {
-                setTasks((prev) => prev.filter((t) => t.id !== detailTaskId));
-                const dbInstance = getSafeDb();
-                if (dbInstance && user && !isSampleMode)
-                  await deleteDoc(getTaskDoc(dbInstance, detailTaskId));
+                await deleteTasksSafely([detailTaskId]);
                 setDetailTaskId(null);
               },
             });

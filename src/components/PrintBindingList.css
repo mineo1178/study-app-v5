@@ -1,0 +1,11 @@
+.print-binding-list,.task-safety{margin:10px 0;padding:12px;border:1px solid #cbd5e1;border-radius:12px;background:#fff;min-width:0;font-size:13px;}
+.print-binding-list>summary,.task-safety>summary{cursor:pointer;font-weight:700;color:#334155;}
+.print-binding-list p,.task-safety p{margin:8px 0;overflow-wrap:anywhere;}
+.print-binding-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,310px),1fr));gap:8px;margin-top:10px;align-items:start;}
+.print-binding-cards>details{min-width:0;border:1px solid #e2e8f0;border-radius:8px;padding:10px;}
+.print-binding-cards summary{cursor:pointer;overflow-wrap:anywhere;}
+.print-binding-cards summary span,.print-binding-cards summary strong,.print-binding-cards summary small{display:block;}
+.print-binding-cards small{color:#64748b;}
+.task-safety>div{display:flex;gap:10px;align-items:center;padding:8px 0;}
+.task-safety>div>span{flex:1;min-width:0;overflow-wrap:anywhere;}
+.task-safety button{padding:5px 12px;border:1px solid #94a3b8;border-radius:8px;}
