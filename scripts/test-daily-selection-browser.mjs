@@ -1,0 +1,91 @@
+import assert from "node:assert/strict";
+import { createRequire } from "node:module";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { createServer } from "vite";
+const require = createRequire(import.meta.url);
+const { chromium } = require(process.env.PLAYWRIGHT_MODULE_PATH || join(homedir(), ".cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright"));
+const server = await createServer({ server: { host: "127.0.0.1", port: 5194, strictPort: true }, logLevel: "error" });
+let browser;
+try {
+  await server.listen();
+  browser = await chromium.launch({ headless: true, channel: "msedge" });
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  await context.route("**/*", r => new URL(r.request().url()).hostname === "127.0.0.1" ? r.continue() : r.abort());
+  const page = await context.newPage(), errors = [];
+  page.on("pageerror", e => errors.push(e.message));
+  await page.goto("http://127.0.0.1:5194/tests/daily-selection-browser.html");
+  const state = () => page.getByLabel("selection").textContent().then(JSON.parse);
+  const ids = s => s.questions.map(q => q.id);
+  const wait = async () => { await page.waitForFunction(() => JSON.parse(document.querySelector("output").textContent).questions.length === 5); return state(); };
+  const first = await wait();
+  await page.getByText("Update progress", { exact: true }).click(); assert.deepEqual(ids(await wait()), ids(first));
+  await page.reload(); assert.deepEqual(ids(await wait()), ids(first));
+  // Give B a different same-day set; switching accounts must never display A's set.
+  const otherIds = Array.from({ length: 20 }, (_, i) => `fixture-${i}`).filter(id => !ids(first).includes(id)).slice(0, 5);
+  await page.evaluate(otherIds => localStorage.setItem("daily-fixture:b", JSON.stringify({ schemaVersion: 1, entries: [{ day: "2026-11-11", scope: JSON.stringify([null, null, null]), ids: otherIds.map(id => ({ id, version: "sample-v1" })) }] })), otherIds);
+  await page.getByText("Switch account", { exact: true }).click(); assert.deepEqual(ids(await wait()), otherIds);
+  await page.getByText("Next second", { exact: true }).click();
+  await page.waitForFunction(() => JSON.parse(localStorage.getItem("daily-fixture:b")).entries.some(e => e.day === "2026-11-12"));
+  assert.equal(JSON.parse(await page.evaluate(() => localStorage.getItem("daily-fixture:a"))).entries.length, 1);
+  await page.getByText("Switch account", { exact: true }).click();
+  await page.waitForFunction(() => JSON.parse(localStorage.getItem("daily-fixture:a")).entries.length === 2);
+  const next = await wait(); assert.equal(ids(first).filter(id => ids(next).includes(id)).length, 0);
+  const removed = next.questions[0].id;
+  await page.getByText("Delete selected", { exact: true }).click(); assert.ok(!ids(await wait()).includes(removed));
+  const changed = (await state()).questions[0].id;
+  await page.getByText("Change version", { exact: true }).click();
+  await page.waitForFunction(id => { const qs = JSON.parse(document.querySelector("output").textContent).questions; return qs.length === 5 && qs.every(q => q.id !== id || q.version === "changed"); }, changed);
+  await page.getByText("Toggle ready", { exact: true }).click(); assert.equal((await state()).questions.length, 0);
+  await page.getByText("Toggle ready", { exact: true }).click(); await wait();
+  const stable = await state();
+  await page.evaluate(() => { Storage.prototype.getItem = () => { throw new Error("blocked"); }; Storage.prototype.setItem = () => { throw new Error("quota"); }; });
+  await page.getByText("Update progress", { exact: true }).click();
+  await page.waitForFunction(() => JSON.parse(document.querySelector("output").textContent).warning.length > 0);
+  assert.deepEqual(ids(await state()), ids(stable));
+  console.log("PASS hook: reload, progress update, JST midnight, account isolation, deletion/version, loading, blocked storage");
+
+  await page.goto("http://127.0.0.1:5194/tests/timer-review-browser.html");
+  const dataKey = "study-review-v1:sample:fixture:fixture:sample:sample-data", selectionKey = "study-review-v1:sample:fixture:fixture:sample:daily-selection", practiceKey = "study-review-v1:sample:fixture:fixture:sample:practice-selection", draftKey = "study-review-v1:sample:fixture:fixture:sample:draft";
+  await page.evaluate(async ({ dataKey, practiceKey }) => {
+    const { sampleQuestions, getJstDay } = await import("/src/review/model.ts");
+    const questions = Array.from({ length: 20 }, (_, i) => ({ ...sampleQuestions[i % 5], id: `fixture-${i}`, unit: `fixture-${i}` }));
+    localStorage.setItem(dataKey, JSON.stringify({ questions, history: [], progress: [], weaknesses: [] }));
+    // Existing additional-practice cache must remain byte-for-byte unchanged.
+    localStorage.setItem(practiceKey, JSON.stringify({ signature: JSON.stringify([getJstDay(Date.now()), null, null]), ids: questions.slice(10, 15).map(q => ({ id: q.id, version: q.version })) }));
+  }, { dataKey, practiceKey });
+  await page.reload();
+  const start = () => page.getByRole("button", { name: "今日の復習5問を始める", exact: true });
+  await start().waitFor();
+  const practiceBefore = await page.evaluate(key => localStorage.getItem(key), practiceKey);
+  const cache = await page.evaluate(key => JSON.parse(localStorage.getItem(key)), selectionKey);
+  const shown = () => page.locator("p.bg-blue-50").allTextContents();
+  const displayed = await shown();
+  assert.deepEqual(displayed.map(text => /fixture-\d+/.exec(text)[0]), cache.entries.at(-1).ids.map(q => q.id));
+  await page.getByRole("button", { name: "Calculation fixture", exact: true }).click();
+  await page.getByRole("button", { name: "Review fixture", exact: true }).click(); await start().waitFor();
+  assert.deepEqual(await shown(), displayed);
+  await start().click();
+  const draft = await page.evaluate(key => JSON.parse(localStorage.getItem(key)), draftKey);
+  assert.deepEqual(draft.questions.map(q => ({ id: q.id, version: q.version })), cache.entries.at(-1).ids);
+  for (let i = 0; i < draft.questions.length; i++) {
+    assert.ok((await page.getByRole("region", { name: "テスト対策・復習", exact: true }).innerText()).includes(draft.questions[i].prompt));
+    await page.getByRole("group", { name: "解答候補" }).getByRole("button").nth(draft.questions[i].correctIndex).click();
+    await page.getByRole("button", { name: /^(回答を決めて次へ|最後の回答を決めて採点)$/ }).click();
+  }
+  const save = page.getByRole("button", { name: "結果を保存する（失敗時は再試行）", exact: true });
+  await save.click(); await page.getByText("保存しました", { exact: true }).waitFor();
+  const saved = await page.evaluate(key => JSON.parse(localStorage.getItem(key)), dataKey);
+  assert.equal(saved.history.length, 5); assert.ok(saved.history.every(a => a.correct && a.mode === "daily"));
+  assert.equal(saved.progress.length, 5); assert.ok(saved.progress.every(p => p.count === 1));
+  assert.equal(new Set(saved.history.map(a => a.id)).size, 5);
+  await page.getByRole("button", { name: "復習ホームへ", exact: true }).click();
+  await page.getByRole("button", { name: "今日の復習0問を始める", exact: true }).waitFor();
+  assert.deepEqual(await page.evaluate(key => JSON.parse(localStorage.getItem(key)), selectionKey), cache);
+  assert.equal(await page.evaluate(key => localStorage.getItem(key), practiceKey), practiceBefore);
+  await context.setOffline(true); await page.getByRole("button", { name: "Calculation fixture", exact: true }).click(); await page.getByRole("button", { name: "Review fixture", exact: true }).click();
+  await page.getByRole("button", { name: "今日の復習0問を始める", exact: true }).waitFor();
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false);
+  assert.deepEqual(errors, []);
+  console.log("PASS UI: preview IDs = draft = displayed = graded answers; save once, completed daily cap, remount/offline, additional-practice cache unchanged, mobile layout");
+} finally { await browser?.close(); await server.close(); }

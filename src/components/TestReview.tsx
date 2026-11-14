@@ -1,4 +1,5 @@
 import { usePracticeSelection } from "../review/use-practice-selection";
+import { useDailySelection } from "../review/use-daily-selection";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Firestore } from "firebase/firestore";
 import type { FamilySession } from "../use-family-session";
@@ -123,8 +124,10 @@ export function TestReview({ db, familyId, uid, sample, session, enabled, tests 
   const availableQuestions = useMemo(() => visibleQuestions(data.questions, sample), [data.questions, sample]);
   const wrong = availableQuestions.filter(q => data.progress.some(p => p.questionId === q.id && p.questionVersion === q.version && !p.latestCorrect));
   const { target, activePlan, status, hasRegisteredTarget } = nextReviewTarget(tests, plan, now);
-  const { selected: candidates, eligibleCount, scopeCount, remaining, notDueCount, answeredInScope, answeredCount, newCount, topicLimited } =
-    dailyReviewSelection(availableQuestions, data.progress, activePlan, now);
+  const dailyState = useDailySelection(`study-review-v1:${scope}:daily-selection`, availableQuestions, data.progress, activePlan, now, !loading && !planState.restoring && !error && !planState.error && !draft);
+  const dailyResult = dailyState?.result ?? dailyReviewSelection(availableQuestions, data.progress, activePlan, now);
+  const { selected: dailySelected, eligibleCount, scopeCount, remaining, notDueCount, answeredInScope, answeredCount, newCount, topicLimited } = dailyResult;
+  const candidates = dailyState ? dailySelected : [];
   const practiceState = usePracticeSelection(`study-review-v1:${scope}:practice-selection`, availableQuestions, data.history, activePlan, now, !loading && !planState.restoring);
   const practice = practiceState.questions;
   const missing = activePlan ? activePlan.items.length - scopeCount : 0;
@@ -168,6 +171,7 @@ export function TestReview({ db, familyId, uid, sample, session, enabled, tests 
     </> : <>
       <div className="space-y-3 rounded-2xl border border-blue-100 bg-white p-4">
         <h3 className="text-lg font-black">今日の復習：{candidates.length}問</h3><p className="text-sm text-slate-600">最大5問。復習期限が来た問題を先に、次にテストとの関連と確認の優先度で選ぶよ。期限前の問題で数を埋めません。</p>
+        {dailyState?.warning && <p role="alert">{dailyState.warning}</p>}
         <details className="space-y-1 rounded-xl bg-slate-50 p-3 text-sm"><summary className="cursor-pointer font-bold">計画・出題診断</summary>
           <p className="font-bold">{activePlan ? "テスト対策" : "一般復習"}</p>
           <p>現在の対策：{target?.label ?? "次回カリテ未登録"} ／ 開催日：{target?.testDay ?? "未登録"}</p>
@@ -198,7 +202,7 @@ export function TestReview({ db, familyId, uid, sample, session, enabled, tests 
           </ul>}
           {eligibleCount > 0 && <p className="text-slate-600">
             期限到来：{eligibleCount - newCount}問 ／ 未出題：{newCount}問。
-            {eligibleCount <= remaining ? "候補が残り枠以内の日は、同じ問題が並ぶことがあります。" : "期限到来・誤答履歴を優先するため、同じ問題が続くことがあります。同順位の候補はJSTの日付で順番が変わります。"}
+            {eligibleCount <= remaining ? "対象問題が少ないため、以前の問題が再出題されることがあります。" : "復習期限と誤答復習を優先し、同順位ではこの端末の直近3日の出題を避けます。同じ日は問題を維持します。"}
           </p>}
         </details>
         <ReviewTargetPlan plan={plan} expired={status === "期限切れ"} onImport={async (raw, kind) => { if (!active() || pending.current) return; pending.current = true; setBusy(true); try { await planState.importFile(raw, kind, Date.now()); if (active()) setError(""); } finally { pending.current = false; if (active()) setBusy(false); } }} onClear={() => { if (active()) { planState.clear(); setError(""); } }} onError={setError} disabled={busy || loading || planState.restoring} />

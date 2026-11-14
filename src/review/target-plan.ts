@@ -48,13 +48,14 @@ export function nextReviewTarget(tests: RegisteredTest[], plan: TargetPlan | nul
   };
 }
 
-export function dailyReviewSelection(questions: Question[], progress: Progress[], plan: TargetPlan | null, now: number) {
+export type DailyExposure = { day: string; ids: { id: string; version: string }[]; scope?: string };
+export function dailyReviewSelection(questions: Question[], progress: Progress[], plan: TargetPlan | null, now: number, exposures: DailyExposure[] = []) {
   plan = activeTargetPlan(plan, now);
   const today = getJstDay(now);
   const answeredToday = progress.filter(p => getJstDay(p.latestAt) === today);
   const answeredIds = new Set(answeredToday.map(p => p.questionId));
   const remaining = Math.max(0, 5 - answeredIds.size);
-  const inScope = questions.flatMap(q => {
+  const inScope = [...new Map(questions.map(q => [q.id, q])).values()].flatMap(q => {
     const item = plan?.items.find(i => i.questionId === q.id && i.questionVersion === q.version);
     if (plan && !item) return [];
     return [{ q, item }];
@@ -67,10 +68,17 @@ export function dailyReviewSelection(questions: Question[], progress: Progress[]
     if (dueAt !== null && dueAt > now) { notDueCount++; return []; }
     const reason = item?.reason ?? "登録されている問題を、日を空けて確かめよう。テスト範囲との関係は未確認です。";
     const wrong = !!p && (!p.firstCorrect || !p.latestCorrect || !p.previousCorrect);
-    return [{ question: q, reason, dueAt, wrong, topicId: item?.topicId ?? q.id }];
+    const repeatedWrong = !!p && p.count >= 2 && !p.latestCorrect && !p.previousCorrect;
+    return [{ question: q, reason, dueAt, wrong, repeatedWrong, topicId: item?.topicId ?? q.id }];
   });
+  const recent = new Map<string, number>();
+  for (const entry of exposures) {
+    const age = jstDayNumber(now) - jstDayNumber(Date.parse(entry.day));
+    if (age >= 1 && age <= 3) for (const q of entry.ids) recent.set(q.id, Math.max(recent.get(q.id) ?? 0, 4 - age));
+  }
+  const exposureRank = (c: typeof pool[number]) => c.repeatedWrong ? 0 : recent.get(c.question.id) ?? 0;
   const comparePriority = (a: typeof pool[number], b: typeof pool[number]) =>
-    Number(a.dueAt === null) - Number(b.dueAt === null) || Number(b.wrong) - Number(a.wrong);
+    Number(a.dueAt === null) - Number(b.dueAt === null) || Number(b.wrong) - Number(a.wrong) || exposureRank(a) - exposureRank(b);
   pool.sort((a, b) => comparePriority(a, b) || a.question.id.localeCompare(b.question.id));
   // Rotate every priority group, including overdue reviews, at JST midnight.
   for (let start = 0; start < pool.length;) {
@@ -99,7 +107,7 @@ export function dailyReviewSelection(questions: Question[], progress: Progress[]
     selected.push(candidate); topicCounts.set(candidate.topicId, (topicCounts.get(candidate.topicId) ?? 0) + 1);
   }
   return {
-    selected, eligibleCount: pool.length, scopeCount: inScope.length, remaining, notDueCount, answeredInScope,
+    selected, eligible: pool, eligibleCount: pool.length, scopeCount: inScope.length, remaining, notDueCount, answeredInScope,
     answeredCount: answeredIds.size, newCount: pool.filter(c => c.dueAt === null).length,
     topicLimited: selected.length < Math.min(remaining, pool.length),
   };
