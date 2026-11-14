@@ -1,10 +1,10 @@
 import {auth} from './timer-client';
 import {doc,getFirestore,writeBatch} from 'firebase/firestore';
-import {emptyPlan,type PlanningTask} from '../src/planning/model';
+import {emptyPlan,addDays,type PlanningTask} from '../src/planning/model';
 import {accountKey,materialKey} from '../src/planning/schedule';
 import {importSchedule} from '../src/planning/schedule-repository';
 import {scheduleFixture} from './schedule-fixture';
-export async function seedDashboard(){
+export async function seedDashboard(layers=false){
  if(location.hostname!=='127.0.0.1'||auth.app.options.projectId!=='demo-study-hotfix'||!auth.currentUser)throw Error('Emulator only');
  const db=getFirestore(auth.app),family='hotfix-study-family',batch=writeBatch(db);
  const tasks:PlanningTask[]=Array.from({length:91},(_,i)=>({id:i===0?'normal':i===1?'legacy':i===46?'next':'dashboard-'+i,unit:i<46?'第11回':'第12回',subject:['math','japanese','science','social'][i%4],category:'教材',materialName:'監査教材',title:i===0?'比較できる課題':i===11?'先行する課題':i===12?'手動100の未完了課題':'課題'+i,status:i>=1&&i<=10||i>=47&&i<=49?'completed':i===0||i>=11&&i<=24?'in_progress':'not_started',isRunning:false,history:i===12?[{id:'history-12',duration:600,endAt:Date.parse('2026-11-13T10:00:00+09:00'),reviewStatus:'not_required',date:'11/13'}]:[]}));
@@ -14,5 +14,6 @@ export async function seedDashboard(){
  await batch.commit();
  const plan=scheduleFixture(),binding=await accountKey(db.app.options.projectId!,family,auth.currentUser.uid);
  plan.scope=[{unit:'第11回',subjects:['math','japanese','science','social'],deadline:null}];plan.accountBinding=binding;plan.baseVersion=null;plan.items=[tasks[0],tasks[1],...tasks.slice(11,19)].map(t=>({...structuredClone(plan.items[0]),taskId:t.id,unit:t.unit,subject:t.subject as 'math',materialName:t.materialName,title:t.title,materialId:materialKey(t),endDay:'2026-11-19',ranges:[],dailyWork:{},baseline:{id:'unset',targetDay:null,daily:{},evidence:{provisional:true,historyCount:0,estimatedMinutes:null,method:'未測定',conditions:[],manualAdjustmentMinutes:null}}}));
+ if(layers){plan.revision=3;plan.generatedAt=new Date().toISOString();plan.capacities=Object.fromEntries(Array.from({length:7},(_,i)=>[addDays('2026-11-14',i),90]));plan.scope.push({unit:'第12回',subjects:['math','japanese','science','social'],deadline:null});const t=tasks.find(t=>t.id==='next')!;plan.items.push({...structuredClone(plan.items[0]),taskId:t.id,unit:t.unit,subject:t.subject as 'math',materialName:t.materialName,title:t.title,materialId:materialKey(t)});plan.items=plan.items.map(i=>({...i,deadline:null,endDay:tasks.find(t=>t.id===i.taskId)?.status==='completed'?null:'2026-11-20',stages:tasks.find(t=>t.id===i.taskId)?.status==='completed'?[]:[{phase:'first_and_marking',day:'2026-11-16',minutes:20,conditional:false},{phase:'correction',day:'2026-11-19',minutes:10,conditional:true},{phase:'final_check',day:'2026-11-20',minutes:2,conditional:false}]}));}
  await importSchedule(db,family,{uid:auth.currentUser.uid,binding,active:()=>true},plan);
 }

@@ -56,6 +56,15 @@
 .design20-app .design20-nav-items > button > div { padding:3px; border-radius:9px; }
 /* Home: reuse existing progress and task data, without inventing today's minutes. */
 .design20-learning { max-width:1160px; margin-inline:auto; width:100%; }
+@media(min-width:1440px){
+ .design20-app[data-design20-tab="daily"]{max-width:none}
+ .design20-app[data-design20-tab="daily"] .design20-main{scrollbar-gutter:auto}
+ .design20-app .design20-learning{max-width:none;padding-inline:24px;box-sizing:border-box}
+ .design20-app .design20-learning .design20-home-hero{margin-inline:0}
+ .design20-app .design20-learning .design20-home-hero p{max-width:65ch}
+ .design20-app .design20-learning .design22-home-metrics{margin-inline:0}
+ .design20-app .design20-learning #design20-task-list{padding-inline:0}
+}
 .design20-home-hero {
   margin:18px 16px 0; padding:clamp(20px,3vw,32px);
   display:grid; grid-template-columns:minmax(0,1.7fr) minmax(210px,.7fr); gap:24px;
