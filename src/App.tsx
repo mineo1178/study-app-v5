@@ -179,7 +179,7 @@ if (hasFirebaseConfig) {
 // ==========================================
 
 const FAMILY_ID = "oomine-study-2026";
-const APP_VERSION = "v1.89.22";
+const APP_VERSION = "v1.89.23";
 
 // Firestore Path 固定（変更禁止）
 // 実DB構造:
@@ -3279,7 +3279,7 @@ function SessionApp({ session, logout, initialSample }: { session?: FamilySessio
   const [activeStudyTaskReadError, setActiveStudyTaskReadError] = useState(false);
   const [deviceRestoreState, setDeviceRestoreState] = useState("not checked");
 
-  const [showGantt, setShowGantt] = useState(false);
+  const [scheduleOpened, setScheduleOpened] = useState(false);
   const [activeTab, setActiveTab] = useState("daily");
   const planningActive = useCallback(() => isSampleMode || !!session?.active(), [isSampleMode, session]);
   const [calculationRunning, setCalculationRunning] = useState(false);
@@ -4519,10 +4519,8 @@ function SessionApp({ session, logout, initialSample }: { session?: FamilySessio
 
       <main className="design20-main flex-1 overflow-y-auto overscroll-contain no-scrollbar flex flex-col pb-24 md:pb-32 lg:pb-40">
         <StudyReview records={pendingReviews} onConfirm={confirmStudyTime} />
-        {activeTab === "daily" && <div className={`flex gap-2 p-3 ${showGantt ? "gantt-return" : ""}`}><button className="rounded-xl border p-3" onClick={() => setShowGantt(value => !value)}>{showGantt ? "学習に戻る" : "学習スケジュール"}</button></div>}
-        {activeTab === "daily" && showGantt && <StudyGantt key={`${user?.uid ?? "sample"}-${isSampleMode}`} tasks={tasks} db={session?.database ?? null} familyId={FAMILY_ID} uid={isSampleMode ? "sample" : user!.uid} sample={isSampleMode} calculationAttempts={sampleCalculationAttempts} onTaskList={()=>setShowGantt(false)} active={planningActive} onLocal={(id, updates) => { const latest = tasksRef.current.find(t => t.id === id); if (latest && (latest.planning?.revision ?? 0) <= updates.planning.revision) updateLocalTask(id, updates); }} onActual={(id, rangeId, actual) => { const latest = tasksRef.current.find(t => t.id === id); if (latest) updateLocalTask(id, { scheduleActuals: { ...latest.scheduleActuals, [rangeId]: actual } }); }} onOpen={setDetailTaskId} onCreated={task => setTasks(current => current.some(t => t.id === task.id) ? current : [...current, task])} />}
-        {activeTab === "daily" ? (
-          <section hidden={showGantt} aria-label="学習トップ" className="min-w-0">
+        {scheduleOpened && <section hidden={activeTab !== "schedule"} aria-label="スケジュール画面" className="min-w-0"><StudyGantt key={`${user?.uid ?? "sample"}-${isSampleMode}`} tasks={tasks} db={session?.database ?? null} familyId={FAMILY_ID} uid={isSampleMode ? "sample" : user!.uid} sample={isSampleMode} calculationAttempts={sampleCalculationAttempts} onTaskList={()=>setActiveTab("daily")} active={planningActive} onLocal={(id, updates) => { const latest = tasksRef.current.find(t => t.id === id); if (latest && (latest.planning?.revision ?? 0) <= updates.planning.revision) updateLocalTask(id, updates); }} onActual={(id, rangeId, actual) => { const latest = tasksRef.current.find(t => t.id === id); if (latest) updateLocalTask(id, { scheduleActuals: { ...latest.scheduleActuals, [rangeId]: actual } }); }} onOpen={id=>{setActiveTab("daily");setDetailTaskId(id);}} onCreated={task => setTasks(current => current.some(t => t.id === task.id) ? current : [...current, task])} /></section>}
+          <section hidden={activeTab !== "daily"} aria-label="学習トップ" className="min-w-0">
           <DailyView
             game={game}
             gachaState={gachaState}
@@ -4554,7 +4552,7 @@ function SessionApp({ session, logout, initialSample }: { session?: FamilySessio
             pauseAllOtherTasks={pauseAllOtherTasks}
           />
           </section>
-        ) : activeTab === "tests" ? (
+        {activeTab === "tests" ? (
           <TestsView
             tests={tests}
             onSaveTest={saveTestToCloud}
@@ -4603,16 +4601,16 @@ function SessionApp({ session, logout, initialSample }: { session?: FamilySessio
             onPerformArena={performArena}
             onPerformMajorDebut={performMajorDebut}
           />
-        ) : (
+        ) : activeTab === "achievements" ? (
           <AchievementsView tasks={tasks} calculationRecords={<DailyCalculation key={`${user?.uid ?? "sample"}-${isSampleMode}`} db={db} familyId={FAMILY_ID} uid={isSampleMode ? "sample" : user!.uid} sample={isSampleMode} sampleAttempts={sampleCalculationAttempts} />} />
-        )}
+        ) : null}
       </main>
 
       <nav aria-label="メインナビゲーション" className="design20-nav bg-white/90 backdrop-blur-lg border-t border-slate-100 fixed bottom-0 left-0 right-0 z-40 pb-6 md:pb-8 lg:pb-8 w-full max-w-[1600px] mx-auto rounded-t-3xl md:rounded-t-[2rem] shadow-[0_-10px_30px_rgba(0,0,0,0.04)]">
-        <div className="design20-nav-items h-16 md:h-20 lg:h-24 grid grid-cols-5 items-center px-1 md:px-6 lg:px-10 [&>button]:min-w-0 [&_span]:whitespace-nowrap">
+        <div className="design20-nav-items h-16 md:h-20 lg:h-24 grid grid-cols-6 items-center px-1 md:px-6 lg:px-10 [&>button]:min-w-0 [&_span]:whitespace-nowrap">
           <button
             aria-current={activeTab === "daily" ? "page" : undefined}
-            onClick={() => { setShowGantt(false); setActiveTab("daily"); }}
+            onClick={() => setActiveTab("daily")}
             className={`flex-1 flex flex-col items-center justify-center h-full space-y-1 md:space-y-2 transition-all duration-300 ${activeTab === "daily" ? "text-blue-600 -translate-y-1 md:-translate-y-2" : "text-slate-400 hover:text-slate-500"}`}
           >
             <div
@@ -4627,6 +4625,16 @@ function SessionApp({ session, logout, initialSample }: { session?: FamilySessio
             <span className="text-[10px] md:text-sm lg:text-base font-bold">
               学習
             </span>
+          </button>
+          <button
+            aria-current={activeTab === "schedule" ? "page" : undefined}
+            onClick={() => { setScheduleOpened(true); setActiveTab("schedule"); }}
+            className={`flex-1 flex flex-col items-center justify-center h-full space-y-1 md:space-y-2 transition-all duration-300 ${activeTab === "schedule" ? "text-blue-600 -translate-y-1 md:-translate-y-2" : "text-slate-400 hover:text-slate-500"}`}
+          >
+            <div className={`p-1.5 md:p-3 rounded-xl md:rounded-2xl ${activeTab === "schedule" ? "bg-blue-50" : ""}`}>
+              <CalendarIcon className="w-[22px] h-[22px] md:w-6 md:h-6 lg:w-7 lg:h-7" strokeWidth={activeTab === "schedule" ? 2.5 : 2} />
+            </div>
+            <span className="text-[10px] md:text-sm lg:text-base font-bold">スケジュール</span>
           </button>
           <button
             aria-current={activeTab === "achievements" ? "page" : undefined}
