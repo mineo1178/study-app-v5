@@ -15,6 +15,9 @@ const ref=(db=one.db)=>doc(db,'families',family,'tasks',task.id),load=async(db=o
 describe('display binding with unchanged production Rules',()=>{
  beforeAll(async()=>{await seedFamily(family,['alice','bob']);await setDoc(ref(),task);});
  afterAll(async()=>{await Promise.all([one,two,bob,outsider].map(async c=>{await terminate(c.db);await deleteApp(c.app);}));});
+ it('shows the same automatic name on independent devices without persisting a binding',async()=>{
+  for(const db of [one.db,two.db]){const live=await load(db);expect(taskDisplayName(projectBinding(live,currentBinding(live,'alice')))).toBe('確認テスト ADVANCE（火山と地震）');expect(live).toEqual(task);}
+ });
  it('saves only the binding and restores it on a second device for the same account',async()=>{
   const id=bindingCandidates(task).find(m=>m.difficulty==='ADVANCE')!.materialId;
   await saveMaterialBinding(one.db,family,'alice',task,0,id,()=>true);
@@ -37,6 +40,7 @@ describe('display binding with unchanged production Rules',()=>{
  it('clears without losing other accounts, rejects account switches, scope changes and nonmembers',async()=>{
   await saveMaterialBinding(one.db,family,'alice',task,2,null,()=>true);
   const live=await load();expect(currentBinding(live,'alice')?.materialId).toBeNull();expect(currentBinding(live,'bob')?.materialId).not.toBeNull();
+  expect(taskDisplayName(projectBinding(live,currentBinding(live,'alice')))).toBe('確認テスト ADVANCE（火山と地震）');
   await expect(saveMaterialBinding(one.db,family,'alice',task,3,null,()=>false)).rejects.toThrow(/利用者/);
   await updateDoc(ref(),{unit:'第11回',_writeVersion:increment(1)});
   await expect(saveMaterialBinding(one.db,family,'alice',task,3,null,()=>true)).rejects.toThrow(/登録情報/);

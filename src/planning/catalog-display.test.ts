@@ -20,11 +20,11 @@ describe('catalog-derived display facts',()=>{
    if(name==='レベルアッププリント'){expect(taskDisplayName(t)).toContain('SSクラス対象');expect(taskDisplayName(t)).not.toContain('STANDARD');}
   }
  });
- it('keeps all A/B/S legacy bindings unconfirmed while showing explicitly marked candidate facts',()=>{
+ it('uses the user-approved abbreviation rule for a unique verified PDF',()=>{
   for(const letter of ['A','B','S']){
-   const t=task('確認テスト'+letter),before=structuredClone(t);
-   expect(catalogMaterialDisplay(t)).toBeNull();expect(catalogCandidateInfo(t)).toEqual({label:'候補資料：確認テスト（火山と地震）／対応未確認',count:3});
-   expect(taskDisplayName(t)).toContain('種類未確認');expect(t).toEqual(before);
+   const t=task('確認テスト'+letter),before=structuredClone(t),difficulty={A:'ADVANCE',B:'BASIC',S:'STANDARD'}[letter];
+   expect(catalogMaterialDisplay(t)?.label).toBe('確認テスト '+difficulty+'（火山と地震）');expect(catalogCandidateInfo(t)).toBeNull();
+   expect(taskDisplayName(t)).not.toContain('未確認');expect(t).toEqual(before);
   }
  });
  it('does not reinterpret book sections or change task ordering',()=>{

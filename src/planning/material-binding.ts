@@ -17,13 +17,28 @@ export function currentBinding(t:PlanningTask,uid:string){return readBinding(t.m
 export function bindingMaterial(t:PlanningTask,b:MaterialBinding|null|undefined){
  return b?.materialId&&b.taskIdentity===materialTaskIdentity(t)?bindingCandidates(t).find(m=>m.materialId===b.materialId)??null:null;
 }
+// User-approved abbreviation rule (v1.89.29), applied only to a unique verified PDF.
+// A saved user selection or explicit material identity always takes precedence.
+export function automaticBindingMaterial(t:PlanningTask,candidates=bindingCandidates(t)){
+ if(t.displayMaterialBinding?.materialId||t.planning?.material)return null;
+ const match=/^(確認テスト|計算テスト)([ABS])$/i.exec(t.title.normalize('NFKC').replace(/\s+/g,''));
+ if(!match||!bindingFamily(t))return null;
+ const registered=/(確認テスト|計算テスト)([ABS])$/i.exec(t.materialName.normalize('NFKC').replace(/\s+/g,''));
+ if(registered&&(registered[1]!==match[1]||registered[2].toUpperCase()!==match[2].toUpperCase()))return null;
+ const difficulty={A:'ADVANCE',B:'BASIC',S:'STANDARD'}[match[2].toUpperCase() as 'A'|'B'|'S'];
+ const found=candidates.filter(m=>m.nameConfirmed&&m.name===match[1]&&m.difficulty===difficulty&&t.unit===`第${m.round}回`&&t.subject===m.subject);
+ return found.length===1?found[0]:null;
+}
+export function resolvedBindingMaterial(t:PlanningTask,b:MaterialBinding|null|undefined=t.displayMaterialBinding){
+ return bindingMaterial(t,b)??automaticBindingMaterial({...t,displayMaterialBinding:b??undefined});
+}
 export function nextBinding(t:PlanningTask,uid:string,previous:MaterialBinding|null,expectedRevision:number,materialId:string|null,now=new Date().toISOString()):MaterialBinding{
  if(!uid||!t.id||!Number.isFinite(Date.parse(now)))throw Error('利用者・課題・確認日時を確認してください。');
  if((previous?.revision??0)!==expectedRevision)throw Error('別の画面・端末で教材対応が更新されました。詳細を開き直してください。');
  if(materialId!==null&&!bindingCandidates(t).some(m=>m.materialId===materialId))throw Error('回・教科・教材種別に合う候補を選択してください。');
  return {schemaVersion:1,revision:expectedRevision+1,materialId,taskIdentity:materialTaskIdentity(t),confirmedBy:uid,confirmedAt:now};
 }
-export function projectBinding(t:PlanningTask,b:MaterialBinding|null):PlanningTask{return {...t,displayMaterialBinding:b&&bindingMaterial(t,b)?b:undefined};}
+export function projectBinding(t:PlanningTask,b:MaterialBinding|null):PlanningTask{return {...t,displayMaterialBinding:b??undefined};}
 export function bindingDiff(t:PlanningTask,b:MaterialBinding,projectId:string,familyId:string){
  return {schemaVersion:1,kind:'material-binding-diff',exportedAt:new Date().toISOString(),catalogSync:'pending',projectId,familyId,uid:b.confirmedBy,changes:[{taskId:t.id,unit:t.unit,subject:t.subject,category:t.category,originalMaterialName:t.materialName,originalTitle:t.title,binding:b,evidence:'利用者が教材を確認して選択（自動照合ではない）'}]};
 }

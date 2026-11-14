@@ -1,3 +1,6 @@
+import {bindingFamily} from './planning/material-binding';
+import {useMaterialBindings} from './planning/use-material-bindings';
+import {taskDisplayName} from './planning/material-display';
 import {archiveTasks,restoreTask,isDeletedTask,updateTaskSafely,taskUpdateBase,createTasksSafely} from './task-safety';
 import {DeletedTasks,type DeletedTask} from './components/DeletedTasks';
 import { studyTargetAverage } from "./planning/target-time";
@@ -180,7 +183,7 @@ if (hasFirebaseConfig) {
 // ==========================================
 
 const FAMILY_ID = "oomine-study-2026";
-const APP_VERSION = "v1.89.28";
+const APP_VERSION = "v1.89.29";
 
 // Firestore Path 固定（変更禁止）
 // 実DB構造:
@@ -1224,6 +1227,7 @@ const TaskCard = ({ task, cycleStatus, setDetailTaskId }: any) => {
 
 const TaskDetailModal = ({
   task,
+  displayName,
   onClose,
   updateLocalTask,
   syncTaskToCloud,
@@ -1257,7 +1261,7 @@ const TaskDetailModal = ({
               </span>
             </div>
             <h3 className="text-lg md:text-xl lg:text-2xl font-black text-slate-800 leading-tight pr-4 md:pr-6">
-              {task.title}
+              {displayName ?? task.title}
             </h3>
           </div>
           <button
@@ -3300,6 +3304,7 @@ function SessionApp({ session, logout, initialSample }: { session?: FamilySessio
   const [isAddModalOpen, setAddModalOpen] = useState(false);
   const [selectedUnit, setSelectedUnit] = useState<string | null>(null);
   const [detailTaskId, setDetailTaskId] = useState<string | null>(null);
+  const detailMaterials = useMaterialBindings(db,FAMILY_ID,user?.uid??'sample',isSampleMode,planningActive,tasks.filter(t=>t.id===detailTaskId));
 
   const [confirmModalData, setConfirmModalData] = useState<{
     title: string;
@@ -4705,6 +4710,7 @@ function SessionApp({ session, logout, initialSample }: { session?: FamilySessio
 
       {detailTaskId && tasks.some(t=>t.id===detailTaskId) && (
         <TaskDetailModal
+          displayName={detailMaterials.tasks[0]&&bindingFamily(detailMaterials.tasks[0])?taskDisplayName(detailMaterials.tasks[0]):undefined}
           allTasks={tasks}
           task={tasks.find((t: Task) => t.id === detailTaskId)!}
           onClose={() => setDetailTaskId(null)}

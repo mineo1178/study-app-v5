@@ -15,7 +15,7 @@ describe('evidence-based print display, without changing task identity',()=>{
  it('recognizes the verified science 12 PDF metadata without binding a legacy task',()=>{
   expect(science).toMatchObject({grade:5,term:'lower',name:'確認テスト',topic:'火山と地震',difficulty:'ADVANCE'});
   expect(taskDisplayName(bound('verified'))).toBe('確認テスト ADVANCE（火山と地震）');
-  expect(taskDisplayName(task('legacy'))).toBe('確認テスト（種類未確認）／旧登録 A（対応未確認）');
+  expect(taskDisplayName(task('legacy'))).toBe('確認テスト ADVANCE（火山と地震）');
  });
  it.each(['A','B','S'])('does not infer a difficulty from legacy %s',suffix=>{
   const t=task('legacy','確認テスト'+suffix),before=structuredClone(t);
@@ -30,7 +30,7 @@ describe('evidence-based print display, without changing task identity',()=>{
   const calc=VERIFIED_PRINT_MATERIALS.find(m=>m.round===12&&m.name==='計算テスト'&&m.difficulty==='STANDARD')!;
   const t={...bound('calc',calc.materialId),subject:'math',title:'計算テストS',materialName:'プリント - 計算テストS'};
   expect(taskDisplayName(t)).toBe('計算テスト STANDARD');
-  expect(taskDisplayName({...t,planning:undefined})).toContain('計算テスト（種類未確認）');
+  expect(taskDisplayName({...t,planning:undefined})).toBe('計算テスト STANDARD');
  });
  it('groups verified types and sorts BASIC, STANDARD, ADVANCE using evidence, not shorthand',()=>{
   const docs=VERIFIED_PRINT_MATERIALS.filter(m=>m.round===12&&m.subject==='science');
@@ -44,7 +44,7 @@ describe('evidence-based print display, without changing task identity',()=>{
  it('keeps unknown rows distinct and stable across reload/order permutations',()=>{
   const tasks=['S','A','B'].map(s=>task('unknown-'+s,'確認テスト'+s));
   expect(ganttRows(tasks,null).map(r=>[r.key,r.label])).toEqual(ganttRows([...tasks].reverse(),null).map(r=>[r.key,r.label]));
-  expect(ganttRows(tasks,null).filter(r=>r.kind==='task').map(r=>r.label)).toEqual(['旧登録 A（対応未確認）','旧登録 B（対応未確認）','旧登録 S（対応未確認）']);
+  expect(ganttRows(tasks,null).filter(r=>r.kind==='task').map(r=>r.label)).toEqual(['確認テスト ADVANCE（火山と地震）','確認テスト BASIC（火山と地震）','確認テスト STANDARD（火山と地震）']);
  });
  it('leaves books and unrelated task names intact',()=>{
   const t={...task('book','基本問題'),category:'演習問題集',materialName:'演習問題集 - 基本問題'};

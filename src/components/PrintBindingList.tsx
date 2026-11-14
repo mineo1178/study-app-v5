@@ -1,6 +1,6 @@
 import { useState, type ComponentProps } from 'react';
 import { MaterialBindingEditor } from './MaterialBindingEditor';
-import { bindingFamily, bindingMaterial } from '../planning/material-binding';
+import { bindingFamily, bindingMaterial, resolvedBindingMaterial } from '../planning/material-binding';
 import { SUBJECTS } from '../review/model';
 import { taskDisplayName } from '../planning/material-display';
 import type { PlanningTask } from '../planning/model';
@@ -10,13 +10,13 @@ type Props = Omit<ComponentProps<typeof MaterialBindingEditor>, 'task' | 'record
 export function PrintBindingList({ tasks, record, ...editor }: Props) {
   const [onlyPending, setOnlyPending] = useState(true);
   const prints = tasks.filter(t => bindingFamily(t));
-  const pending = prints.filter(t => !bindingMaterial(t, record(t)));
-  return <details className="print-binding-list"><summary>プリントの教材対応を確認（未確認{pending.length}／全{prints.length}件）</summary>
-    <p>候補はPDFで確認した名称です。課題との対応は未確定です。旧A/B/Sだけでは判断せず、手元の教材を確認して選択・保存してください。保存した対応は同じアカウントの別端末でも共有します。</p>
-    <label><input type="checkbox" checked={onlyPending} onChange={e => setOnlyPending(e.target.checked)} />未確認だけ表示</label>
-    <p>共通教材台帳とは未同期です。確定後は各課題の差分JSONを出力できます。</p>
+  const pending = prints.filter(t => !resolvedBindingMaterial(t, record(t)));
+  return <details className="print-binding-list"><summary>プリントの教材対応を修正（例外{pending.length}／全{prints.length}件）</summary>
+    <p>台帳の正式名称を略称ルールで自動表示しています。利用者が保存した対応を優先します。例外や修正がある場合だけ選択・保存してください。</p>
+    <label><input type="checkbox" checked={onlyPending} onChange={e => setOnlyPending(e.target.checked)} />例外だけ表示</label>
+    <p>利用者が修正した対応は同じアカウントの別端末でも共有します。ローカル台帳への修正反映には各課題の差分JSONを利用できます。</p>
     <div className="print-binding-cards">{(onlyPending ? pending : prints).map(t => <details key={t.id} data-binding-task={t.id}>
-      <summary><span>{t.unit}・{SUBJECTS[t.subject as keyof typeof SUBJECTS] ?? t.subject}</span><strong>{t.materialName}</strong><small>{bindingMaterial(t, record(t)) ? '確認済み：' + taskDisplayName(t) : '対応未確認（候補は回・教科・教材種別による）'}</small></summary>
+      <summary><span>{t.unit}・{SUBJECTS[t.subject as keyof typeof SUBJECTS] ?? t.subject}</span><strong>{taskDisplayName(t)}</strong><small>{bindingMaterial(t, record(t)) ? '利用者確認済み' : resolvedBindingMaterial(t, record(t)) ? '略称ルールで自動対応' : '対応未確認：詳細で候補を確認してください'}</small></summary>
       <MaterialBindingEditor key={t.id + ':' + (record(t)?.revision ?? 0)} {...editor} task={t} record={record(t)} />
     </details>)}</div>
   </details>;
