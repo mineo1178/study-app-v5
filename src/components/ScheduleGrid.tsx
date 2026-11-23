@@ -1,7 +1,7 @@
 import {catalogCandidateInfo} from '../planning/catalog-display';
 import {deadlineLabel} from '../planning/deadline-label';
 import {taskDisplayTitle} from '../planning/material-display';
-import {adoptedDay,adoptedAudit} from '../planning/schedule-layers';
+import {adoptedDay,adoptedAudit,previewScheduleRanges} from '../planning/schedule-layers';
 import type {RecoverySchedule} from '../planning/recovery-schedule';
 import {learningAlerts} from '../planning/learning-alerts';
 import {EventRow} from './EventRow';
@@ -31,12 +31,13 @@ export function ScheduleGrid({recovery,tasks,plan,today,start,span,onStart,onSpa
  const [expanded,setExpanded]=useState<Set<string>>(()=>new Set()),scroll=useRef<HTMLDivElement>(null),days=useMemo(()=>Array.from({length:span},(_,i)=>addDays(start,i)),[start,span]);
  const identity=planIdentity(plan),totals=progressSummary(tasks,plan,today);
  const reference=referenceSummary(tasks,plan,start,days.at(-1)!);
+ const proposalAllocations=previewScheduleRanges(tasks,plan,proposal)??recovery.allocations;
  const groupKeys=useMemo(()=>ganttRows(tasks,plan).filter(r=>r.kind!=='task').map(r=>r.key),[tasks,plan]);
  const collapsed=useMemo(()=>new Set(groupKeys.filter(key=>!expanded.has(key))),[groupKeys,expanded]);
  const rows=useMemo(()=>ganttRows(tasks,plan,collapsed),[tasks,plan,collapsed]);
  useEffect(()=>{const el=scroll.current;if(!el)return;const axis=el.querySelector('.sheet-axis'),cell=el.querySelector('.sheet-axis .sheet-today');if(!axis||!cell)return;const left=axis.getBoundingClientRect().left-el.getBoundingClientRect().left+el.scrollLeft,offset=cell.getBoundingClientRect().left-axis.getBoundingClientRect().left,fixed=(el.querySelector('.sheet-name')?.getBoundingClientRect().width??0)+(el.querySelector('.wbs-progress')?.getBoundingClientRect().width??0);el.scrollLeft=span===29?Math.max(0,left+offset-fixed-(Math.max(74,el.clientWidth-fixed)-74)/2):0;},[start,span,centerKey]);
  const toggle=(key:string)=>setExpanded(old=>{const next=new Set(old);if(next.has(key))next.delete(key);else next.add(key);return next;});
- function renderRow(row:GanttRow){const counts=taskCounts(row.tasks),indicators=lagIndicators(row.tasks,plan,today,row.kind!=='task'),task=row.task,audits=row.tasks.map(t=>adoptedAudit(t,plan,calendar)),facts=days.map(day=>({...gridDay(row.tasks,plan,day),planned:row.tasks.some(t=>adoptedDay(t,plan,day))})),suggestions=recovery.allocations.filter(a=>row.tasks.some(t=>t.id===a.taskId)),progress=task?wbsProgress(task,plan):null;
+ function renderRow(row:GanttRow){const counts=taskCounts(row.tasks),indicators=lagIndicators(row.tasks,plan,today,row.kind!=='task'),task=row.task,audits=row.tasks.map(t=>adoptedAudit(t,plan,calendar)),facts=days.map(day=>({...gridDay(row.tasks,plan,day),planned:row.tasks.some(t=>adoptedDay(t,plan,day))})),suggestions=proposalAllocations.filter(a=>row.tasks.some(t=>t.id===a.taskId)),progress=task?wbsProgress(task,plan):null;
  const alerts=learningAlerts(row.tasks,plan,calendar,today),warning=task&&alerts.rows[0]?deadlineLabel(alerts.rows[0]):null,candidate=task?catalogCandidateInfo(task):null;
  const roundDeadline=row.kind==='unit'?automaticDeadline(row.label,calendar,plan?.capacities):null,taskDue=alerts.rows.filter(r=>r.deadline.confirmed&&r.deadline.day).sort((a,b)=>a.deadline.day!.localeCompare(b.deadline.day!))[0];
  const deadline=roundDeadline?(!roundDeadline.day||!roundDeadline.confirmed)&&taskDue?{...roundDeadline,day:taskDue.deadline.day,confirmed:true,basis:taskDue.deadline.source,taskSpecific:true}:{...roundDeadline,taskSpecific:false}:null;

@@ -2,6 +2,7 @@ import {describe,it,expect} from 'vitest';
 import {ganttRows,contiguousRuns,gridDay,gridSummary,taskCounts,compareRounds} from './gantt-grid';
 import {scheduleTask,scheduleFixture} from '../../tests/schedule-fixture';
 import {emptyPlan} from './model';
+import {adoptedDay,previewScheduleRanges} from './schedule-layers';
 describe('expanded factual Gantt grid',()=>{
  it('shows every hierarchy and task initially; collapse is explicit and reversible',()=>{const tasks=[scheduleTask,{...scheduleTask,id:'next',unit:'第12回',subject:'japanese'}],all=ganttRows(tasks,null);expect(all.filter(r=>r.kind==='task').map(r=>r.task?.id)).toEqual(['next','normal']);expect(all.filter(r=>r.kind!=='task')).toHaveLength(4);const folded=ganttRows(tasks,null,new Set(all.filter(r=>r.kind==='unit').map(r=>r.key)));expect(folded).toHaveLength(2);expect(ganttRows(tasks,null)).toHaveLength(all.length);});
  it('does not leave scope-only empty rounds after task removal',()=>{const p=scheduleFixture();p.scope.push({unit:'第12回',subjects:['math'],deadline:null});const rows=ganttRows([scheduleTask],p);expect(rows.find(r=>r.label==='第12回')).toBeUndefined();expect(rows.filter(r=>r.kind==='task')).toHaveLength(1);});
@@ -9,6 +10,38 @@ describe('expanded factual Gantt grid',()=>{
  it('does not generate bars or percentages for absent planning',()=>{expect(gridDay([scheduleTask],null,'2026-11-12')).toMatchObject({planned:false,actual:false});expect(gridSummary([scheduleTask],null,'2026-11-12')).toMatchObject({progress:null,end:null,target:null});});
  it('uses factual plan dates and independent history dates',()=>{const p=scheduleFixture(),task={...scheduleTask,history:[{duration:120,endAt:Date.parse('2026-11-13T03:00:00Z')}]};expect(gridDay([task],p,'2026-11-12')).toMatchObject({planned:true,actual:false,knownMinutes:15});expect(gridDay([task],p,'2026-11-13')).toMatchObject({planned:false,actual:true,seconds:120});expect(gridDay([task],p,'2026-11-14')).toMatchObject({planned:false,actual:false});});
  it('does not invent group work progress or dates without weights and complete settings',()=>{expect(gridSummary([{...scheduleTask,status:'completed'}],null,'2026-11-12').progress).toBeNull();const t={...scheduleTask,planning:{...emptyPlan(),endDay:'2026-11-15'}};expect(gridSummary([t,{...scheduleTask,id:'unknown'}],null,'2026-11-12').end).toBeNull();});
+});
+
+describe('native plan ranges in the Gantt',()=>{
+ const withGaps=()=>{
+  const plan=scheduleFixture(),item=plan.items[0];
+  item.endDay='2026-11-14';
+  item.ranges.push(
+   {id:'second',label:'直し',units:1,minutes:8,day:'2026-11-14'},
+   {id:'unplaced',label:'残り',units:1,minutes:30,day:null},
+  );
+  item.dailyWork['2026-11-14']={units:1,minutes:8};
+  return plan;
+ };
+ it('previews only dated ranges of matching, open tasks without adopting them',()=>{
+  const candidate=withGaps();
+  expect(previewScheduleRanges([scheduleTask],null,candidate)).toMatchObject([
+   {taskId:'normal',day:'2026-11-12',minutes:15},
+   {taskId:'normal',day:'2026-11-14',minutes:8},
+  ]);
+  expect(previewScheduleRanges([scheduleTask],candidate,candidate)).toEqual([]);
+  expect(previewScheduleRanges([{...scheduleTask,status:'completed'}],null,candidate)).toEqual([]);
+  expect(previewScheduleRanges([],null,candidate)).toEqual([]);
+  expect(adoptedDay(scheduleTask,null,'2026-11-12')).toBe(false);
+ });
+ it('keeps gaps after adoption and preserves explicit manual intervals',()=>{
+  const plan=withGaps(),days=['2026-11-12','2026-11-13','2026-11-14'];
+  expect(days.map(day=>adoptedDay(scheduleTask,plan,day))).toEqual([true,false,true]);
+  const manual={...scheduleTask,planning:{...emptyPlan(),wbs:{
+   taskId:scheduleTask.id,startDay:days[0],endDay:days[2],progress:null,updatedBy:'test',updatedAt:1,
+  }}};
+  expect(days.map(day=>adoptedDay(manual,plan,day))).toEqual([true,true,true]);
+ });
 });
 
 it('sorts round numbers descending and subjects in fixed order without reordering materials/tasks',()=>{const tasks=[{...scheduleTask,id:'s',unit:'第12回',subject:'social'},{...scheduleTask,id:'m1',unit:'第12回',subject:'math',materialName:'後からの名称'},{...scheduleTask,id:'m2',unit:'第12回',subject:'math',materialName:'先に並ばない名称'},{...scheduleTask,id:'j',unit:'第12回',subject:'japanese'},{...scheduleTask,id:'c',unit:'第12回',subject:'science'},{...scheduleTask,id:'nine',unit:'第9回'},{...scheduleTask,id:'ten',unit:'第10回'}];const rows=ganttRows(tasks,null);expect(rows.filter(r=>r.kind==='unit').map(r=>r.label)).toEqual(['第12回','第10回','第9回']);expect(rows.filter(r=>r.kind==='subject'&&r.key.includes('第12回')).map(r=>r.label)).toEqual(['math','japanese','science','social']);expect(rows.filter(r=>r.kind==='task'&&r.task?.subject==='math'&&r.task.unit==='第12回').map(r=>r.task?.id)).toEqual(['m1','m2']);expect(['第９回','第１２回','第10回'].sort(compareRounds)).toEqual(['第１２回','第10回','第９回']);});
