@@ -161,6 +161,24 @@ service cloud.firestore {
           allow update: if ownSchedule() && pairedLedger(request.resource.data) && request.resource.data.revision > resource.data.revision;
           allow delete: if false;
         }
+        match /syncState/current {
+          function validSync(s) {
+            return s.keys().hasAll(['schemaVersion','status','syncedAt','versionId','unplaced','waiting','conflicts','reasons','source','appliedTaskIds','waitingTaskIds'])
+              && s.keys().hasOnly(['schemaVersion','status','syncedAt','versionId','unplaced','waiting','conflicts','reasons','source','appliedTaskIds','waitingTaskIds'])
+              && s.schemaVersion == 1 && s.status in ['synced','pending','partial','error']
+              && (s.syncedAt == null || (s.syncedAt is int && s.syncedAt >= 0))
+              && (s.versionId == null ? !existsAfter(pointerPath()) : s.versionId == getAfter(pointerPath()).data.versionId)
+              && s.unplaced is int && s.unplaced >= 0 && s.unplaced <= 1000000
+              && s.waiting is int && s.waiting >= 0 && s.waiting <= 100
+              && s.conflicts is int && s.conflicts >= 0 && s.conflicts <= 100
+              && (s.source == null || s.source is map) && s.reasons is list && s.reasons.size() <= 12
+              && s.appliedTaskIds is list && s.appliedTaskIds.size() <= 100
+              && s.waitingTaskIds is list && s.waitingTaskIds.size() == s.waiting;
+          }
+          allow read: if ownSchedule();
+          allow create, update: if ownSchedule() && validSync(request.resource.data);
+          allow delete: if false;
+        }
       }
       match /studyPlanning/{uid} {
         allow read: if isFamilyMember(familyId) && request.auth.uid == uid;

@@ -1,13 +1,14 @@
 import {validateQuestionPlan,readyScope,type QuestionPlan} from './question-progress';
 import { oldItem,reconciliationErrors } from './official-schedule';
 import { parseProposalImport, type ProposalImport } from './official-schema';
+import {AUTO_SCHEDULE_ID,isSyncProvenance,type ScheduleSyncProvenance} from './schedule-sync-state';
 import type { PlanningTask } from './model';
 import { difference, validDay } from './model';
 import { SUBJECTS, type Subject } from '../review/model';
 export type ScheduleRange = { id: string; label: string; units: number; minutes: number; day: string | null };
 export type ScheduleStage={phase:'first_and_marking'|'correction'|'final_check';day:string;minutes:number;conditional:boolean};
 export type ScheduleItem = { questionPlan?:QuestionPlan;questionGoalCandidate?:QuestionPlan; stages?:ScheduleStage[]; taskId: string; unit: string; subject: Subject; category: string; materialName: string; materialId: string; title: string; endDay: string | null; deadline: string | null; ranges: ScheduleRange[]; dailyWork: Record<string,{units:number;minutes:number}>; baseline: { basisStatus?:'unmeasured'|'measured_work'; id:string; targetDay:string|null; daily:Record<string,number>; evidence:{provisional:boolean;historyCount:number;estimatedMinutes:number|null;method:string;conditions:string[];manualAdjustmentMinutes:number|null;historyRefs?:string[]} } };
-export type LearningSchedule = { baseVersion?:string|null; proposalImport?:ProposalImport; schemaVersion:'learning-schedule/1'; planId:string; revision:number; generatedAt:string; accountBinding:string|null; provisional:boolean; notes:string[]; gaps:string[]; scope:{unit:string;subjects:Subject[];deadline:string|null}[]; capacities:Record<string,number>; items:ScheduleItem[] };
+export type LearningSchedule = { sync?:ScheduleSyncProvenance; baseVersion?:string|null; proposalImport?:ProposalImport; schemaVersion:'learning-schedule/1'; planId:string; revision:number; generatedAt:string; accountBinding:string|null; provisional:boolean; notes:string[]; gaps:string[]; scope:{unit:string;subjects:Subject[];deadline:string|null}[]; capacities:Record<string,number>; items:ScheduleItem[] };
 export type ScheduleActual = { done:boolean; graded:boolean; corrected:boolean; actualDay:string|null; recordedAt:number; label:string; units:number };
 const obj=(v:unknown):v is Record<string,unknown>=>!!v&&typeof v==='object'&&!Array.isArray(v);
 const text=(v:unknown,max=200):v is string=>typeof v==='string'&&!!v.trim()&&v.length<=max;
@@ -22,7 +23,8 @@ export const MAX_SCHEDULE_BYTES=500000;
 export function parseSchedule(raw:string):LearningSchedule {
  if(new TextEncoder().encode(raw).length>MAX_SCHEDULE_BYTES)throw new Error('計画ファイルは500KBまでです。');
  let p:unknown;try{p=JSON.parse(raw);}catch{throw new Error('計画JSONの構文を確認してください。');}
- if(!obj(p)||!keys(p,['schemaVersion','planId','revision','generatedAt','accountBinding','provisional','notes','gaps','scope','capacities','items','proposalImport','baseVersion'])||p.schemaVersion!=='learning-schedule/1'||!scheduleId(p.planId)||!Number.isSafeInteger(p.revision)||Number(p.revision)<1||Number(p.revision)>1000000||!text(p.generatedAt,40)||!Number.isFinite(Date.parse(p.generatedAt))||(p.accountBinding!==null&&!(typeof p.accountBinding==='string'&&/^[a-f0-9]{64}$/.test(p.accountBinding)))||typeof p.provisional!=='boolean'||!strings(p.notes)||!strings(p.gaps)||!Array.isArray(p.scope)||!p.scope.length||p.scope.length>20||!obj(p.capacities)||Object.keys(p.capacities).length>366||!Array.isArray(p.items)||(!p.items.length&&!p.proposalImport)||p.items.length>100)throw new Error('schemaVersion・planId・revision・対象・学習可能時間を確認してください。');
+ if(!obj(p)||!keys(p,['schemaVersion','planId','revision','generatedAt','accountBinding','provisional','notes','gaps','scope','capacities','items','proposalImport','baseVersion','sync'])||p.schemaVersion!=='learning-schedule/1'||!scheduleId(p.planId)||!Number.isSafeInteger(p.revision)||Number(p.revision)<1||Number(p.revision)>1000000||!text(p.generatedAt,40)||!Number.isFinite(Date.parse(p.generatedAt))||(p.accountBinding!==null&&!(typeof p.accountBinding==='string'&&/^[a-f0-9]{64}$/.test(p.accountBinding)))||typeof p.provisional!=='boolean'||!strings(p.notes)||!strings(p.gaps)||!Array.isArray(p.scope)||!p.scope.length||p.scope.length>20||!obj(p.capacities)||Object.keys(p.capacities).length>366||!Array.isArray(p.items)||(!p.items.length&&!p.proposalImport)||p.items.length>100)throw new Error('schemaVersion・planId・revision・対象・学習可能時間を確認してください。');
+ if(p.sync!==undefined&&!isSyncProvenance(p.sync))throw Error('同期元と適用根拠を確認してください。');
  if(p.scope.some(s=>!obj(s)||!keys(s,['unit','subjects','deadline'])||!text(s.unit,100)||!Array.isArray(s.subjects)||!s.subjects.length||s.subjects.some(v=>typeof v!=='string'||!Object.hasOwn(SUBJECTS,v))||!day(s.deadline)))throw new Error('対象の回・教科・締切の形式が不正です。');
  if(Object.entries(p.capacities).some(([d,m])=>!validDay(d)||!Number.isInteger(m)||!num(m,0,1440)))throw new Error('学習可能時間は日付ごとの0〜1440分で指定してください。');
  if(p.proposalImport!==undefined){parseProposalImport(p.proposalImport);if(!(p.baseVersion===null||typeof p.baseVersion==='string'&&p.baseVersion.length<=220))throw new Error('照合元の採用revisionを確認してください。');}
@@ -57,6 +59,41 @@ export function scheduleDiff(next:LearningSchedule,current:LearningSchedule|null
 export function stageImportConflicts(next:LearningSchedule,current:LearningSchedule|null){
  if(!next.items.some(i=>i.stages?.length))return[];
  return(current?.items??[]).flatMap(old=>{const item=next.items.find(i=>i.taskId===old.taskId),errors:string[]=[];if(old.baseline.targetDay&&(!item||canonical(item.baseline)!==canonical(old.baseline)))errors.push(old.title+'：採用済み固定目標を保持してください。');if(old.endDay&&!old.stages?.length&&(!item||item.endDay!==old.endDay))errors.push(old.title+'：既存採用予定との競合があります。');return errors;});
+}
+export function scheduleMergeErrors(next:LearningSchedule,tasks:PlanningTask[],current:LearningSchedule|null,binding:string){
+ const version=current?current.planId+'--r'+current.revision:null;
+ if(!next.sync||next.planId!==AUTO_SCHEDULE_ID||next.baseVersion!==version||
+    canonical(next.proposalImport)!==canonical(current?.proposalImport)){
+  return ['同期元の採用計画が一致しません。最新状態からやり直してください。'];
+ }
+ const applied=new Set(next.sync.decisions.filter(d=>d.kind==='applied').map(d=>d.taskId));
+ const old=new Map(current?.items.map(i=>[i.taskId,i]));
+ const fresh=new Map(next.items.map(i=>[i.taskId,i]));
+ const errors:string[]=[];
+ for(const item of old.values()){
+  const merged=fresh.get(item.taskId);
+  if(!merged||!applied.has(item.taskId)&&canonical(merged)!==canonical(item)||
+     canonical(merged.baseline)!==canonical(item.baseline)||merged.deadline!==item.deadline){
+   errors.push(item.title+'：既存予定・固定目標・期限の保持を確認してください。');
+  }
+ }
+ for(const id of applied){
+  const item=fresh.get(id),task=tasks.find(t=>t.id===id);
+  if(!item||!task||task.status==='completed'||task.isRunning||(task.currentDuration??0)>0||
+     item.stages?.length||!Object.keys(item.dailyWork).length||
+     canonical(item.baseline)!==canonical(old.get(id)?.baseline??oldItem(task).baseline)){
+   errors.push(id+'：同期対象の課題と固定目標を確認してください。');
+  }
+ }
+ if(next.items.some(i=>!old.has(i.taskId)&&!applied.has(i.taskId)))errors.push('根拠のない予定追加があります。');
+ if(current?.scope.some(s=>!next.scope.some(n=>n.unit===s.unit&&n.deadline===s.deadline&&s.subjects.every(subject=>n.subjects.includes(subject))))){
+  errors.push('採用済み計画の回別期限を保持してください。');
+ }
+ // Historical approved stages remain byte-for-byte identical. They must not be
+ // re-evaluated as new work for tasks completed since the old plan was adopted.
+ const checked={...next,proposalImport:undefined,items:next.items.map(i=>applied.has(i.taskId)?i:{...i,stages:undefined})};
+ const officialErrors=next.proposalImport?reconciliationErrors(next.proposalImport,tasks,binding):[];
+ return [...errors,...officialErrors,...scheduleErrors(checked,tasks,binding),...stageImportConflicts(next,current)];
 }
 export async function scheduleDigest(plan:LearningSchedule){const bytes=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(canonical(plan)));return Array.from(new Uint8Array(bytes),b=>b.toString(16).padStart(2,'0')).join('');}
 export async function accountKey(project:string,family:string,uid:string){return scheduleDigest({project,family,uid} as unknown as LearningSchedule);}

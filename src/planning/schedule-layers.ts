@@ -7,7 +7,7 @@ import type {EventCalendar} from './events';
 
 export function adoptedDay(task:PlanningTask,plan:LearningSchedule|null,day:string){
  const manual=task.planning?.wbs;
- const item=plan?.proposalImport?undefined:plan?.items.find(i=>i.taskId===task.id);
+ const item=plan?.proposalImport&&!plan.sync?undefined:plan?.items.find(i=>i.taskId===task.id);
  if(!manual?.startDay&&!manual?.endDay&&!item?.stages?.length&&item?.ranges.some(range=>range.day)){
   return Object.hasOwn(item.dailyWork,day);
  }

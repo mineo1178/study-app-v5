@@ -1,6 +1,6 @@
 import {readOfficialFile} from './official-schedule';
 import {referencePlan} from './schedule-reference';
-import {MAX_SCHEDULE_BYTES,canonical,parseSchedule,scheduleErrors,stageImportConflicts,type LearningSchedule} from './schedule';
+import {MAX_SCHEDULE_BYTES,canonical,parseSchedule,scheduleErrors,scheduleMergeErrors,stageImportConflicts,type LearningSchedule} from './schedule';
 import type {PlanningTask} from './model';
 export {MAX_SCHEDULE_BYTES} from './schedule';
 
@@ -51,7 +51,7 @@ function approvedStages(plan:LearningSchedule,tasks:PlanningTask[],current:Learn
  }
 }
 
-export function prepareScheduleFile(raw:string,tasks:PlanningTask[],current:LearningSchedule|null,binding:string){
+export function prepareScheduleFile(raw:string,tasks:PlanningTask[],current:LearningSchedule|null,binding:string,autoSync=false){
  if(!binding)throw Error('認証アカウントを確認してください。');
  if(new TextEncoder().encode(raw).length>MAX_SCHEDULE_BYTES)throw Error('計画ファイルは500KBまでです。');
  let data:unknown;
@@ -61,7 +61,8 @@ export function prepareScheduleFile(raw:string,tasks:PlanningTask[],current:Lear
  if(native){
   plan=parseSchedule(raw);
   if(!plan.accountBinding||plan.accountBinding!==binding)throw Error('計画のアカウント識別子が現在の認証アカウントと一致しません。');
-  if(plan.proposalImport&&!plan.items.some(item=>item.stages?.length)&&(plan.proposalImport.source.planningPolicy.adoptionDecision as {prioritySelectionStatus?:string}|undefined)?.prioritySelectionStatus!=='multi_round_recovery_v1'){
+  if(plan.sync&&!autoSync)throw Error('自動同期で適用した計画は再取込できません。');
+  if(!autoSync&&plan.proposalImport&&!plan.items.some(item=>item.stages?.length)&&(plan.proposalImport.source.planningPolicy.adoptionDecision as {prioritySelectionStatus?:string}|undefined)?.prioritySelectionStatus!=='multi_round_recovery_v1'){
    plan=referencePlan(plan.proposalImport.source,tasks,current,binding);
    referenceOnly=true;
   }
@@ -74,11 +75,11 @@ export function prepareScheduleFile(raw:string,tasks:PlanningTask[],current:Lear
  if(same&&canonical(current)!==canonical(plan))throw Error('同じrevisionの内容が変更されています。revisionを増やしてください。');
  if(current?.planId===plan.planId&&plan.revision<current.revision)throw Error('旧revisionは取り込めません。');
  const duplicate=!!same&&canonical(current)===canonical(plan);
- const errors=[...scheduleErrors(plan,tasks,binding),...stageImportConflicts(plan,current)];
+ const errors=autoSync?scheduleMergeErrors(plan,tasks,current,binding):[...scheduleErrors(plan,tasks,binding),...stageImportConflicts(plan,current)];
  if(errors.length)throw Error(errors.join('\n'));
  if(!duplicate&&plan.proposalImport&&plan.baseVersion!==(current?current.planId+'--r'+current.revision:null))throw Error('採用済み計画が更新されています。最新計画からファイルを更新してください。');
  const decision=plan.proposalImport?.source.planningPolicy.adoptionDecision as {status?:string}|undefined;const requiresApproval=!referenceOnly&&!duplicate;if(requiresApproval&&decision?.status==='guardian_review_required_for_schedule_revision'&&current?.planId!==plan.planId)throw Error('回復案の照合元計画が一致しません。');
- if(!referenceOnly&&(plan.items.some(item=>item.stages?.length)||(plan.proposalImport?.source.planningPolicy.adoptionDecision as {prioritySelectionStatus?:string}|undefined)?.prioritySelectionStatus==='multi_round_recovery_v1'))approvedStages(plan,tasks,current,requiresApproval||!!duplicate&&decision?.status==='guardian_review_required_for_schedule_revision');
+ if(!autoSync&&!referenceOnly&&(plan.items.some(item=>item.stages?.length)||(plan.proposalImport?.source.planningPolicy.adoptionDecision as {prioritySelectionStatus?:string}|undefined)?.prioritySelectionStatus==='multi_round_recovery_v1'))approvedStages(plan,tasks,current,requiresApproval||!!duplicate&&decision?.status==='guardian_review_required_for_schedule_revision');
  if(!referenceOnly&&!duplicate){
   const removed=current?.items.filter(old=>!plan.items.some(item=>item.taskId===old.taskId)&&(old.endDay||old.ranges.length||old.stages?.length||old.baseline.targetDay))??[];
   if(removed.length)throw Error('既存の採用予定が対象から外れます。詳細管理で確認してください。');

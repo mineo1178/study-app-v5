@@ -36,7 +36,7 @@ try {
   }
   if (!ready) throw new Error(`Emulator起動タイムアウト。ログ: ${logPath}`);
   console.log("Firestore emulator: demo-study-v182 @ 127.0.0.1:8085（本番接続なし）");
-  const test = spawn(process.execPath, [join(root, "node_modules", "vitest", "vitest.mjs"), "run", "--config", "vitest.emulator.config.ts"], {
+  const test = spawn(process.execPath, [join(root, "node_modules", "vitest", "vitest.mjs"), "run", "--config", "vitest.emulator.config.ts", ...process.argv.slice(2)], {
     cwd: root, windowsHide: true, stdio: "inherit", env: { ...process.env, FIRESTORE_EMULATOR_HOST: `127.0.0.1:${port}` },
   });
   process.exitCode = await new Promise((resolve, reject) => { test.once("error", reject); test.once("exit", (code) => resolve(code ?? 1)); });
