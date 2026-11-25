@@ -18,6 +18,10 @@ type LiveTask=PlanningTask&{_writeVersion?:number;_deletion?:unknown};
 const bindingPart=(v:unknown)=>typeof v==='string'&&/^[\w-]{1,128}$/.test(v);
 const hash=(x:unknown)=>createHash('sha256').update(canonical(x)).digest('hex');
 const reason=(error:unknown)=>error instanceof Error&&error.message.length<=160&&!/[\r\n]/.test(error.message)&&/[ぁ-龯]/.test(error.message)?error.message:'認証・通信または設定を確認してください。';
+const errorCode=(error:unknown)=>{
+ const code=(error as {code?:unknown}|null)?.code;
+ return typeof code==='string'&&/^[\w/-]{1,80}$/.test(code)?code:null;
+};
 
 async function localJson<T>(path:string):Promise<T|null>{
  try{return JSON.parse(await readFile(path,'utf8')) as T;}
@@ -36,7 +40,7 @@ async function taskStamps(config:Config,idToken:string){
   body:JSON.stringify({structuredQuery:{from:[{collectionId:'tasks'}],select:{fields:[{fieldPath:'_writeVersion'}]}}}),
   signal:AbortSignal.timeout(25000),
  });
- if(!response.ok)throw Error('本番課題の更新時刻を取得できません。再試行してください。');
+ if(!response.ok)throw Error('本番課題の更新時刻を取得できません。HTTP '+response.status);
  const rows=await response.json() as {document?:TaskStamp}[];
  return new Map(rows.flatMap(row=>row.document?[[row.document.name.split('/').at(-1)!,row.document] as const]:[]));
 }
@@ -129,7 +133,12 @@ async function synchronize(config:Config,stateDir:string,mode:string){
     const before={at:new Date(now).toISOString(),pointer:pointer??null,taskHashes:taskHashes()};
     await writeJsonAtomic(resolve(stateDir,auditId+'.before.json'),before);
     fence.taskDigests=new Map(result.plan.items.map(i=>[i.taskId,canonical(rawTasks.get(i.taskId))]));
-    await importSchedule(db,family,owner,result.plan,fence);
+    try{await importSchedule(db,family,owner,result.plan,fence);}
+    catch(error){
+     const details=error instanceof Error?error.message.replace(/[\r\n]+/g,' ').replace(/[A-Za-z0-9_-]{70,}/g,'[ID]').slice(0,220):'';
+     await writeJsonAtomic(resolve(stateDir,'LAST_TRANSACTION_ERROR.json'),{at:new Date().toISOString(),code:errorCode(error),details});
+     throw error;
+    }
     productionWrites=4;
     const [after,newRows]=await Promise.all([getDocFromServer(root),activeTasks(db,family)]);
     const updatedPointer=after.data() as SchedulePointer|undefined;
@@ -179,9 +188,9 @@ async function main(){
  const stateDir=resolve(config.integrationRoot,'04_private','schedule-sync');
  try{await synchronize(config,stateDir,mode);}
  catch(error){
-  await writeJsonAtomic(resolve(stateDir,'LAST_RUN.json'),{status:'error',at:new Date().toISOString(),mode,reason:reason(error)});
+  await writeJsonAtomic(resolve(stateDir,'LAST_RUN.json'),{status:'error',at:new Date().toISOString(),mode,code:errorCode(error),reason:reason(error)});
   throw error;
  }
 }
 
-void main().catch(error=>{console.error(reason(error));process.exitCode=1;});
+void main().catch(error=>{console.error(errorCode(error)??'',reason(error));process.exitCode=1;});
