@@ -62,6 +62,7 @@ export function prepareScheduleFile(raw:string,tasks:PlanningTask[],current:Lear
   plan=parseSchedule(raw);
   if(!plan.accountBinding||plan.accountBinding!==binding)throw Error('計画のアカウント識別子が現在の認証アカウントと一致しません。');
   if(plan.sync&&!autoSync)throw Error('自動同期で適用した計画は再取込できません。');
+  if(!autoSync&&!plan.items.length&&!plan.proposalImport)throw Error('学習可能時間のみの訂正は自動同期で取り込んでください。');
   if(!autoSync&&plan.proposalImport&&!plan.items.some(item=>item.stages?.length)&&(plan.proposalImport.source.planningPolicy.adoptionDecision as {prioritySelectionStatus?:string}|undefined)?.prioritySelectionStatus!=='multi_round_recovery_v1'){
    plan=referencePlan(plan.proposalImport.source,tasks,current,binding);
    referenceOnly=true;

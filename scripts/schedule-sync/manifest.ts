@@ -53,7 +53,7 @@ export async function readReady(root:string,now=Date.now()){
 
 export async function publishReady(root:string,path:string,observedAt:string,rounds:string[]){
  const {candidate,sha256}=await candidateAt(root,path);
- if(!candidate.accountBinding||candidate.sync||candidate.proposalImport||candidate.items.some(i=>i.stages?.length)||
+ if(!candidate.accountBinding||candidate.sync||candidate.proposalImport||candidate.confirmedCapacityDays!==undefined||candidate.items.some(i=>i.stages?.length)||
     !rounds.length||new Set(rounds).size!==rounds.length||rounds.some(r=>!candidate.scope.some(s=>s.unit===r))||
     !Number.isFinite(Date.parse(observedAt))||Date.parse(observedAt)>Date.parse(candidate.generatedAt)||Date.parse(candidate.generatedAt)>Date.now()+60000){
   throw Error('検証済みの部分計画・本番データ取得日時・対象回を指定してください。');

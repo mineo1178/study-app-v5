@@ -1,4 +1,5 @@
 import {DEFAULT_CALENDAR} from './events';
+import {bookedScheduleMinutes} from './gantt-display';
 import {prepareScheduleFile} from './import-file';
 import type {PlanningTask} from './model';
 import {oldItem} from './official-schedule';
@@ -53,8 +54,10 @@ export function mergeTutorSchedule(input:SyncInput){
  const {candidate,current,source,previous,tasks,binding,today,now}=input;
  const currentVersion=versionId(current);
  const replay=previous?.source?.revision===source.revision;
+ const capacityOnly=!candidate.items.length;
  if(candidate.accountBinding!==binding||source.planId!==candidate.planId||source.revision!==candidate.revision||
-    source.baseVersion!==(candidate.baseVersion??null)||candidate.sync||candidate.proposalImport||candidate.items.some(i=>i.stages?.length)){
+    source.baseVersion!==(candidate.baseVersion??null)||candidate.sync||candidate.proposalImport||
+    candidate.confirmedCapacityDays!==undefined||candidate.items.some(i=>i.stages?.length)){
   throw Error('公開元・認証アカウント・日別範囲の計画形式を確認してください。');
  }
  if(previous?.source&&(previous.source.planId!==source.planId||previous.source.revision>source.revision||
@@ -64,6 +67,7 @@ export function mergeTutorSchedule(input:SyncInput){
  if(replay?previous.versionId!==currentVersion:source.baseVersion!==currentVersion){
   throw Error('採用元revisionが現在の本番と一致しません。最新計画から再作成してください。');
  }
+ if(capacityOnly&&!current)throw Error('学習可能時間の訂正には採用済み計画が必要です。');
  const currentItems=new Map(current?.items.map(i=>[i.taskId,i]));
  const proposed=new Map(candidate.items.map(i=>[i.taskId,i]));
  const live=new Map(tasks.map(e=>[e.task.id,e]));
@@ -106,17 +110,29 @@ export function mergeTutorSchedule(input:SyncInput){
   classify({taskId:task.id,unit:task.unit,title:task.title},'B',hasPlan||task.status==='completed'?'retained':'unplaced',hasPlan?'既存予定を保持':task.status==='completed'?'完了済み課題を保持':'今回の候補に予定なし');
  }
  const touchedDays=new Set(changed.flatMap(i=>Object.keys(i.dailyWork)));
- const capacities={...candidate.capacities,...current?.capacities};
- const minutes:Record<string,number>={};
- for(const i of nextItems.values())for(const r of dates(i))if(r.day&&touchedDays.has(r.day))minutes[r.day]=(minutes[r.day]??0)+r.minutes;
- for(const {task} of tasks){
-  if(nextItems.has(task.id)||task.status==='completed')continue;
-  const manual=oldItem(task);
-  for(const r of manual.ranges)if(r.day&&touchedDays.has(r.day))minutes[r.day]=(minutes[r.day]??0)+r.minutes;
+ const oldCapacities=current?.capacities??{};
+ const capacities={...oldCapacities};
+ const oldConfirmedDays=current?.confirmedCapacityDays??[];
+ const confirmedDays=new Set(oldConfirmedDays);
+ const capacityDays=new Set([...touchedDays,...Object.keys(candidate.capacities).filter(day=>day>=today)]);
+ for(const day of capacityDays){
+  const confirmed=input.confirmedCapacities[day];
+  const limit=confirmed??candidate.capacities[day]??oldCapacities[day];
+  if(limit!==undefined)capacities[day]=limit;
+  if(confirmed!==undefined)confirmedDays.add(day);
+  else confirmedDays.delete(day);
  }
- for(const [day,total] of Object.entries(minutes)){
-  const limit=input.confirmedCapacities[day]??capacities[day];
-  if(limit===undefined||total>limit)throw Error(day+'：既存予定と統合すると認められた学習枠を超えます。');
+ const confirmedCapacityDays=[...confirmedDays].sort();
+ const capacityChanged=canonical(capacities)!==canonical(oldCapacities)||
+  canonical(confirmedCapacityDays)!==canonical(oldConfirmedDays);
+ const savePlan=changed.length>0||capacityOnly&&!replay&&capacityChanged;
+ if(savePlan){
+  const booked=bookedScheduleMinutes(tasks.map(entry=>entry.task),nextItems.values());
+  for(const day of capacityDays){
+   if(!touchedDays.has(day)&&capacities[day]===oldCapacities[day])continue;
+   const limit=capacities[day];
+   if(limit===undefined||(booked[day]??0)>limit)throw Error(day+'：既存予定と統合すると認められた学習枠を超えます。');
+  }
  }
  const scope=structuredClone(current?.scope??[]);
  for(const item of changed){
@@ -127,11 +143,11 @@ export function mergeTutorSchedule(input:SyncInput){
   if(group)group.subjects.push(item.subject);
   else scope.push({unit:item.unit,subjects:[item.subject],deadline});
  }
- const merged:LearningSchedule|null=changed.length?{
+ const merged:LearningSchedule|null=savePlan?{
   schemaVersion:'learning-schedule/1',planId:AUTO_SCHEDULE_ID,revision:Math.max(current?.revision??0,input.autoRevision)+1,
   baseVersion:currentVersion,generatedAt:new Date(now).toISOString(),accountBinding:binding,
   provisional:candidate.provisional||!!current?.provisional,notes:candidate.notes,gaps:candidate.gaps,
-  scope,capacities,items:[...nextItems.values()],sync:{source,decisions},
+  scope,capacities,...(confirmedCapacityDays.length?{confirmedCapacityDays}:{}),items:[...nextItems.values()],sync:{source,decisions},
   ...(current?.proposalImport?{proposalImport:current.proposalImport}:{}),
  }:null;
  const plan=merged?prepareScheduleFile(JSON.stringify(merged),tasks.map(e=>e.task),current,binding,true).plan:null;

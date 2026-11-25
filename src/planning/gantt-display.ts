@@ -4,6 +4,21 @@ import { difference,aggregate,validDay,makeBaseline,planOf,type PlanningTask } f
 import { oldItem,taskIdentity } from './official-schedule';
 import { actualOf,scheduleDaily,scheduleProgress,type LearningSchedule,type ScheduleItem } from './schedule';
 export function displayItem(task:PlanningTask,plan:LearningSchedule|null){const existing=oldItem(task),native=plan?.items.find(i=>i.taskId===task.id);return native?{...native,ranges:native.ranges.length?native.ranges:existing.ranges,dailyWork:native.ranges.length?native.dailyWork:existing.dailyWork,baseline:task.planning?.targetRevisions?.some(r=>r.id===task.planning?.baseline?.id)?existing.baseline:native.baseline.targetDay||!existing.baseline.targetDay?native.baseline:existing.baseline}:existing;}
+export function bookedScheduleMinutes(tasks:PlanningTask[],items:Iterable<ScheduleItem>){
+ const minutes:Record<string,number>={};
+ const adopted=new Set<string>();
+ function add(ranges:ScheduleItem['ranges']|NonNullable<ScheduleItem['stages']>){
+  for(const {day,minutes:duration} of ranges)if(day)minutes[day]=(minutes[day]??0)+duration;
+ }
+ for(const item of items){
+  adopted.add(item.taskId);
+  add(item.stages?.length?item.stages:item.ranges);
+ }
+ for(const task of tasks)if(task.status!=='completed'&&!adopted.has(task.id)&&task.planning?.ranges?.length){
+  add(oldItem(task).ranges);
+ }
+ return minutes;
+}
 export function planRegistered(task:PlanningTask,plan:LearningSchedule|null){return !!plan?.items.some(i=>i.taskId===task.id)||!!(task.planning&&(task.planning.ranges.length||task.planning.endDay||task.planning.baseline?.targetDay));}
 export function measuredProgress(task:PlanningTask,item:ScheduleItem){if(task.status==='completed')return 100;if(task.planning?.questionMeasurement)return questionActual(task.planning.questionMeasurement)?.percent??null;const measured=item.ranges.some(r=>{const a=task.scheduleActuals?.[r.id],old=task.planning?.ranges.find(o=>o.id===r.id);return !!a||!!old&&(old.done||old.graded||old.corrected||!!old.actualDay||(old.actualSeconds??0)>0);});return measured?scheduleProgress(task,item):null;}
 export const measuredAggregate=(tasks:PlanningTask[])=>tasks.every(t=>measuredProgress(t,displayItem(t,null))!==null)?aggregate(tasks):null;
