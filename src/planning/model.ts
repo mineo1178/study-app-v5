@@ -44,8 +44,7 @@ export function difference(progress: number | null, daily: Record<string, number
   const expected = Object.entries(daily).reduce((n, [day, work]) => n + (day <= today ? work : 0), 0);
   return { expected, points: progress - expected };
 }
-export function estimate(task: PlanningTask, all: PlanningTask[], manualMinutes: number | null): Evidence {
-  const units = planOf(task).ranges.reduce((n, r) => n + r.units, 0);
+export function estimate(task: PlanningTask, all: PlanningTask[], manualMinutes: number | null, units = planOf(task).ranges.reduce((n, r) => n + r.units, 0)): Evidence {
   const usable = (t: PlanningTask) => t.history.filter(h => h.reviewStatus !== "pending" && !h.operationCheck && (h.graded === true || (typeof h.score === "number" && Number.isFinite(h.score))) && h.duration > 0 && h.attemptType && h.units === units);
   const same = usable(task);
   const similar = all.filter(t => t.id !== task.id && t.subject === task.subject && t.category === task.category && t.materialName === task.materialName && t.materialName.trim()).flatMap(usable);

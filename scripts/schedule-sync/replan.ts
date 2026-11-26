@@ -9,12 +9,13 @@ import {addDays,validDay,type PlanningTask} from '../../src/planning/model';
 import {oldItem} from '../../src/planning/official-schedule';
 import {canonical,materialKey,parseSchedule,scheduleId,type LearningSchedule,type ScheduleItem} from '../../src/planning/schedule';
 import {mergeTutorSchedule,tutorScheduleProtection} from '../../src/planning/schedule-sync';
+import {workloadEvidence} from '../../src/planning/workload';
 import {SUBJECTS} from '../../src/review/model';
 import {publishReady,writeJsonAtomic} from './manifest';
 
-type Snapshot={taskId:string;unit:string;status:PlanningTask['status'];createdAt:number;updatedAt:number;progressDigest?:string;overdueDay?:string|null};
+type Snapshot={taskId:string;unit:string;status:PlanningTask['status'];createdAt:number;updatedAt:number;progressDigest?:string;workloadDigest?:string;overdueDay?:string|null};
 export type PriorReport={snapshot?:Snapshot[];newlyRegistered?:Snapshot[];changedTasks?:Snapshot[];newRounds?:string[];replanEvents?:ReplanEvent[];replanRounds?:string[]};
-export type ReplanEvent={kind:'round_added'|'task_added'|'completed'|'progress_changed'|'overdue';unit:string;taskId:string;at:number;deadline?:string};
+export type ReplanEvent={kind:'round_added'|'task_added'|'completed'|'progress_changed'|'workload_changed'|'overdue';unit:string;taskId:string;at:number;deadline?:string};
 type RequestStatus='requested'|'running'|'no_safe_plan'|'cli_failed'|'failed'|'published';
 type Request={id:string;observedAt:string;events:ReplanEvent[];baseVersion:string|null;status:RequestStatus;reason?:string;revision?:number;
  rounds:string[];eligibleTasks:number;capacityDays:number;placeable:number;cliStarted:boolean};
@@ -38,7 +39,8 @@ export function replanSnapshot(task:PlanningTask,current:LearningSchedule|null,i
   measurement:planning?.questionMeasurement,progress:planning?.wbs?.progress,
   ranges:planning?.ranges?.filter(r=>r.done||r.graded||r.corrected||r.actualDay||r.actualSeconds)
    .map(({id,done,graded,corrected,actualDay,actualSeconds})=>({id,done,graded,corrected,actualDay,actualSeconds})),
- }),overdueDay:task.status!=='completed'&&deadline&&deadline<today?deadline:null};
+ }),workloadDigest:digest(planning?.ranges?.map(({id,label,units,minutes})=>({id,label,units,minutes}))??[]),
+ overdueDay:task.status!=='completed'&&deadline&&deadline<today?deadline:null};
 }
 
 export function detectReplan(snapshot:Snapshot[],prior:PriorReport|null,newlyRegistered:Snapshot[],newRounds:string[]){
@@ -58,6 +60,9 @@ export function detectReplan(snapshot:Snapshot[],prior:PriorReport|null,newlyReg
   }else if(changed.has(taskId)||before&&(before.status!==row.status||
    (before.progressDigest===undefined?before.updatedAt!==row.updatedAt:before.progressDigest!==row.progressDigest))){
    events.push({kind:'progress_changed',taskId,unit,at:row.updatedAt});
+  }
+  if(!added.has(taskId)&&before?.workloadDigest!==undefined&&before.workloadDigest!==row.workloadDigest){
+   events.push({kind:'workload_changed',taskId,unit,at:row.updatedAt});
   }
   if(row.overdueDay&&row.overdueDay!==before?.overdueDay){
    events.push({kind:'overdue',taskId,unit,at:Date.parse(row.overdueDay+'T15:00:00Z'),deadline:row.overdueDay});
@@ -147,20 +152,30 @@ export function tutorInput(input:ReplanInput,rounds:string[]){
  const adopted=new Map(current?.items.map(i=>[i.taskId,i]));
  const target=new Set(rounds);
  const capacities=replanCapacities(today,current?.capacities??{},confirmedCapacities);
- const booked=bookedScheduleMinutes(tasks.map(e=>e.task),adopted.values());
+ const liveTasks=tasks.map(e=>e.task);
+ const booked=bookedScheduleMinutes(liveTasks,adopted.values());
  const available=Object.fromEntries(Object.entries(capacities).map(([day,limit])=>[day,limit-(booked[day]??0)]));
- const diagnostics:{taskId:string;unit:string;reason:UnplacedReason}[]=[];
+ const diagnostics:{taskId:string;unit:string;reason:UnplacedReason;workload:ReturnType<typeof workloadEvidence>}[]=[];
  const inputs:{taskId:string;data:unknown}[]=[];
  const options=tasks.flatMap(({task,updatedAt})=>{
   if(!target.has(task.unit))return [];
-  const old=adopted.get(task.id),item=old??oldItem(task);
+  const old=adopted.get(task.id),native=oldItem(task);
+  const registered=old?{...old,ranges:old.ranges.length?old.ranges:native.ranges}:native;
+  const workload=workloadEvidence(task,registered.ranges,liveTasks,current);
+  const {scope,time}=workload;
+  const units=scope?.units,minutes=time?.minutes;
+  // Inferred full-scope work is eligible only before the learner starts the task.
+  const item:ScheduleItem=scope&&units&&minutes&&time.kind==='estimated'&&registered.ranges.length<=1&&
+   task.status==='not_started'&&!task.history.some(h=>!h.operationCheck)?
+   {...registered,ranges:[{id:registered.ranges[0]?.id??'work-'+digest({id:task.id,label:scope.label,units}).slice(0,40),
+    label:scope.label,units,minutes,day:registered.ranges[0]?.day??null}]}:registered;
   const fixed=deadlines(task,current,item),deadline=fixed[0]??null;
   const progress=replanSnapshot(task,current,old,today);
-  inputs.push({taskId:task.id,data:{unit:task.unit,subject:task.subject,status:task.status,progress,fixed,item,
+  inputs.push({taskId:task.id,data:{unit:task.unit,subject:task.subject,status:task.status,progress,fixed,item,workload,
    manual:task.planning?.wbs&&[task.planning.wbs.startDay,task.planning.wbs.endDay],active:task.isRunning||(task.currentDuration??0)>0,
    fresh:updatedAt<=input.observedAt}});
   if(task.status==='completed'||old&&(old.endDay||old.stages?.length||old.ranges.some(r=>r.day)))return [];
-  const row={taskId:task.id,unit:task.unit,reason:'capacity' as UnplacedReason};
+  const row={taskId:task.id,unit:task.unit,reason:'capacity' as UnplacedReason,workload};
   diagnostics.push(row);
   if(tutorScheduleProtection(task,item,old)||Object.values(task.scheduleActuals??{}).some(a=>a.done||a.graded||a.corrected||a.actualDay)||
      task.planning?.ranges?.some(r=>r.actualSeconds))row.reason='protected';
@@ -184,7 +199,7 @@ export function tutorInput(input:ReplanInput,rounds:string[]){
  }
  const safeOptions=seed.map(({task})=>options[task]);
  const placements=seed.map(({days},task)=>({task,days}));
- const fingerprint=digest({version:2,rounds,base:current?[current.planId,current.revision]:null,
+ const fingerprint=digest({version:3,rounds,base:current?[current.planId,current.revision]:null,
   tasks:inputs.sort((a,b)=>a.taskId.localeCompare(b.taskId)),
   ...(options.length?{capacities,available}:{}),
  });
@@ -225,9 +240,14 @@ export function validateTutorPlan(input:ReplanInput,available:ReturnType<typeof 
   else if(!matching.subjects.includes(item.subject))matching.subjects.push(item.subject);
  }
  const targetRounds=scope.map(s=>s.unit),baseVersion=input.current?input.current.planId+'--r'+input.current.revision:null;
+ const estimates=options.filter(o=>items.some(i=>i.taskId===o.item.taskId)&&o.row.workload.time?.kind==='estimated');
+ const evidenceNotes=estimates.slice(0,28).map(({item,row})=>{
+  const {scope,time}=row.workload;
+  return `${item.title}（${item.taskId}）／範囲出典 ${scope?.source}／仮見積 ${time?.minutes}分／${time?.source}／初回・採点済 ${time?.firstSeconds}秒／採点単独は未計測／直し ${time?.redoSeconds}秒`.slice(0,600);
+ });
  const candidate=parseSchedule(JSON.stringify({schemaVersion:'learning-schedule/1',planId,revision,baseVersion,
   generatedAt:new Date(now).toISOString(),accountBinding:input.binding,provisional:true,
-  notes:['本番の既存範囲と学習枠に基づく日程案'],gaps:['範囲・所要時間・容量を確認できない課題は既存状態を保持'],
+  notes:['本番の範囲と学習枠に基づく日程案',...evidenceNotes],gaps:['範囲・所要時間・容量を確認できない課題は既存状態を保持'],
   scope,capacities:Object.fromEntries([...new Set(items.flatMap(i=>Object.keys(i.dailyWork)))].map(day=>[day,capacities[day]])),items,
  }));
  const merged=mergeTutorSchedule({...input,candidate,source:{planId,revision,baseVersion,digest:digest(candidate)},now,targetRounds});

@@ -1,7 +1,9 @@
 import { doc, runTransaction, type Firestore } from "firebase/firestore";
 import { taskWriteVersion, retryTaskWrite } from '../task-write';
-import { emptyPlan, rangeComplete, validatePlan, validatePlanTransition, type TaskPlan } from "./model";
-export async function saveTaskPlan(db: Firestore, family: string, taskId: string, expectedRevision: number, plan: TaskPlan, active: () => boolean, complete = false, scheduleContext?:{uid:string;versionId:string|null}) {
+import { emptyPlan, rangeComplete, validatePlan, validatePlanTransition, type PlanningTask, type TaskPlan } from "./model";
+import { materialTaskIdentity } from './material-binding';
+import { canConfirmWorkload } from './workload';
+export async function saveTaskPlan(db: Firestore, family: string, taskId: string, expectedRevision: number, plan: TaskPlan, active: () => boolean, complete = false, scheduleContext?:{uid:string;versionId:string|null;workloadIdentity?:string}) {
   validatePlan(plan);
   if(plan.wbs && plan.wbs.taskId!==taskId)throw Error("WBSの対象課題を確認してください。");
   return retryTaskWrite(() => runTransaction(db, async tx => {
@@ -11,6 +13,10 @@ export async function saveTaskPlan(db: Firestore, family: string, taskId: string
     if (!active()) throw new Error("利用者が切り替わりました。");
     if (!snapshot.exists() || snapshot.data()._deletion) throw new Error("タスクが削除されています。");
     const task = snapshot.data();
+    if(scheduleContext?.workloadIdentity){
+      const live={...task,id:taskId} as PlanningTask;
+      if(materialTaskIdentity(live)!==scheduleContext.workloadIdentity||!canConfirmWorkload(live))throw Error('課題・教材または学習状態が変わりました。');
+    }
     const old = task.planning ?? emptyPlan();
     if (old.revision !== expectedRevision) throw new Error("別の端末で計画が更新されました。最新の計画を開き直してください。");
     validatePlanTransition(old, plan);
