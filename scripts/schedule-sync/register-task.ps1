@@ -1,6 +1,7 @@
 ﻿param(
   [Parameter(Mandatory=$true)][string]$Config,
   [Parameter(Mandatory=$true)][string]$Runner,
+  [string]$TutorCli,
   [switch]$CheckOnly
 )
 $ErrorActionPreference = 'Stop'
@@ -15,6 +16,11 @@ $sid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 $exe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
 $mode = if ($CheckOnly) {'check'} else {'apply'}
 $arguments = '-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -File "' + $wrapper + '" -Config "' + $configPath + '" -Runner "' + $runnerPath + '" -Mode ' + $mode
+if ($TutorCli) {
+  $tutorPath = (Resolve-Path -LiteralPath $TutorCli).Path
+  if ([IO.Path]::GetExtension($tutorPath) -ne '.exe') { throw 'TutorCli must be an executable.' }
+  $arguments += ' -TutorCli "' + $tutorPath + '"'
+}
 $escapedArguments = [Security.SecurityElement]::Escape($arguments)
 $workingDirectory = [Security.SecurityElement]::Escape((Split-Path -Parent $configPath))
 $boundary = [DateTimeOffset]::Now.AddMinutes(15).ToString('yyyy-MM-ddTHH:mm:sszzz')

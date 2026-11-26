@@ -1,6 +1,7 @@
 ﻿param(
   [Parameter(Mandatory=$true)][string]$Config,
   [Parameter(Mandatory=$true)][string]$Runner,
+  [string]$TutorCli,
   [ValidateSet('apply','check','connect')][string]$Mode='apply'
 )
 $ErrorActionPreference = 'Stop'
@@ -24,7 +25,9 @@ try {
     try { $login | & $node $Runner $Mode $Config }
     finally { $login = $null; $credential = $null }
   } else {
-    & $node $Runner $Mode $Config
+    $runnerArgs = @($Runner, $Mode, $Config)
+    if ($Mode -eq 'apply' -and $TutorCli) { $runnerArgs += $TutorCli }
+    & $node @runnerArgs
   }
   exit $LASTEXITCODE
 } finally {

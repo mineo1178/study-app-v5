@@ -1,5 +1,5 @@
 import {createHash,randomUUID} from 'node:crypto';
-import {readFile,realpath,rename,writeFile} from 'node:fs/promises';
+import {link,readFile,realpath,rename,unlink,writeFile} from 'node:fs/promises';
 import {isAbsolute,relative,resolve,sep} from 'node:path';
 import {MAX_SCHEDULE_BYTES,parseSchedule} from '../../src/planning/schedule';
 
@@ -10,10 +10,13 @@ export type ReadyManifest={
  createdAt:string;observedAt:string;rounds:string[];provisional:boolean;unconfirmed:string[];
 };
 
-export async function writeJsonAtomic(path:string,value:unknown){
+export async function writeJsonAtomic(path:string,value:unknown,exclusive=false){
  const staging=path+'.'+randomUUID()+'.tmp';
  await writeFile(staging,JSON.stringify(value,null,2)+'\n',{flag:'wx'});
- await rename(staging,path);
+ if(exclusive){
+  try{await link(staging,path);}
+  finally{await unlink(staging);}
+ }else await rename(staging,path);
 }
 
 async function candidateAt(root:string,path:string){
@@ -51,8 +54,9 @@ export async function readReady(root:string,now=Date.now()){
  return {manifest:m,candidate,observedAt,source:{planId:m.planId,revision:m.revision,digest:m.sha256,baseVersion:candidate.baseVersion??null}};
 }
 
-export async function publishReady(root:string,path:string,observedAt:string,rounds:string[]){
+export async function publishReady(root:string,path:string,observedAt:string,rounds:string[],expectedSha256?:string){
  const {candidate,sha256}=await candidateAt(root,path);
+ if(expectedSha256&&expectedSha256!==sha256)throw Error('検証した候補と公開ファイルのSHA-256が一致しません。');
  if(!candidate.accountBinding||candidate.sync||candidate.proposalImport||candidate.confirmedCapacityDays!==undefined||candidate.items.some(i=>i.stages?.length)||
     !rounds.length||new Set(rounds).size!==rounds.length||rounds.some(r=>!candidate.scope.some(s=>s.unit===r))||
     !Number.isFinite(Date.parse(observedAt))||Date.parse(observedAt)>Date.parse(candidate.generatedAt)||Date.parse(candidate.generatedAt)>Date.now()+60000){

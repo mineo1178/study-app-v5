@@ -7,14 +7,14 @@
 3. 検証が済んだJSONだけを公開します。取得日時は計画を作った時刻ではなく、根拠にした本番データの読取時刻です。
 
 ```powershell
-node dist/schedule-sync/run.js publish $integrationRoot '02_candidates/<検証済み候補>.json' '<本番読取日時のISO 8601>' '第14回'
+node dist-ssr/schedule-sync/run.js publish $integrationRoot '02_candidates/<検証済み候補>.json' '<本番読取日時のISO 8601>' '第14回'
 ```
 
 公開コマンドはルートの `SYNC_READY.json` を一時ファイルから置換します。SHA-256は候補JSONのファイル全体に対して計算します。`ready`、対象回、取得・作成日時、暫定設定を照合して処理します。公開済み候補の修正は新revisionにしてください。未登録課題は同じtaskIdと識別情報で登録されるまで保留します。実績変更・期限・手動予定で保留された課題は、新しい本番取得結果から再計画してください。
 
 ## Windowsの実行
 
-CLIは `vite build --ssr scripts/schedule-sync/run.ts --outDir dist/schedule-sync` でビルドします。本番アプリと同じFirebase project、家族、利用者を `04_private/schedule-sync/config.json` で指定します。このフォルダはWindows利用者とSYSTEMがアクセスできるようにします。
+CLIは `npx vite build --ssr scripts/schedule-sync/run.ts --outDir dist-ssr/schedule-sync` でビルドします。Webビルドの出力先とは別に置きます。本番アプリと同じFirebase project、家族、利用者を `04_private/schedule-sync/config.json` で指定します。このフォルダはWindows利用者とSYSTEMがアクセスできるようにします。
 
 ```powershell
 & scripts/schedule-sync/run-windows.ps1 -Mode connect -Config $config -Runner $runner
@@ -24,7 +24,14 @@ Start-ScheduledTask -TaskName 'Study Schedule Auto Sync'
 
 初回接続はWindowsで既存アカウントを入力します。パスワードは保存せず、Firebaseの利用者セッションをWindows DPAPI CurrentUserで暗号化します。読み書きは同じ利用者のSecurity Rulesを通ります。接続が失効した場合は接続手順を再実行します。
 
-読取確認に成功してから `-CheckOnly` を外して登録し、同じタスクを起動します。15分ごととログオン後に実行し、同時実行を抑止します。停止・ログオフ中の候補は次回ログオン時に照合します。タスクは登録時のCLIを使うため、ビルド配置を変える場合は登録も更新します。
+読取確認に成功してから `-CheckOnly` を外して登録し、同じタスクを起動します。無人実行を確認したネイティブの `codex.exe` は `-TutorCli` に絶対パスで指定します。省略時は再計画要求を保存します。15分ごととログオン後に実行し、同時実行を抑止します。停止・ログオフ中の候補は次回ログオン時に照合します。タスクは登録時のCLIを使うため、ビルド配置を変える場合は登録も更新します。
+
+## 差分からの再計画
+
+- `apply` は `LATEST_DIFF.json` の前回スナップショットと本番を比較し、新規回・課題・完了・採点や直しを含む進捗変更・確定期限超過を記録します。初回は従来レポートの直近差分も引き継ぎます。`check` の結果は `LATEST_CHECK.json` に保存し、比較元を進めません。
+- 同じ差分の要求は `04_private/schedule-sync/requests/<差分ID>.json` に一度だけ保存します。CLI未設定、失敗、中断、日程根拠の不足もここで確認できます。同じ要求を次回同期で再実行しません。
+- 家庭教師には、対象回の現行範囲、残り時間枠、進捗率、期限を匿名の番号で渡します。既存範囲の配置日だけを候補にし、所要時間の根拠がない課題は未配置のまま扱います。現在のアプリ端末にしか保存されていないイベントは、本番の課題・採用計画・既定カレンダーに期限が反映されたときに検出します。
+- 候補は既存の部分計画の照合と日別容量の検証を通し、学習実績・手動予定・確定期限・固定目標を保護します。候補の検証後に本番と公開元を再確認し、変更があれば公開を見送ります。公開できた候補は `SYNC_READY.json` から次回のWindows同期で採用判定を受けます。候補が成立しない場合は採用中の計画を維持します。
 
 ## 照合と確認
 

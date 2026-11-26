@@ -11,6 +11,7 @@ import {AUTO_SCHEDULE_ID,isScheduleSyncState} from '../../src/planning/schedule-
 import {mergeTutorSchedule,type SyncTask} from '../../src/planning/schedule-sync';
 import {openScheduleAuth} from './auth';
 import {publishReady,readReady,writeJsonAtomic} from './manifest';
+import {detectReplan,handleReplan,replanSnapshot,type PriorReport} from './replan';
 
 type Config={project:string;family:string;uid:string;apiKey:string;integrationRoot:string};
 type TaskStamp={name:string;createTime:string;updateTime:string;fields?:{_writeVersion?:{integerValue?:string}}};
@@ -65,7 +66,7 @@ function confirmedCapacities(raw:unknown){
  return out;
 }
 
-async function synchronize(config:Config,stateDir:string,mode:string){
+async function synchronize(config:Config,stateDir:string,mode:string,tutorCli?:string){
  const app=initializeApp({apiKey:config.apiKey,projectId:config.project},'study-schedule-sync');
  const db=getFirestore(app);
  const {project,family,uid}=config;
@@ -91,7 +92,7 @@ async function synchronize(config:Config,stateDir:string,mode:string){
      current.revision!==pointer.revision||await scheduleDigest(current)!==pointer.digest)){
    throw Error('現在の採用計画・digest・認証アカウントが一致しません。');
   }
-  const now=Date.now();
+  const now=Date.now(),today=getJstDay(now);
   const [rows,stamps]=await Promise.all([activeTasks(db,family),taskStamps(config,await user.getIdToken())]);
   const tasks=recordedTasks(rows,stamps),rawTasks=new Map(rows.map(r=>[r.id,r.raw]));
   const apply=mode==='apply';
@@ -104,26 +105,30 @@ async function synchronize(config:Config,stateDir:string,mode:string){
   };
   let result:ReturnType<typeof mergeTutorSchedule>|undefined;
   let ready:Awaited<ReturnType<typeof readReady>>=null;
+  let manifestError:unknown;
+  let mergedPointer=pointer??null;
   try{
    ready=await readReady(config.integrationRoot,now);
    if(ready){
-    result=mergeTutorSchedule({...ready,current,previous,tasks,binding:owner.binding,now,today:getJstDay(now),
+    result=mergeTutorSchedule({...ready,current,previous,tasks,binding:owner.binding,now,today,
      confirmedCapacities:confirmedCapacities(capacity.data()?.capacities),autoRevision:Number(ledger.data()?.revision??0),
      targetRounds:ready.manifest.rounds});
    }
   }catch(error){
+   manifestError=error;
    fence.next={...previous??fence.next,status:'error',versionId:pointer?.versionId??null,reasons:[reason(error)]};
-   if(apply&&(!previous||previous.versionId===fence.next.versionId))await saveScheduleSyncState(db,family,owner,fence);
-   throw error;
   }
-  const snapshot=tasks.map(({task,createdAt,updatedAt})=>({taskId:task.id,unit:task.unit,subject:task.subject,category:task.category,materialName:task.materialName,title:task.title,status:task.status,createdAt,updatedAt}));
+  const currentItems=new Map(current?.items.map(item=>[item.taskId,item]));
+  const snapshot=tasks.map(({task,createdAt,updatedAt})=>({taskId:task.id,unit:task.unit,subject:task.subject,category:task.category,materialName:task.materialName,title:task.title,status:task.status,createdAt,updatedAt,
+   ...replanSnapshot(task,current,currentItems.get(task.id),today)}));
   const reportPath=resolve(stateDir,'LATEST_DIFF.json');
-  const priorReport=await localJson<{snapshot?:typeof snapshot;source?:{sha256:string}}>(reportPath);
+  const priorReport=await localJson<PriorReport&{source?:{sha256:string}}>(reportPath);
   const oldSnapshots=new Map(priorReport?.snapshot?.map(r=>[r.taskId,r]));
   const changedTasks=snapshot.filter(r=>{const old=oldSnapshots.get(r.taskId);return old&&(old.updatedAt!==r.updatedAt||old.status!==r.status);});
   const newlyRegistered=snapshot.filter(r=>priorReport?.snapshot?!oldSnapshots.has(r.taskId):r.createdAt>(ready?.observedAt??now));
   const previousRounds=new Set(priorReport?.snapshot?.map(r=>r.unit)??snapshot.filter(r=>!newlyRegistered.includes(r)).map(r=>r.unit));
   const newRounds=[...new Set(newlyRegistered.map(r=>r.unit))].filter(unit=>!previousRounds.has(unit));
+  const replanEvents=detectReplan(snapshot,priorReport,newlyRegistered,newRounds);
   const taskHashes=()=>Object.fromEntries(rows.map(r=>[r.id,hash(r.raw)]));
   let productionWrites=0;
   if(result){
@@ -149,23 +154,40 @@ async function synchronize(config:Config,stateDir:string,mode:string){
     const afterHashes=Object.fromEntries(newRows.map(r=>[r.id,hash(r.raw)]));
     await writeJsonAtomic(resolve(stateDir,auditId+'.after.json'),{at:new Date().toISOString(),updatedPointer,taskHashes:afterHashes,unchanged:canonical(afterHashes)===canonical(before.taskHashes),matches});
     if(!matches)throw Error('保存後の本番revisionの照合が必要です。');
+    mergedPointer=updatedPointer??null;
    }else if(!result.plan&&apply&&await saveScheduleSyncState(db,family,owner,fence))productionWrites=1;
-  }else if(apply&&!previous&&await saveScheduleSyncState(db,family,owner,fence))productionWrites=1;
+  }else if(apply&&!manifestError&&!previous&&await saveScheduleSyncState(db,family,owner,fence))productionWrites=1;
+  const replanRequest=apply?await handleReplan({root:config.integrationRoot,stateDir,executable:tutorCli,events:replanEvents,
+   source:ready?.source,input:{current:productionWrites===4?result!.plan:current,previous:result?.state??previous,
+    tasks,binding:owner.binding,today,observedAt:now,confirmedCapacities:confirmedCapacities(capacity.data()?.capacities),
+    autoRevision:Math.max(Number(ledger.data()?.revision??0),productionWrites===4?result?.plan?.revision??0:0)},
+   stillCurrent:async()=>{
+    const [freshHead,freshCapacity,freshStamps,latestReady]=await Promise.all([
+     getDocFromServer(root),getDocFromServer(scheduleCapacityRef(db,family,uid)),
+     taskStamps(config,await user.getIdToken()),readReady(config.integrationRoot),
+    ]);
+    return getJstDay(Date.now())===today&&canonical(freshHead.data()??null)===canonical(mergedPointer)&&
+     canonical(freshCapacity.data())===canonical(capacity.data())&&canonical(latestReady?.manifest)===canonical(ready?.manifest)&&
+     hash([...freshStamps].sort())===hash([...stamps].sort());
+   },
+  }):null;
   const report={checkedAt:new Date(now).toISOString(),mode,productionWrites,
    currentVersionId:productionWrites===4?result?.state.versionId:pointer?.versionId??null,
-   source:ready?.manifest??null,state:result?.state??previous??fence.next,minutes:result?.minutes??{},
+   source:ready?.manifest??null,state:result?.state??(manifestError?fence.next:previous??fence.next),minutes:result?.minutes??{},
    newRounds,newlyRegistered,changedTasks,unplaced:result?.unplaced??[],classifications:result?.classifications??[],
-   replan:result?.classifications.filter(r=>['unplaced','waiting','held'].includes(r.outcome))??[],snapshot,
+   replan:result?.classifications.filter(r=>['unplaced','waiting','held'].includes(r.outcome))??[],snapshot,replanEvents,replanRequest,
   };
-  if(!priorReport||productionWrites>0||newlyRegistered.length||changedTasks.length||priorReport.source?.sha256!==ready?.manifest.sha256){
+  if(apply&&(!priorReport||productionWrites>0||newlyRegistered.length||changedTasks.length||replanEvents.length||priorReport.source?.sha256!==ready?.manifest.sha256)){
    const history=resolve(stateDir,'reports');
    await mkdir(history,{recursive:true});
    await writeJsonAtomic(resolve(history,report.checkedAt.replace(/[:.]/g,'-')+'.json'),report);
   }
-  await writeJsonAtomic(reportPath,report);
-  await writeJsonAtomic(resolve(stateDir,'LAST_RUN.json'),{status:'ok',at:report.checkedAt,mode,productionWrites,versionId:report.currentVersionId});
+  await writeJsonAtomic(apply?reportPath:resolve(stateDir,'LATEST_CHECK.json'),report);
+  await writeJsonAtomic(resolve(stateDir,apply?'LAST_RUN.json':'LAST_CHECK.json'),{status:manifestError?'error':'ok',at:report.checkedAt,mode,
+   productionWrites,versionId:report.currentVersionId,replanRequest,...(manifestError?{reason:reason(manifestError)}:{})});
   console.log(JSON.stringify({status:report.state.status,version:report.currentVersionId,productionWrites,
-   applied:result?.changed.length??0,unplaced:report.state.unplaced,waiting:report.state.waiting,conflicts:report.state.conflicts}));
+   applied:result?.changed.length??0,unplaced:report.state.unplaced,waiting:report.state.waiting,conflicts:report.state.conflicts,replanRequest}));
+  if(manifestError)process.exitCode=1;
  }finally{await terminate(db);await deleteApp(app);}
 }
 
@@ -186,9 +208,11 @@ async function main(){
   throw Error('本番project・対象家族・既存利用者の同期設定を確認してください。');
  }
  const stateDir=resolve(config.integrationRoot,'04_private','schedule-sync');
- try{await synchronize(config,stateDir,mode);}
+ const tutorCli=args[0];
+ if(tutorCli&&(!isAbsolute(tutorCli)||!/\.exe$/i.test(tutorCli)))throw Error('家庭教師CLIは実行ファイルの絶対パスを指定してください。');
+ try{await synchronize(config,stateDir,mode,tutorCli);}
  catch(error){
-  await writeJsonAtomic(resolve(stateDir,'LAST_RUN.json'),{status:'error',at:new Date().toISOString(),mode,code:errorCode(error),reason:reason(error)});
+  await writeJsonAtomic(resolve(stateDir,mode==='check'?'LAST_CHECK.json':'LAST_RUN.json'),{status:'error',at:new Date().toISOString(),mode,code:errorCode(error),reason:reason(error)});
   throw error;
  }
 }

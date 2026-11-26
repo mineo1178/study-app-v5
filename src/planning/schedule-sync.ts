@@ -27,18 +27,26 @@ function sameHistoricalSlots(old:ScheduleItem,proposed:ScheduleItem,today:string
   &&canonical(historicalSlots(old))===canonical(historicalSlots(proposed))&&canonical(old.baseline)===canonical(proposed.baseline);
 }
 
-function heldReason(entry:SyncTask,item:ScheduleItem,old:ScheduleItem|undefined,input:SyncInput){
- const {task,createdAt,updatedAt}=entry,planning=task.planning;
+export function tutorScheduleProtection(task:PlanningTask,item:ScheduleItem,old?:ScheduleItem){
+ const planning=task.planning;
  if(task.status==='completed')return '完了済み課題';
  if(task.isRunning||(task.currentDuration??0)>0)return '学習タイマーが進行中';
- const freshRegistration=createdAt>input.observedAt&&createdAt===updatedAt&&task.status==='not_started'&&!task.history.length&&!Object.keys(task.scheduleActuals??{}).length;
- if(updatedAt>input.observedAt&&!freshRegistration)return '計画作成後に課題・実績が更新された';
  if(planning?.wbs?.startDay||planning?.wbs?.endDay||planning?.endDay||planning?.ranges?.some(r=>r.day)
    ||planning?.questionPlan?.confirmed)return '手動予定・採用済み日別数量を保持';
  if(old?.stages?.length)return '採用済みの工程を保持';
  if([...(old?.ranges??[]),...item.ranges].some(r=>{const a=actualOf(task,r.id);return a&&(a.done||a.graded||a.corrected||a.actualDay);})){
   return '既存の範囲実績・採点・直しを保持';
  }
+ return '';
+}
+
+function heldReason(entry:SyncTask,item:ScheduleItem,old:ScheduleItem|undefined,input:SyncInput){
+ const {task,createdAt,updatedAt}=entry,planning=task.planning;
+ if(task.status==='completed'||task.isRunning||(task.currentDuration??0)>0)return tutorScheduleProtection(task,item,old);
+ const freshRegistration=createdAt>input.observedAt&&createdAt===updatedAt&&task.status==='not_started'&&!task.history.length&&!Object.keys(task.scheduleActuals??{}).length;
+ if(updatedAt>input.observedAt&&!freshRegistration)return '計画作成後に課題・実績が更新された';
+ const protectedReason=tutorScheduleProtection(task,item,old);
+ if(protectedReason)return protectedReason;
  const scoped=input.current?.scope.find(s=>s.unit===item.unit&&s.subjects.includes(item.subject))?.deadline;
  const roundDeadline=DEFAULT_CALENDAR.deadlines.find(s=>s.unit===item.unit&&s.confirmed)?.day;
  const fixed=[planning?.deadline,old?.deadline,scoped,roundDeadline].filter(Boolean) as string[];
