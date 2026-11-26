@@ -116,19 +116,66 @@ describe("two independent Firestore clients", () => {
     const path = await fixture(); const a = task("a");
     await setDoc(doc(clients[0], path, "a"), a);
     const start = operation(a, "start", "offline-start", 1000);
-    const stop: StudySessionOperation = { ...operation(a, "save", "offline-stop", 601000), sessionId: start.operationId };
+    const stop = { ...operation(a, "save", "offline-stop", 601000), sessionId: start.operationId, capturedSeconds: 600 };
     let queue = [start, stop];
     const statuses: string[] = [];
     const drain = () => drainStudySessionOperations(() => queue, (value) => { queue = value; }, (op) => commit(0, path, op), (_op, result) => statuses.push(result.status));
     await disableNetwork(clients[0]);
-    await expect(drain()).rejects.toThrow();
+    await expect(drain()).rejects.toMatchObject({ code: "unavailable" });
     expect(queue).toEqual([start, stop]);
     await commit(1, path, operation(a, "start", "device-b", 2000));
     await enableNetwork(clients[0]);
     await drain();
     expect(statuses).toEqual(["conflict", "conflict"]);
-    expect(queue).toEqual([]);
+    expect(queue).toEqual([{ ...stop, recovery: "session-mismatch" }]);
+    await drain();
+    expect(statuses).toEqual(["conflict", "conflict"]);
     expect(await read(0, path, "a")).toMatchObject({ sessionId: "device-b", isRunning: true, history: [] });
+  });
+  it("retains the time for a missing task and advances to the next save", async () => {
+    const path = await fixture();
+    const absent = { ...operation(task("absent"), "save", "missing-stop", 601000), capturedSeconds: 600 };
+    const a = task("a", { currentDuration: 600, sessionId: "paused" });
+    await setDoc(doc(clients[0], path, a.id), a);
+    let queue: StudySessionOperation[] = [absent, { ...operation(a, "save", "good-stop", 602000), capturedSeconds: 600 }];
+    const statuses: string[] = [];
+    await drainStudySessionOperations(() => queue, value => { queue = value; }, op => commit(0, path, op), (_op, result) => statuses.push(result.status));
+    expect(statuses).toEqual(["missing", "applied"]);
+    expect(queue).toEqual([{ ...absent, recovery: "not-found" }]);
+    expect((await read(0, path, a.id)).history).toMatchObject([{ id: "paused", duration: 600, creditedDuration: 600 }]);
+  });
+  it("retains measured time when the server has a shorter entry for the same session", async () => {
+    const path = await fixture();
+    const a = task("a", { currentDuration: 300, sessionId: "paused" });
+    await setDoc(doc(clients[0], path, a.id), a);
+    const save = { ...operation(a, "save", "stop", 601000), capturedSeconds: 600 };
+    let queue: StudySessionOperation[] = [save];
+    const drain = () => drainStudySessionOperations(() => queue, value => { queue = value; }, op => commit(0, path, op), () => {});
+    await drain();
+    await drain();
+    expect(queue).toEqual([{ ...save, recovery: "study-conflict" }]);
+    expect((await read(0, path, a.id)).history).toMatchObject([{ id: "paused", duration: 300 }]);
+  });
+  it("aborts after losing the authenticated session during reads", async () => {
+    const path = await fixture();
+    const a = task("a", { currentDuration: 600, sessionId: "paused" });
+    await setDoc(doc(clients[0], path, a.id), a);
+    let checks = 0;
+    await expect(commitStudySessionOperation(clients[0], collection(clients[0], path), operation(a, "save", "stop", 601000), () => ++checks < 3))
+      .rejects.toMatchObject({ code: "unauthenticated" });
+    expect(await read(0, path, a.id)).toMatchObject({ currentDuration: 600, history: [] });
+  });
+  it("retries a retained STOP only for the original session with matching measured time", async () => {
+    const path = await fixture();
+    const a = task("a", { currentDuration: 600, sessionId: "original" });
+    await setDoc(doc(clients[0], path, a.id), a);
+    const stop = { ...operation(a, "save", "retained-stop", 601000), capturedSeconds: 600, recovery: "study-conflict" as const };
+    expect((await commit(1, path, { ...stop, sessionId: "other" })).status).toBe("conflict");
+    expect((await commit(1, path, { ...stop, capturedSeconds: 601 })).status).toBe("conflict");
+    expect(await read(0, path, a.id)).toMatchObject({ sessionId: "original", currentDuration: 600, history: [] });
+    expect((await commit(0, path, stop)).status).toBe("applied");
+    expect((await commit(1, path, stop)).status).toBe("duplicate");
+    expect((await read(0, path, a.id)).history).toMatchObject([{ id: "original", duration: 600 }]);
   });
   it("resolves identical-time START by task ID on both clients", async () => {
     const path = await fixture(); const a = task("a"); const b = task("b");

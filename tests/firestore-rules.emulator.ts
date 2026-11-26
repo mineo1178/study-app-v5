@@ -72,12 +72,21 @@ describe("repository Firestore Rules", () => {
     await denied(getDocFromServer(doc(member.db, `families/${id}`)));
     await denied(setDoc(doc(member.db, `families/${id}/tasks/a`), { status: "in_progress" }));
   });
-  it.each(["tasks", "tests"])("allows member %s CRUD and list", async (name) => {
-    const ref = doc(member.db, `${root}/${name}/crud`);
+  it("allows a versioned task update and rejects a blind update and hard deletion", async () => {
+    const ref = doc(member.db, `${root}/tasks/crud`);
+    await setDoc(ref, { status: "in_progress" });
+    await denied(updateDoc(ref, { status: "completed" }));
+    await updateDoc(ref, { status: "completed", _writeVersion: 1 });
+    expect((await getDocFromServer(ref)).data()).toMatchObject({ status: "completed", _writeVersion: 1 });
+    expect((await getDocsFromServer(collection(member.db, `${root}/tasks`))).size).toBeGreaterThan(0);
+    await denied(deleteDoc(ref));
+  });
+  it("allows member tests CRUD and list", async () => {
+    const ref = doc(member.db, `${root}/tests/crud`);
     await setDoc(ref, { status: "in_progress" });
     await updateDoc(ref, { status: "completed" });
     expect((await getDocFromServer(ref)).data()?.status).toBe("completed");
-    expect((await getDocsFromServer(collection(member.db, `${root}/${name}`))).size).toBeGreaterThan(0);
+    expect((await getDocsFromServer(collection(member.db, `${root}/tests`))).size).toBeGreaterThan(0);
     await deleteDoc(ref);
   });
   it("saves a test reflection only for family members and merges changes to different fields", async () => {

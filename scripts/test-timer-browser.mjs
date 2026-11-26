@@ -109,6 +109,16 @@ try {
   // Re-verify membership on reload, while only SAVE remains unavailable.
   await members(accounts.slice(0, 2).map(account => account.uid));
   await page.route("**/documents:commit*", route => route.abort());
+  await page.evaluate(async operationId => {
+    const { auth } = await import("/tests/timer-client.ts");
+    const suffix = ":demo-study-hotfix:" + auth.currentUser.uid;
+    const prefix = "study-app-v5-hotfix-study-family-session-";
+    const key = prefix + "operations" + suffix;
+    const before = JSON.parse(localStorage.getItem(key));
+    delete before.find(operation => operation.operationId === operationId).capturedSeconds;
+    localStorage.setItem(key, JSON.stringify(before));
+    localStorage.removeItem(prefix + "stop/" + operationId + suffix);
+  }, retained.operationId);
   await page.reload(); await page.locator("select").first().selectOption({ label: "第1回" });
   await page.locator("#design20-task-list").getByText("基本問題", { exact: true }).click();
   assert.equal((await queue()).find(operation => operation.kind === "save").operationId, retained.operationId);
@@ -121,7 +131,7 @@ try {
   const retryHistory = (await task()).history.find(entry => entry.id === retained.sessionId);
   assert.ok(retryHistory); assert.equal(retryHistory.endAt, retained.at);
   assert.equal((await queue()).length, 0);
-  results.push("Rules refusal retains STOP/time/operation across reload; retry saves once at original STOP timestamp");
+  results.push("Rules refusal retains the STOP; a v1.89.32 queue entry survives reload and saves once at its original timestamp");
 
   await page.locator("#design20-task-list").getByText("基本問題", { exact: true }).click(); await startStudy().tap();
   await waitFor(async () => (await task()).isRunning && !(await queue()).length, "Delayed-write session not ready");
@@ -227,7 +237,7 @@ try {
   await context.setOffline(true);
   await page.getByRole("button", { name: "学習タイマーを一時停止", exact: true }).tap();
   await saveStudy().tap();
-  await page.getByRole("alert").filter({ hasText: "保存できなかったよ" }).waitFor({ timeout: 30000 });
+  await page.getByRole("alert").filter({ hasText: "未送信の時間はこの端末に残したよ" }).waitFor({ timeout: 30000 });
   assert.equal(await close().isVisible(), true); assert.ok((await queue()).some(operation => operation.kind === "save"));
   await context.setOffline(false); await page.evaluate(() => window.dispatchEvent(new Event("online")));
   await waitFor(async () => (await task()).history.length === historyCount + 1 && !(await queue()).length, "Online replay did not save exactly once");
@@ -291,6 +301,82 @@ try {
   results.push("Diagnostics quota failure: authenticated START/STOP/save remains functional");
   await page.reload();
   await page.locator("[data-protected-session]").waitFor();
+  const secondDevice = await browser.newContext();
+  await secondDevice.route("**/*", route => new URL(route.request().url()).hostname === "127.0.0.1" ? route.continue() : route.abort());
+  try {
+    const secondPage = await secondDevice.newPage();
+    await secondPage.goto(`${base}/tests/timer-setup.html`);
+    await secondPage.evaluate(async ({ email, password }) => (await import("/tests/timer-client.ts")).login(email, password), { email: accounts[1].email, password });
+    await page.locator("select").first().selectOption({ label: "第1回" });
+    await page.locator("#design20-task-list").getByText("基本問題", { exact: true }).click();
+    await startStudy().tap();
+    await waitFor(async () => (await task()).isRunning && !(await queue()).length, "Shorter history fixture START missing");
+    await page.waitForTimeout(2300);
+    let releaseShorter;
+    const shorterGate = new Promise(resolve => { releaseShorter = resolve; });
+    const holdShorter = async route => { await shorterGate; await route.continue().catch(error => { if (!String(error).includes("already handled")) throw error; }); };
+    await page.route("**/documents:batchGet*", holdShorter);
+    let longerStop;
+    try {
+      await saveStudy().evaluate(button => button.click());
+      await waitFor(async () => (longerStop = (await queue()).find(operation => operation.kind === "save")), "Longer STOP not queued");
+      assert.ok(longerStop.capturedSeconds >= 2);
+      assert.equal(await secondPage.evaluate(async at => (await import("/tests/timer-client.ts")).saveEarlierFromOtherDevice(at), longerStop.at - 1000), "applied");
+    } finally { releaseShorter(); }
+    await page.getByRole("alert").filter({ hasText: "記録が更新されたよ" }).waitFor();
+    await page.unroute("**/documents:batchGet*", holdShorter);
+    assert.equal(await page.getByText("通信が戻ったので、記録を保存したよ。", { exact: true }).count(), 0);
+    assert.ok((await task()).history.find(entry => entry.id === longerStop.sessionId).duration < longerStop.capturedSeconds);
+    await close().click();
+    await page.locator("#design20-task-list").getByText("基本問題", { exact: true }).click();
+    const previousHistory = (await task()).history;
+    await startStudy().tap();
+    await waitFor(async () => (await task()).isRunning && !(await queue()).length, "Conflict fixture START missing");
+    await page.waitForTimeout(2200);
+    let resumeReads;
+    const heldReads = new Promise(resolve => { resumeReads = resolve; });
+    const hold = async route => { await heldReads; await route.continue().catch(error => { if (!String(error).includes("already handled")) throw error; }); };
+    await page.route("**/documents:batchGet*", hold);
+    let captured, newSessionId;
+    try {
+      await saveStudy().evaluate(button => button.click());
+      await waitFor(async () => (captured = (await queue()).find(operation => operation.kind === "save")), "STOP was not durably queued");
+      assert.ok(captured.capturedSeconds >= 2);
+      newSessionId = await secondPage.evaluate(async () => (await import("/tests/timer-client.ts")).resumeFromOtherDevice());
+    } finally {
+      resumeReads();
+    }
+    const recovery = page.getByText("確認が必要な学習記録", { exact: true });
+    await page.getByRole("alert").filter({ hasText: "別の計測に切り替わったよ" }).waitFor();
+    await recovery.waitFor();
+    await page.unroute("**/documents:batchGet*", hold);
+    await waitFor(() => diagnosticEvent({ type: "SAVE_FAILURE", source: "study", code: "session-mismatch", retry: false }), "Session mismatch diagnostic missing");
+    assert.ok(!(await queue()).some(operation => operation.operationId === captured.operationId));
+    assert.equal((await task()).sessionId, newSessionId);
+    assert.deepEqual((await task()).history, previousHistory);
+    await page.reload();
+    await recovery.click();
+    await page.getByText("この端末に残した記録です", { exact: false }).waitFor();
+    const backup = await page.evaluate(async operationId => {
+      const { auth } = await import("/tests/timer-client.ts");
+      const key = "study-app-v5-hotfix-study-family-session-stop/" + operationId + ":demo-study-hotfix:" + auth.currentUser.uid;
+      return JSON.parse(localStorage.getItem(key) || "null");
+    }, captured.operationId);
+    assert.equal(backup.capturedSeconds, captured.capturedSeconds);
+    assert.equal(backup.recovery, "session-mismatch");
+    const retainedRow = page.getByRole("listitem").filter({ hasText: new Date(captured.at).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" }) });
+    const [download] = await Promise.all([
+      page.waitForEvent("download"),
+      retainedRow.getByRole("button", { name: "学習時間の控えを保存", exact: true }).click(),
+    ]);
+    assert.equal(download.suggestedFilename(), "study-record-recovery.json");
+    await retainedRow.getByRole("button", { name: "元の計測を確認して再送", exact: true }).click();
+    await page.getByRole("status").filter({ hasText: "別の計測に切り替わったよ" }).waitFor();
+    assert.equal((await task()).sessionId, newSessionId);
+    assert.deepEqual((await task()).history, previousHistory);
+    results.push("Concurrent resume after STOP: local seconds survive reload; no replay, history duplication or session overwrite");
+  } finally { await secondDevice.close(); }
+
   // Session authorization and startup normalization can write after reload.
   // Measure diagnostics only once those existing writes have settled.
   let previousWrites = -1, stableSamples = 0;

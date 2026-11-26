@@ -8,6 +8,13 @@ export const createSessionCache = (project: string, family: string, uid: string)
   const set = (legacy: string, value: unknown) => {
     localStorage.setItem(key(legacy), JSON.stringify(value));
   };
+  const remove = (legacy: string) => localStorage.removeItem(key(legacy));
+  const listStudyStops = () => {
+    const start = prefix + "session-stop/";
+    const end = `:${project}:${uid}`;
+    return Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index))
+      .flatMap(stored => stored?.startsWith(start) && stored.endsWith(end) ? [get(stored.slice(0, -end.length))] : []);
+  };
   const legacyPending = () => {
     try {
       if (localStorage.getItem(prefix + "legacy-owner")) return false;
@@ -35,5 +42,5 @@ export const createSessionCache = (project: string, family: string, uid: string)
     }
     localStorage.setItem(prefix + "legacy-owner", uid);
   };
-  return { get, set, legacyPending, adoptLegacy };
+  return { get, set, remove, listStudyStops, legacyPending, adoptLegacy };
 };

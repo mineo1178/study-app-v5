@@ -35,13 +35,17 @@ export type StudySessionOperation = {
   visibility?: "hidden" | "visible";
   confirmedDurationSeconds?: number;
   reviewReasons?: ReviewReason[];
+  capturedSeconds?: number;
+  recovery?: StudyRecoveryReason;
 };
+export type StudyRecoveryReason = "session-mismatch" | "study-conflict" | "not-found";
 export const getStudySessionId = (task: SessionTask) => task.sessionId ||
   `legacy-${task.id}-${task.sessionStartTime ?? task.lastActivityAt ?? `paused-${task.currentDuration}-${task.history.length}-${task.history.at(-1)?.id ?? "none"}`}`;
 
 export const createStudySessionOperation = (task: SessionTask, kind: StudySessionOperation["kind"], at = Date.now()): StudySessionOperation => ({
   operationId: crypto.randomUUID(), taskId: task.id, kind, sessionId: getStudySessionId(task), at,
   targetSeconds: task.targetSeconds ?? 300, graded: task.timerGraded ?? false, attemptType: task.timerMode ?? "first", units: task.timerUnits ?? 0, operationCheck: task.timerOperationCheck ?? false, memo: task.currentMemo ?? "", reviewFlags: task.sessionReviewFlags ?? [],
+  ...(kind === "save" ? { capturedSeconds: getElapsedSeconds(task, getStudyStopReview(task, at).endAt) } : {}),
 });
 
 const getObservedReviewFlags = (task: SessionTask, at: number, extra: SessionReviewFlag[] = []) =>
@@ -118,7 +122,7 @@ export const prepareStudySessionOperation = (tasks: SessionTask[], operation: St
     const stop = getStudyStopReview(current, operation.at);
     if (operation.reviewReasons?.includes("idle") && !stop.reasons.includes("idle")) return { status: "conflict" as const, updates };
     const duration = getElapsedSeconds(current, stop.endAt);
-    if (duration <= 0) return { status: "duplicate" as const, updates };
+    if (duration <= 0) return { status: "conflict" as const, updates };
     const reviewFlags = getObservedReviewFlags(current, operation.at, operation.reviewFlags);
     const reasons = Array.from(new Set([...stop.reasons, ...(current.sessionReviewReasons ?? []), ...(operation.reviewReasons ?? [])]));
     const entry = { id: operation.sessionId, date: new Date(stop.endAt).toLocaleDateString("ja-JP", { timeZone: "Asia/Tokyo", month: "numeric", day: "numeric" }),
@@ -134,12 +138,17 @@ export const prepareStudySessionOperation = (tasks: SessionTask[], operation: St
 
 // family上の参照をSTARTの共通競合点にし、一覧取得後に作られた課題も再試行時に読む。
 // STOP・履歴追加も同じdocument上でセッション照合して原子的に確定する。
-export const commitStudySessionOperation = async (database: Firestore, tasksCollection: CollectionReference<DocumentData>, operation: StudySessionOperation) => {
+export const commitStudySessionOperation = async (database: Firestore, tasksCollection: CollectionReference<DocumentData>, operation: StudySessionOperation, isActive: () => boolean = () => true) => {
+  const verifySession = () => {
+    if (!isActive()) throw Object.assign(new Error("Inactive study session"), { code: "unauthenticated" });
+  };
+  verifySession();
   const target = doc(tasksCollection, operation.taskId);
   if (operation.kind === "confirm") await getDocFromServer(target);
   const refs = operation.kind === "start" ? (await getDocsFromServer(tasksCollection)).docs.map((item) => item.ref) : [target];
   if (!refs.some((ref) => ref.id === target.id)) refs.push(target);
   return retryTaskWrite(() => runTransaction(database, async (transaction) => {
+    verifySession();
     const familyRef = tasksCollection.parent;
     if (!familyRef) throw new Error("Study tasks must belong to a family document");
     const familySnapshot = await transaction.get(familyRef);
@@ -147,6 +156,7 @@ export const commitStudySessionOperation = async (database: Firestore, tasksColl
     const transactionRefs = [...refs];
     if (operation.kind === "start" && typeof activeTaskId === "string" && !transactionRefs.some((ref) => ref.id === activeTaskId)) transactionRefs.push(doc(tasksCollection, activeTaskId));
     const snapshots = await Promise.all(transactionRefs.map((ref) => transaction.get(ref)));
+    verifySession();
     const tasks = snapshots.filter((snapshot) => snapshot.exists()).filter(snapshot => !snapshot.data()._deletion).map((snapshot) => {
       const data = snapshot.data();
       const start = data.sessionStartTime;
@@ -157,6 +167,11 @@ export const commitStudySessionOperation = async (database: Firestore, tasksColl
       } as SessionTask;
     });
     const prepared = prepareStudySessionOperation(tasks, operation);
+    if (operation.kind === "save" && operation.recovery && prepared.status === "applied") {
+      const entry = prepared.updates.get(operation.taskId)?.history?.at(-1);
+      // Retrying a retained STOP requires the original session and measured duration.
+      if (!operation.capturedSeconds || entry?.duration !== operation.capturedSeconds) return { status: "conflict" as const, tasks };
+    }
     if (prepared.status === "applied") {
       if (operation.kind === "start") transaction.set(familyRef, { activeStudyTaskId: operation.taskId }, { merge: true });
       else if ((operation.kind === "save" || operation.kind === "pause") && activeTaskId === operation.taskId) transaction.set(familyRef, { activeStudyTaskId: null }, { merge: true });
@@ -170,18 +185,36 @@ export const commitStudySessionOperation = async (database: Firestore, tasksColl
   }));
 };
 
+type CommittedOperation = Awaited<ReturnType<typeof commitStudySessionOperation>>;
+
+export function studyRecoveryReason(operation: StudySessionOperation, result: CommittedOperation): StudyRecoveryReason | undefined {
+  if (result.status === "missing") return "not-found";
+  const task = result.tasks.find(item => item.id === operation.taskId);
+  if (result.status !== "conflict") {
+    const entry = operation.kind === "save" && task?.history.find(item => item.id === operation.sessionId);
+    if (entry && (entry.recordedDuration ?? entry.duration) < (operation.capturedSeconds ?? 0)) return "study-conflict";
+    return;
+  }
+  return operation.kind !== "confirm" && task && getStudySessionId(task) !== operation.sessionId ? "session-mismatch" : "study-conflict";
+}
+
 export const drainStudySessionOperations = async (
   readQueue: () => StudySessionOperation[],
   writeQueue: (operations: StudySessionOperation[]) => void,
   commit: (operation: StudySessionOperation) => ReturnType<typeof commitStudySessionOperation>,
   onResult: (operation: StudySessionOperation, result: Awaited<ReturnType<typeof commitStudySessionOperation>>, remaining: StudySessionOperation[]) => void,
+  restoreCapture: (operation: StudySessionOperation) => StudySessionOperation = operation => operation,
 ) => {
-  while (readQueue().length) {
-    const operation = readQueue()[0];
+  for (;;) {
+    const next = readQueue().find(item => !item.recovery);
+    if (!next) return;
+    const operation = next.kind === "save" && next.capturedSeconds === undefined ? restoreCapture(next) : next;
     const result = await commit(operation);
-    // 確定後だけ除去する。通信失敗時もIDと順序を保ち、応答喪失後の再送を冪等にする。
-    const remaining = readQueue().filter((item) => item.operationId !== operation.operationId);
+    const recovery = operation.kind === "save" ? studyRecoveryReason(operation, result) : undefined;
+    // Set aside conflicting STOPs before removing them from ordered replay.
+    const remaining = readQueue().filter(item => item.operationId !== operation.operationId);
+    if (recovery) remaining.push({ ...operation, recovery });
     writeQueue(remaining);
-    onResult(operation, result, remaining);
+    onResult(operation, result, remaining.filter(item => !item.recovery));
   }
 };

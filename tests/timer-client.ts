@@ -42,6 +42,21 @@ export const historicalIdle = async () => {
   const task = (await getDocFromServer(doc(db, root, "tasks", "normal"))).data() as SessionTask;
   return commitStudySessionOperation(db, collection(db, root, "tasks"), createStudySessionOperation(task, "start", Date.now() - 901000));
 };
+export const resumeFromOtherDevice = async () => {
+  const tasks = collection(db, root, "tasks");
+  const ref = doc(tasks, "normal");
+  const task = (await getDocFromServer(ref)).data() as SessionTask;
+  const paused = await commitStudySessionOperation(db, tasks, createStudySessionOperation(task, "pause"));
+  if (paused.status !== "applied") throw new Error("Expected a running session");
+  const resumed = createStudySessionOperation((await getDocFromServer(ref)).data() as SessionTask, "start");
+  if ((await commitStudySessionOperation(db, tasks, resumed)).status !== "applied") throw new Error("Expected resume to succeed");
+  return resumed.operationId;
+};
+export const saveEarlierFromOtherDevice = async (at: number) => {
+  const tasks = collection(db, root, "tasks");
+  const task = (await getDocFromServer(doc(tasks, "normal"))).data() as SessionTask;
+  return (await commitStudySessionOperation(db, tasks, createStudySessionOperation(task, "save", at))).status;
+};
 export const familyAccessDenied = async () => {
   try { await read(); return false; }
   catch (error) { return (error as { code?: string }).code === "permission-denied"; }

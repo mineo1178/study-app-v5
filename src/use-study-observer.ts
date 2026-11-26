@@ -13,7 +13,7 @@ export const useStudyObserver = <T extends SessionTask>(
       const result = prepareStudySessionOperation([task], operation);
       const updates = result.updates.get(task.id);
       if (!updates) return;
-      apply(task.id, { ...updates, pendingSync: true } as Partial<T>);
+      if (operation.kind !== "save") apply(task.id, { ...updates, pendingSync: true } as Partial<T>);
       sync(task.id, { __studyOperation: operation });
     };
     const check = () => {

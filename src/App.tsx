@@ -18,7 +18,7 @@ import { getJstDateKey, type CalculationAttempt } from "./daily-calculation";
 import { StudyReview } from "./components/StudyReview";
 import { useStudyObserver } from "./use-study-observer";
 import type { StudyObservation } from "./study-idle";
-import { getIdleDeadline } from "./study-idle";
+import { getIdleDeadline, getStudyStopReview } from "./study-idle";
 import type { ReviewReason } from "./study-idle";
 import type { StudyHistoryEntry } from "./study-utils";
 import { commitArenaPerformance, prepareArenaPerformance, type ArenaResult } from "./game/arena";
@@ -118,7 +118,9 @@ import type { ProducerGameState } from "./game/types";
 import { getNextBonusGap, getTestBoost, type TestKind } from "./game/test-bonus";
 import { calculateBoostedPoints, getHighestBoost } from "./game/test-bonus";
 import { createWeeklyResult, getUnfinalizedWeeks, hasPendingStudyReviewForWeek, mergeWeeklyResults } from "./game/weekly";
-import { commitStudySessionOperation, createStudySessionOperation, drainStudySessionOperations, getStudySessionId, prepareStudySessionOperation, type StudySessionOperation } from "./study-session";
+import { commitStudySessionOperation, createStudySessionOperation, drainStudySessionOperations, getStudySessionId, prepareStudySessionOperation, studyRecoveryReason, type StudySessionOperation } from "./study-session";
+import { StudySaveError, studySaveMessage } from "./study-save-error";
+import { downloadJson } from "./planning/download-json";
 import type { WeeklyResult } from "./game/types";
 import type { Performance, RivalBattleRecord } from "./game/types";
 import { NOVA_STAGES, SPARKLE_STAGES } from "./game/config";
@@ -183,7 +185,7 @@ if (hasFirebaseConfig) {
 // ==========================================
 
 const FAMILY_ID = "oomine-study-2026";
-const APP_VERSION = "v1.89.32";
+const APP_VERSION = "v1.89.33";
 
 // Firestore Path 固定（変更禁止）
 // 実DB構造:
@@ -218,6 +220,7 @@ const getGachaExchangeDoc = (database: ReturnType<typeof getFirestore>, exchange
 const CACHE_KEY_TASKS = `study-app-v5-${FAMILY_ID}-tasks`;
 const CACHE_KEY_TESTS = `study-app-v5-${FAMILY_ID}-tests`;
 const CACHE_KEY_PENDING_TASK_UPDATES = `study-app-v5-${FAMILY_ID}-pending-task-updates`;
+const studyStopKey = (id: string) => "study-app-v5-" + FAMILY_ID + "-session-stop/" + id;
 const CACHE_KEY_SESSION_OPERATIONS = `study-app-v5-${FAMILY_ID}-session-operations`;
 const CACHE_KEY_GAME = `study-app-v5-${FAMILY_ID}-idol-game`;
 const DEVICE_TEST_ENABLED = typeof window !== "undefined" && isDeviceTestEnabled(window.location.search);
@@ -596,9 +599,12 @@ const StrictTimer = React.memo(
     const hiddenAtRef = useRef<number | null>(null);
     const reviewFlagsRef = useRef<SessionReviewFlag[]>(task.sessionReviewFlags || []);
     const isRunning = task.isRunning;
-    const savedAfterRetry = !!saveError && !task.pendingSync && task.currentDuration === 0 && task.history.some((entry) => entry.id === getStudySessionId(task));
-    const savePending = React.useContext(SessionOperationsContext)().some((operation) => operation.kind === "save" && operation.taskId === task.id && operation.sessionId === getStudySessionId(task));
-    const transition = useTimerDiagnostics("study", isSaving ? "saving" : savedAfterRetry ? "saved" : saveError ? "retryable" : isRunning ? "running" : task.currentDuration > 0 ? "paused" : task.history.some(entry => entry.reviewStatus === "pending") ? "review_pending" : "idle");
+    const [failedOperationId, setFailedOperationId] = useState<string>();
+    const [saveRetryable, setSaveRetryable] = useState(false);
+    const { pending, confirmedStopIds } = React.useContext(SessionOperationsContext);
+    const savedAfterRetry = !!saveError && saveRetryable && !!failedOperationId && confirmedStopIds[task.id] === failedOperationId;
+    const savePending = pending().some((operation) => operation.kind === "save" && operation.taskId === task.id && operation.sessionId === getStudySessionId(task));
+    const transition = useTimerDiagnostics("study", isSaving ? "saving" : savedAfterRetry ? "saved" : saveError ? (saveRetryable ? "retryable" : "failed") : isRunning ? "running" : task.currentDuration > 0 ? "paused" : task.history.some(entry => entry.reviewStatus === "pending") ? "review_pending" : "idle");
     const targetAverage = studyTargetAverage(task.history, task.timerMode ?? "first", task.timerUnits ?? 0, relatedHistory);
     const saveTimerOptions = (updates: Partial<Task>) => { updateLocalTask(task.id, updates); syncTaskToCloud(task.id, updates); };
     const startReason = calculationRunning ? "OTHER_TIMER" : isSaving ? "SAVING" : savePending ? "SAVE_PENDING" : "NONE";
@@ -709,9 +715,13 @@ const StrictTimer = React.memo(
         log({ type: "SAVE_SUCCESS", source: "study" });
         transition("saved", log);
       } catch (error) {
-        log({ type: "SAVE_FAILURE", source: "study", code: normalizeDiagnosticError(error), retry: true });
-        transition("failed", log); transition("retryable", log);
-        setSaveError("保存できなかったよ。時間はこの端末に残っているので、通信を確認してもう一度保存してね。");
+        const retry = error instanceof StudySaveError && error.retained === "retry";
+        log({ type: "SAVE_FAILURE", source: "study", button: "STOP", code: normalizeDiagnosticError(error), retry });
+        setFailedOperationId(error instanceof StudySaveError ? error.operationId : undefined);
+        setSaveRetryable(retry);
+        transition("failed", log);
+        if (retry) transition("retryable", log);
+        setSaveError(studySaveMessage(error));
       } finally {
         finishInFlightRef.current = false;
         setIsSaving(false);
@@ -3224,7 +3234,7 @@ const LoginForm = ({
 // ==========================================
 // Main Application Entry
 // ==========================================
-const SessionOperationsContext = React.createContext<() => StudySessionOperation[]>(() => []);
+const SessionOperationsContext = React.createContext<{ pending: () => StudySessionOperation[]; confirmedStopIds: Record<string, string> }>({ pending: () => [], confirmedStopIds: {} });
 
 export default function App() {
   const gate = useFamilySession(auth, firebaseConfig, FAMILY_ID);
@@ -3250,6 +3260,31 @@ function SessionApp({ session, logout, initialSample }: { session?: FamilySessio
   const cache = useMemo(() => createSessionCache(firebaseConfig.projectId ?? "sample", FAMILY_ID, user?.uid ?? "sample"), [user]);
   const getCache = cache.get;
   const setCache = cache.set;
+  const readStudyStops = useCallback((): StudySessionOperation[] => {
+    try { return cache.listStudyStops().filter((item): item is StudySessionOperation => item?.kind === "save" && typeof item.operationId === "string"); }
+    catch { return []; }
+  }, [cache]);
+  const [retainedStops, setRetainedStops] = useState(readStudyStops);
+  const [confirmedStopIds, setConfirmedStopIds] = useState<Record<string, string>>({});
+  const [recoveryNotice, setRecoveryNotice] = useState("");
+  const [recoveringStop, setRecoveringStop] = useState(false);
+  const recoverStopInFlight = useRef(false);
+  useEffect(() => {
+    const refresh = (event: StorageEvent) => {
+      if (!event.key || event.key.includes("-session-stop/")) setRetainedStops(readStudyStops());
+    };
+    window.addEventListener("storage", refresh);
+    return () => window.removeEventListener("storage", refresh);
+  }, [readStudyStops]);
+  const retainStudyStop = useCallback((operation: StudySessionOperation) => {
+    try {
+      const key = studyStopKey(operation.operationId);
+      const previous: StudySessionOperation | null = getCache(key);
+      if (!operation.recovery && previous && (previous.recovery || previous.capturedSeconds !== undefined || operation.capturedSeconds === undefined)) return;
+      setCache(key, operation);
+      setRetainedStops(readStudyStops());
+    } catch { throw new StudySaveError("local-storage-failed"); }
+  }, [getCache, readStudyStops, setCache]);
   const { getPendingTaskUpdates, queuePendingTaskUpdate, clearPendingTaskUpdate, getPendingSessionOperations, getRetryQueueCount } = useMemo(() => {
   const getPendingTaskUpdates = (): Record<string, any> => getCache(CACHE_KEY_PENDING_TASK_UPDATES) || {};
   const queuePendingTaskUpdate = (id: string, updates: any) => {
@@ -3260,10 +3295,20 @@ function SessionApp({ session, logout, initialSample }: { session?: FamilySessio
   const clearPendingTaskUpdate = (id: string) => {
     const pending = getPendingTaskUpdates(); delete pending[id]; setCache(CACHE_KEY_PENDING_TASK_UPDATES, pending);
   };
-  const getPendingSessionOperations = (): StudySessionOperation[] => getCache(CACHE_KEY_SESSION_OPERATIONS) || [];
+  const getPendingSessionOperations = (): StudySessionOperation[] => {
+    const queue: StudySessionOperation[] = getCache(CACHE_KEY_SESSION_OPERATIONS) || [];
+    const combined = new Map(queue.map(operation => [operation.operationId, operation]));
+    const stops = readStudyStops();
+    for (const stop of stops) combined.set(stop.operationId, stop);
+    const pending = [...combined.values()].filter(operation => !operation.recovery);
+    // Recover a STOP that was saved before the shared queue write completed.
+    return stops.some(stop => !stop.recovery && !queue.some(item => item.operationId === stop.operationId))
+      ? pending.sort((a, b) => a.at - b.at) : pending;
+  };
   const getRetryQueueCount = () => Object.keys(getPendingTaskUpdates()).length + getPendingSessionOperations().length;
     return { getPendingTaskUpdates, queuePendingTaskUpdate, clearPendingTaskUpdate, getPendingSessionOperations, getRetryQueueCount };
-  }, [getCache, setCache]);
+  }, [getCache, setCache, readStudyStops]);
+  const sessionOperations = useMemo(() => ({ pending: getPendingSessionOperations, confirmedStopIds }), [getPendingSessionOperations, confirmedStopIds]);
   const [legacyPending, setLegacyPending] = useState(cache.legacyPending);
   const [syncState, setSyncState] = useState<"synced" | "syncing" | "offline">(
     "synced",
@@ -3596,18 +3641,35 @@ function SessionApp({ session, logout, initialSample }: { session?: FamilySessio
       const results = new Map<string, string>();
       const hadPendingOperations = getPendingSessionOperations().length > 0;
       await drainStudySessionOperations(getPendingSessionOperations,
-        (remaining) => setCache(CACHE_KEY_SESSION_OPERATIONS, remaining),
-        (operation) => commitStudySessionOperation(database, getTasksCol(database), operation),
+        (remaining) => {
+          remaining.filter(operation => operation.recovery).forEach(retainStudyStop);
+          setCache(CACHE_KEY_SESSION_OPERATIONS, remaining.filter(operation => !operation.recovery));
+        },
+        (operation) => {
+          if (operation.kind === "save") retainStudyStop(operation);
+          return commitStudySessionOperation(database, getTasksCol(database), operation, () => getSafeDb() === database);
+        },
         (operation, result, remaining) => {
-          if (operation.kind === "save" || operation.kind === "confirm") log({ type: result.status === "applied" || result.status === "duplicate" ? "SAVE_SUCCESS" : "SAVE_FAILURE", source: "study", code: result.status === "conflict" ? "failed-precondition" : result.status === "missing" ? "not-found" : "NONE", retry: remaining.length > 0 });
-          results.set(operation.operationId, result.status);
+          const recovery = studyRecoveryReason(operation, result);
+          if (operation.kind === "save" && !recovery) {
+            cache.remove(studyStopKey(operation.operationId));
+            setRetainedStops(readStudyStops());
+            setConfirmedStopIds(current => ({ ...current, [operation.taskId]: operation.operationId }));
+          }
+          if (operation.kind === "save" || operation.kind === "confirm") log({ type: recovery ? "SAVE_FAILURE" : "SAVE_SUCCESS", source: "study", button: operation.kind === "save" ? "STOP" : undefined, code: recovery ?? "NONE", retry: false });
+          results.set(operation.operationId, recovery ?? result.status);
           const pendingIds = new Set(remaining.map((item) => item.taskId));
           setTasks((current) => current.filter((task) => result.status !== "missing" || task.id !== operation.taskId || pendingIds.has(task.id)).map((task) => {
             if (pendingIds.has(task.id)) return task;
             const saved = result.tasks.find((item) => item.id === task.id);
             return saved ? { ...normalizeTask(saved as Task), pendingSync: false } : task;
           }));
-          if (result.status === "conflict") console.warn("Study session changed; stale operation ignored", operation.kind);
+        },
+        (operation) => {
+          const stored: Task[] = (getCache(CACHE_KEY_TASKS) || []).map(normalizeTask);
+          const matching = [...tasksRef.current, ...stored].filter(task => task.id === operation.taskId && getStudySessionId(task) === operation.sessionId);
+          const capturedSeconds = Math.max(0, ...matching.map(task => getElapsedSeconds(task, getStudyStopReview(task, operation.at).endAt)));
+          return capturedSeconds ? { ...operation, capturedSeconds } : operation;
         });
       setSyncState("synced");
       if (hadPendingOperations) log({ type: "QUEUE", source: "study", retry: getPendingSessionOperations().length > 0 });
@@ -3622,7 +3684,7 @@ function SessionApp({ session, logout, initialSample }: { session?: FamilySessio
       throw error;
     }).finally(() => { sessionFlushRef.current = null; });
     return sessionFlushRef.current;
-  }, [isSampleMode, getPendingSessionOperations, getSafeDb, setCache]);
+  }, [cache, isSampleMode, getCache, getPendingSessionOperations, getSafeDb, readStudyStops, retainStudyStop, setCache]);
 
   const syncTaskToCloud = useCallback(
     async (id: string, cloudUpdates: any, requireConfirmation = false) => {
@@ -3631,13 +3693,16 @@ function SessionApp({ session, logout, initialSample }: { session?: FamilySessio
         local.updates.forEach((updates, taskId) => updateLocalTask(taskId, { ...updates, pendingSync: !isSampleMode } as Partial<Task>));
       }
       const dbInstance = getSafeDb();
-      if (!dbInstance || !auth?.currentUser || isSampleMode) {
-        if (requireConfirmation && !isSampleMode) throw new Error("接続を確認してね。");
-        return;
-      }
       if (cloudUpdates.__studyOperation) {
         const operation = cloudUpdates.__studyOperation as StudySessionOperation;
         const currentTask = tasksRef.current.find((task) => task.id === operation.taskId);
+        if (isSampleMode) {
+          if (operation.kind === "save") {
+            const updates = prepareStudySessionOperation(tasksRef.current, operation).updates.get(id);
+            if (updates) updateLocalTask(id, { ...updates, pendingSync: false } as Partial<Task>);
+          }
+          return;
+        }
         const eventType: DeviceTestEventType = operation.kind === "save"
           ? "STOP"
           : operation.kind === "pause"
@@ -3650,21 +3715,36 @@ function SessionApp({ session, logout, initialSample }: { session?: FamilySessio
           taskId: operation.taskId,
           sessionId: operation.kind === "start" ? operation.operationId : operation.sessionId,
         });
-        const queued = getPendingSessionOperations();
-        const tail = queued.at(-1);
-        if (operation.kind === "observe" && !operation.visibility && queued.length > 1 && tail?.kind === "observe" && !tail.visibility && tail.taskId === operation.taskId && tail.sessionId === operation.sessionId) queued.pop();
-        if (!queued.some((item) => item.operationId === operation.operationId)) setCache(CACHE_KEY_SESSION_OPERATIONS, [...queued, operation]);
-        if (operation.kind !== "observe") recordDiagnostic({ type: "QUEUE", source: "study", retry: true });
         try {
+          const queued = getPendingSessionOperations();
+          const tail = queued.at(-1);
+          if (operation.kind === "observe" && !operation.visibility && queued.length > 1 && tail?.kind === "observe" && !tail.visibility && tail.taskId === operation.taskId && tail.sessionId === operation.sessionId) queued.pop();
+          if (operation.kind === "save") retainStudyStop(operation);
+          if (!queued.some((item) => item.operationId === operation.operationId)) {
+            try { setCache(CACHE_KEY_SESSION_OPERATIONS, [...queued, operation]); }
+            catch { throw new StudySaveError("local-storage-failed"); }
+          }
+          if (operation.kind === "save" && currentTask && getStudySessionId(currentTask) === operation.sessionId) {
+            const paused = prepareStudySessionOperation([currentTask], { ...operation, kind: "pause" }).updates.get(id);
+            updateLocalTask(id, { ...paused, pendingSync: true } as Partial<Task>);
+          }
+          if (operation.kind !== "observe") recordDiagnostic({ type: "QUEUE", source: "study", retry: true });
+          if (!dbInstance || !auth?.currentUser) throw new StudySaveError("unauthenticated");
           let results = await flushStudySessionOperations();
           if (getPendingSessionOperations().some((item) => item.operationId === operation.operationId)) results = await flushStudySessionOperations();
-          if (requireConfirmation && !["applied", "duplicate"].includes(results.get(operation.operationId) ?? "")) throw new Error("記録はまだ保存されていません。");
+          if (requireConfirmation && !["applied", "duplicate"].includes(results.get(operation.operationId) ?? "")) {
+            const saved: StudySessionOperation | null = getCache(studyStopKey(operation.operationId));
+            throw new StudySaveError(saved?.recovery ?? "study-conflict");
+          }
         } catch (error) {
-          // 自動再送では保全して待つ。利用者の保存操作には未完了を伝える。
-          if (requireConfirmation) throw error;
+          const saved: StudySessionOperation | null = getCache(studyStopKey(operation.operationId));
+          const code = normalizeDiagnosticError(error);
+          if (requireConfirmation) throw new StudySaveError(code, saved?.recovery ? "review" : saved?.capturedSeconds ? "retry" : undefined, operation.operationId);
+          if (operation.kind === "save" && code === "local-storage-failed") setTaskSafetyError(studySaveMessage(error));
         }
         return;
       }
+      if (!dbInstance || !auth?.currentUser || isSampleMode) return;
       if (isLegacyTimerUpdate(cloudUpdates)) { setSyncState("offline"); return; }
       try {
         const { pendingSync, __taskBase, ...safeCloudUpdates } = cloudUpdates;
@@ -3690,7 +3770,7 @@ function SessionApp({ session, logout, initialSample }: { session?: FamilySessio
         setSyncState("offline");
       }
     },
-    [isSampleMode, updateLocalTask, flushStudySessionOperations, recordDeviceTestEvent, clearPendingTaskUpdate, getPendingSessionOperations, getPendingTaskUpdates, getSafeDb, queuePendingTaskUpdate, setCache, session],
+    [isSampleMode, updateLocalTask, flushStudySessionOperations, recordDeviceTestEvent, clearPendingTaskUpdate, getCache, getPendingSessionOperations, getPendingTaskUpdates, getSafeDb, queuePendingTaskUpdate, retainStudyStop, setCache, session],
   );
 
   const flushPendingTaskUpdates = useCallback(async () => {
@@ -3893,21 +3973,42 @@ function SessionApp({ session, logout, initialSample }: { session?: FamilySessio
 
   const saveHistoryRecord = async (task: Task) => {
     const latest = tasksRef.current.find((item) => item.id === task.id);
-    if (!latest || getStudySessionId(latest) !== getStudySessionId(task) || getElapsedSeconds(latest) === 0) throw new Error("記録を確認してね。");
-    const current = { ...latest, sessionReviewFlags: Array.from(new Set([...(latest.sessionReviewFlags ?? []), ...(task.sessionReviewFlags ?? [])])) };
-    const operation = getPendingSessionOperations().find((item) => item.kind === "save" && item.taskId === task.id && item.sessionId === getStudySessionId(current)) ?? createStudySessionOperation(current, "save");
-    // STOPとhistory追加を分割しない。クラウド上の最新historyに一度だけ追加する。
-    const local = prepareStudySessionOperation([current], operation);
-    const updates = local.updates.get(task.id);
-    if (isSampleMode) {
-      if (updates) updateLocalTask(task.id, updates as Partial<Task>);
-    } else {
-      // 保存完了までは秒数とメモを残す。失敗後の再試行も同じSTOP時刻を使う。
-      const paused = prepareStudySessionOperation([current], { ...operation, kind: "pause" }).updates.get(task.id);
-      updateLocalTask(task.id, { ...paused, pendingSync: true } as Partial<Task>);
-      await syncTaskToCloud(task.id, { __studyOperation: operation }, true);
+    const snapshot = latest && getStudySessionId(latest) === getStudySessionId(task) ? latest : task;
+    const current = { ...snapshot, sessionReviewFlags: Array.from(new Set([...(snapshot.sessionReviewFlags ?? []), ...(task.sessionReviewFlags ?? [])])) };
+    const queued = getPendingSessionOperations().find((item) => item.kind === "save" && item.taskId === task.id && item.sessionId === getStudySessionId(current));
+    const operation = queued ?? createStudySessionOperation(current, "save");
+    if (!queued || operation.capturedSeconds === undefined) {
+      const captured = Math.max(operation.capturedSeconds ?? 0, getElapsedSeconds(task, getStudyStopReview(task, operation.at).endAt));
+      if (captured > 0 || !queued) operation.capturedSeconds = captured;
     }
+    // STOPとhistory追加を分割しない。クラウド上の最新historyに一度だけ追加する。
+    if (operation.capturedSeconds === 0) throw new StudySaveError("study-conflict");
+    await syncTaskToCloud(task.id, { __studyOperation: operation }, true);
     setDetailTaskId(null);
+  };
+
+  const recoverStudyStop = async (operationId: string) => {
+    if (recoverStopInFlight.current) return;
+    const operation = readStudyStops().find(stop => stop.operationId === operationId && stop.recovery);
+    const database = getSafeDb();
+    if (!operation || !operation.capturedSeconds || !database) return;
+    recoverStopInFlight.current = true;
+    setRecoveringStop(true);
+    setRecoveryNotice("");
+    try {
+      const result = await commitStudySessionOperation(database, getTasksCol(database), operation, () => getSafeDb() === database);
+      if (getSafeDb() !== database) return;
+      const reason = studyRecoveryReason(operation, result);
+      if (reason) throw new StudySaveError(reason, "review");
+      cache.remove(studyStopKey(operation.operationId));
+      setRetainedStops(readStudyStops());
+      setRecoveryNotice(result.status === "duplicate" ? "同じ計測の保存を学習履歴で確認しました。" : "元の計測を学習履歴に保存しました。");
+    } catch (error) {
+      if (getSafeDb() === database) setRecoveryNotice(studySaveMessage(error));
+    } finally {
+      recoverStopInFlight.current = false;
+      setRecoveringStop(false);
+    }
   };
 
   const allStudyEntries = useMemo(
@@ -4432,9 +4533,24 @@ function SessionApp({ session, logout, initialSample }: { session?: FamilySessio
   }
 
   return (
-    <SessionOperationsContext.Provider value={getPendingSessionOperations}>
+    <SessionOperationsContext.Provider value={sessionOperations}>
     <div data-protected-session data-design20-tab={activeTab} className="design20-app flex flex-col h-screen w-full bg-slate-50 font-sans text-slate-900 max-w-[1600px] mx-auto shadow-2xl overflow-x-hidden relative">
       {legacyPending && !isSampleMode && <div role="alert" className="bg-amber-100 p-3 text-sm">この端末に以前の未保存記録があります。自分の記録か確認してから引き継いでください。<button type="button" onClick={() => setConfirmModalData({ title: "未保存記録の引き継ぎ", message: "以前の未保存記録が自分の記録であることを確認しましたか？", onConfirm: async () => { cache.adoptLegacy(); setLegacyPending(false); await fetchData(); await flushPendingTaskUpdates(); } })}>未保存記録を確認して引き継ぐ</button></div>}
+      {retainedStops.some(stop => stop.recovery) && !isSampleMode && <details className="bg-amber-100 p-3 text-sm">
+        <summary className="cursor-pointer font-bold">確認が必要な学習記録</summary>
+        <p>この端末に残した記録です。保護者と学習履歴を確認してください。</p>
+        <ul className="space-y-2">{retainedStops.filter(stop => stop.recovery).map(stop => {
+          const title = tasks.find(task => task.id === stop.taskId)?.title ?? "課題を確認できません";
+          return <li key={stop.operationId}>
+            <p>{new Date(stop.at).toLocaleString("ja-JP", { timeZone: "Asia/Tokyo" })}・{title}・{stop.capturedSeconds == null ? "時間は要確認" : formatTime(stop.capturedSeconds)}</p>
+            <div className="flex flex-wrap gap-2">
+              {stop.capturedSeconds ? <button type="button" className="underline" disabled={recoveringStop} onClick={() => void recoverStudyStop(stop.operationId)}>元の計測を確認して再送</button> : null}
+              <button type="button" className="underline" onClick={() => downloadJson("study-record-recovery.json", { task: title, stoppedAt: new Date(stop.at).toISOString(), seconds: stop.capturedSeconds ?? null, reason: stop.recovery })}>学習時間の控えを保存</button>
+            </div>
+          </li>;
+        })}</ul>
+      </details>}
+      {recoveryNotice && <p role="status" className="bg-amber-100 px-3 text-sm">{recoveryNotice}</p>}
       {DEVICE_TEST_ENABLED && (
         <DeviceTestPanel
           version={APP_VERSION}
