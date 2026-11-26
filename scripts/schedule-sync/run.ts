@@ -11,7 +11,7 @@ import {AUTO_SCHEDULE_ID,isScheduleSyncState} from '../../src/planning/schedule-
 import {mergeTutorSchedule,type SyncTask} from '../../src/planning/schedule-sync';
 import {openScheduleAuth} from './auth';
 import {publishReady,readReady,writeJsonAtomic} from './manifest';
-import {detectReplan,handleReplan,replanSnapshot,type PriorReport} from './replan';
+import {detectReplan,handleReplan,replanSnapshot,trackedReplanRounds,tutorInput,type PriorReport} from './replan';
 
 type Config={project:string;family:string;uid:string;apiKey:string;integrationRoot:string};
 type TaskStamp={name:string;createTime:string;updateTime:string;fields?:{_writeVersion?:{integerValue?:string}}};
@@ -157,10 +157,13 @@ async function synchronize(config:Config,stateDir:string,mode:string,tutorCli?:s
     mergedPointer=updatedPointer??null;
    }else if(!result.plan&&apply&&await saveScheduleSyncState(db,family,owner,fence))productionWrites=1;
   }else if(apply&&!manifestError&&!previous&&await saveScheduleSyncState(db,family,owner,fence))productionWrites=1;
-  const replanRequest=apply?await handleReplan({root:config.integrationRoot,stateDir,executable:tutorCli,events:replanEvents,
-   source:ready?.source,input:{current:productionWrites===4?result!.plan:current,previous:result?.state??previous,
+  const replanRounds=await trackedReplanRounds(stateDir,priorReport,replanEvents);
+  const replanInput={current:productionWrites===4?result!.plan:current,previous:result?.state??previous,
     tasks,binding:owner.binding,today,observedAt:now,confirmedCapacities:confirmedCapacities(capacity.data()?.capacities),
-    autoRevision:Math.max(Number(ledger.data()?.revision??0),productionWrites===4?result?.plan?.revision??0:0)},
+    autoRevision:Math.max(Number(ledger.data()?.revision??0),productionWrites===4?result?.plan?.revision??0:0)};
+  const evaluation=tutorInput(replanInput,replanRounds);
+  const request=apply?await handleReplan({root:config.integrationRoot,stateDir,executable:tutorCli,events:replanEvents,
+   rounds:replanRounds,source:ready?.source,input:replanInput,available:evaluation,
    stillCurrent:async()=>{
     const [freshHead,freshCapacity,freshStamps,latestReady]=await Promise.all([
      getDocFromServer(root),getDocFromServer(scheduleCapacityRef(db,family,uid)),
@@ -171,13 +174,16 @@ async function synchronize(config:Config,stateDir:string,mode:string,tutorCli?:s
      hash([...freshStamps].sort())===hash([...stamps].sort());
    },
   }):null;
+  const replanRequest=request?.duplicate?null:request;
   const report={checkedAt:new Date(now).toISOString(),mode,productionWrites,
    currentVersionId:productionWrites===4?result?.state.versionId:pointer?.versionId??null,
    source:ready?.manifest??null,state:result?.state??(manifestError?fence.next:previous??fence.next),minutes:result?.minutes??{},
    newRounds,newlyRegistered,changedTasks,unplaced:result?.unplaced??[],classifications:result?.classifications??[],
-   replan:result?.classifications.filter(r=>['unplaced','waiting','held'].includes(r.outcome))??[],snapshot,replanEvents,replanRequest,
+   replan:result?.classifications.filter(r=>['unplaced','waiting','held'].includes(r.outcome))??[],snapshot,replanEvents,replanRequest,replanRounds,
+   replanEvaluation:{id:evaluation.fingerprint,capacities:evaluation.capacities,available:evaluation.data.available,
+    eligibleTasks:evaluation.eligibleTasks,capacityDays:evaluation.capacityDays,placeable:evaluation.placements.length,tasks:evaluation.diagnostics},
   };
-  if(apply&&(!priorReport||productionWrites>0||newlyRegistered.length||changedTasks.length||replanEvents.length||priorReport.source?.sha256!==ready?.manifest.sha256)){
+  if(apply&&(!priorReport||productionWrites>0||newlyRegistered.length||changedTasks.length||replanEvents.length||replanRequest||priorReport.source?.sha256!==ready?.manifest.sha256)){
    const history=resolve(stateDir,'reports');
    await mkdir(history,{recursive:true});
    await writeJsonAtomic(resolve(history,report.checkedAt.replace(/[:.]/g,'-')+'.json'),report);
