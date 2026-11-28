@@ -5,7 +5,9 @@ import {tmpdir} from 'node:os';
 import {resolve} from 'node:path';
 import {DEFAULT_CALENDAR} from '../../src/planning/events';
 import {bookedScheduleMinutes,measuredProgress} from '../../src/planning/gantt-display';
-import {addDays,validDay,type PlanningTask} from '../../src/planning/model';
+import {validDay,type PlanningTask} from '../../src/planning/model';
+import {replanCapacities} from '../../src/planning/schedule-capacity';
+export {replanCapacities} from '../../src/planning/schedule-capacity';
 import {oldItem} from '../../src/planning/official-schedule';
 import {canonical,materialKey,parseSchedule,scheduleId,type LearningSchedule,type ScheduleItem} from '../../src/planning/schedule';
 import {mergeTutorSchedule,tutorScheduleProtection} from '../../src/planning/schedule-sync';
@@ -114,14 +116,6 @@ function requestTutor(executable:string,data:unknown,onStart:()=>void){
   child.stdin?.on('error',()=>{});
   child.stdin?.end(prompt+JSON.stringify(data),'utf8');
  });
-}
-
-export function replanCapacities(today:string,adopted:Record<string,number>,confirmed:Record<string,number>){
- const weekdayMinutes=[20,10,25,10,40,15,30];
- return Object.fromEntries(Array.from({length:7},(_,offset)=>{
-  const day=addDays(today,offset);
-  return [day,confirmed[day]??adopted[day]??weekdayMinutes[new Date(day).getUTCDay()]];
- }));
 }
 
 function placementDays(ranges:ScheduleItem['ranges'],available:Record<string,number>,deadline:string|null){

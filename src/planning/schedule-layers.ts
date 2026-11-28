@@ -12,7 +12,10 @@ export function adoptedDay(task:PlanningTask,plan:LearningSchedule|null,day:stri
   return Object.hasOwn(item.dailyWork,day);
  }
  const dates=wbsDates(task,plan);
- return !!(dates.start&&dates.end&&dates.startSource!=='提案'&&dates.endSource!=='提案'?day>=dates.start&&day<=dates.end:gridDay([task],plan,day).planned);
+ const start=dates.startSource!=='提案'?dates.start:null;
+ const end=dates.endSource!=='提案'?dates.end:null;
+ if(start&&end&&start<=end)return day>=start&&day<=end;
+ return day===start||day===end||gridDay([task],plan,day).planned;
 }
 
 export function previewScheduleRanges(tasks:PlanningTask[],current:LearningSchedule|null,candidate:LearningSchedule|null|undefined){

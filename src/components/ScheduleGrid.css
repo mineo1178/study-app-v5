@@ -83,3 +83,15 @@
 @media(min-width:1440px){.sheet-gantt{padding-inline:24px}.sheet-table{--name-width:180px;--progress-width:64px}}
 
 .sheet-material-binding{border:1px solid #cbd5e1;border-radius:8px;padding:10px;margin:10px 0;overflow-wrap:anywhere}.sheet-material-binding h4{margin:0 0 8px}.sheet-material-binding label{display:block}.sheet-material-binding select{display:block;width:100%;max-width:100%;margin:6px 0;padding:6px}.sheet-material-binding button{white-space:normal;margin:4px 6px 4px 0;max-width:100%}
+
+.sheet-run.sheet-proposal{top:17px}
+.sheet-run.sheet-draft{top:27px;height:11px;border:1px dashed #687481!important;background:#f4f5f7;color:#374151;font-size:9px;font-weight:700;line-height:9px;white-space:nowrap}
+.sheet-preview-summary{margin:0 0 8px;padding:6px 8px;border:1px solid #dce4ee;border-radius:6px;background:#f8fafc;font-size:12px}
+.sheet-preview-summary p{font-weight:700;margin:4px 0}
+.sheet-preview-controls,.sheet-preview-controls form{display:flex;flex-wrap:wrap;align-items:center;gap:6px}
+.sheet-preview-controls button,.sheet-preview-controls input{border:1px solid #b6c5d6;border-radius:4px;background:#fff;padding:2px 6px;min-height:30px}
+.sheet-preview-controls input{width:64px}
+.sheet-preview-controls button[aria-pressed=true]{background:#e5edfb;border-color:#5279a8;color:#1f4579;font-weight:700}
+.sheet-preview-summary summary{cursor:pointer}
+.sheet-unplaced{margin:4px 0;max-height:180px;overflow:auto;padding:0;list-style:none}
+.sheet-unplaced button,.sheet-next-preview{min-height:30px;color:#224b88;text-align:left;text-decoration:underline}

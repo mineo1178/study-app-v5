@@ -1,12 +1,18 @@
 import { useEffect, useState } from 'react';
 import { doc, getDocFromServer, onSnapshot, type Firestore } from 'firebase/firestore';
+import { normalizeCapacities } from './model';
 import { parseSchedule, scheduleDigest, type LearningSchedule } from './schedule';
-import { scheduleRoot,scheduleSyncRef } from './schedule-repository';
+import { scheduleCapacityRef,scheduleRoot,scheduleSyncRef } from './schedule-repository';
 import {isScheduleSyncState,type ScheduleSyncState} from './schedule-sync-state';
 export function useLearningSchedule(db:Firestore|null,family:string,uid:string,sample:boolean,active:()=>boolean){
  const key=JSON.stringify(['learning-schedule-v1',db?.app.options.projectId??'sample',family,uid,sample]);
  const [plan,setPlan]=useState<LearningSchedule|null>(()=>{try{const raw=localStorage.getItem(key);return raw?parseSchedule(raw):null;}catch{return null;}}),[loading,setLoading]=useState(!sample),[error,setError]=useState('');
  const [syncState,setSyncState]=useState<ScheduleSyncState|null>(null),[syncError,setSyncError]=useState(false);
+ const [confirmedCapacities,setConfirmedCapacities]=useState<Record<string,number>|null>(()=>{
+  if(!sample)return null;
+  try{return normalizeCapacities(JSON.parse(localStorage.getItem(`study-planning-sample:${family}:${uid}`)??'{}'));}
+  catch{return {};}
+ }),[capacityError,setCapacityError]=useState(false);
  useEffect(()=>{
   if(sample||!db)return;let generation=0,live=true;
   const stop=onSnapshot(scheduleRoot(db,family,uid),{includeMetadataChanges:true},snapshot=>{
@@ -24,8 +30,12 @@ export function useLearningSchedule(db:Firestore|null,family:string,uid:string,s
    setSyncError(snapshot.exists()&&!isScheduleSyncState(value));
    setSyncState(isScheduleSyncState(value)?value:null);
   },()=>{if(live&&active())setSyncError(true);});
-  return()=>{live=false;++generation;stop();stopSync();};
+  const stopCapacity=onSnapshot(scheduleCapacityRef(db,family,uid),{includeMetadataChanges:true},snapshot=>{
+   if(!live||!active()||snapshot.metadata.fromCache||snapshot.metadata.hasPendingWrites)return;
+   setConfirmedCapacities(normalizeCapacities(snapshot.data()?.capacities));setCapacityError(false);
+  },()=>{if(live&&active()){setConfirmedCapacities(null);setCapacityError(true);}});
+  return()=>{live=false;++generation;stop();stopSync();stopCapacity();};
  },[db,family,uid,sample,active,key]);
  function adopt(next:LearningSchedule){if(!active())throw new Error('利用者が切り替わりました。');setPlan(next);try{localStorage.setItem(key,JSON.stringify(next));setError('');}catch{setError('計画の取込は完了しましたが、端末へのキャッシュ保存はできませんでした。');}}
- return{plan,loading,error,adopt,syncState,syncError};
+ return{plan,loading,error,adopt,syncState,syncError,confirmedCapacities,capacityError};
 }
